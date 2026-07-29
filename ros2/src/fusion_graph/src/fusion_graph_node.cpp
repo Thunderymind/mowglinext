@@ -66,7 +66,6 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.slip_residual_thresh_rad = declare_parameter<double>("slip_residual_thresh_rad", 0.01);
   gp.slip_gyro_max_rad = declare_parameter<double>("slip_gyro_max_rad", 0.005);
   gp.slip_wheel_min_rad = declare_parameter<double>("slip_wheel_min_rad", 0.005);
-  gp.slip_max_v_mps = declare_parameter<double>("slip_max_v_mps", 0.08);
   dr_slip_max_vx_mps_ = declare_parameter<double>("dr_slip_max_vx_mps", 0.08);
   gp.gyro_bias_estimation_enabled = declare_parameter<bool>("gyro_bias_estimation_enabled", true);
   gp.gyro_bias_ema_tau_s = declare_parameter<double>("gyro_bias_ema_tau_s", 30.0);

@@ -32,7 +32,10 @@ namespace
 fg::GraphParams MakeParams()
 {
   fg::GraphParams gp;
-  gp.node_period_s = 0.1;
+  // Keep each 100 ms synthetic sample in its own node.  The production
+  // covariance model is distance-based, so coalescing two samples would
+  // deliberately double the expected baseline sigma.
+  gp.node_period_s = 0.05;
   gp.wheel_sigma_x = 0.05;
   gp.wheel_sigma_y = 0.005;
   gp.wheel_sigma_theta = 0.01;
@@ -79,9 +82,9 @@ TEST(AdaptiveNoise, NoSlipKeepsBaselineSigma)
 
   // Residual EMA must stay under the floor (no inflation kicks in).
   EXPECT_LT(stats.residual_ema_rad, 0.005);
-  // σ_x_eff must equal the configured wheel_sigma_x within a small
-  // numeric epsilon — adaptive gain × (residual − floor) must be 0.
-  EXPECT_NEAR(stats.wheel_sigma_x_eff, 0.05, 1.0e-6);
+  // 0.20 m/s × 0.1 s = 0.02 m.  The baseline is scaled from the
+  // 8 mm reference increment: 0.05 × (0.02 / 0.008) = 0.125 m.
+  EXPECT_NEAR(stats.wheel_sigma_x_eff, 0.125, 1.0e-6);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -95,14 +98,16 @@ TEST(AdaptiveNoise, SlipInflatesSigma)
 
   constexpr int kTicks = 50;
   constexpr double kDt = 0.1;
-  // Wheel says we're rotating at 0.3 rad/s. Gyro reports 0.0 — the
-  // robot is slipping on a slope and one encoder is spinning free.
+  // The chassis is moving, but wheel yaw exceeds gyro yaw.  This is not the
+  // low-speed slip-veto case: translation remains usable but needs a larger
+  // uncertainty.
+  constexpr double kVx = 0.20;
   constexpr double kWheelWz = 0.30;
-  constexpr double kGyroWz = 0.0;
+  constexpr double kGyroWz = 0.10;
 
   for (int i = 0; i < kTicks; ++i)
   {
-    gm.AddWheelTwist(0.0, 0.0, kWheelWz, kDt);
+    gm.AddWheelTwist(kVx, 0.0, kWheelWz, kDt);
     gm.AddGyroDelta(kGyroWz, kDt);
     gm.Tick(kDt * (i + 1));
   }
@@ -112,18 +117,12 @@ TEST(AdaptiveNoise, SlipInflatesSigma)
               stats.residual_ema_rad,
               stats.wheel_sigma_x_eff);
 
-  // The raw per-tick wheel↔gyro disagreement is |kWheelWz - kGyroWz| × kDt
-  // = 0.03 rad, but the residual the graph actually tracks settles higher:
-  // with the robot XY-stationary (vx=0) under a sustained wheel-only
-  // rotation, the gyro-bias estimator pulls wz_corrected slightly negative,
-  // so the steady-state EMA lands near 0.055 rad (measured), not 0.03. The
-  // point of this test is "slip inflates σ_x meaningfully", so the bounds
-  // are deliberately loose around the observed value.
-  EXPECT_GT(stats.residual_ema_rad, 0.020);
-  EXPECT_LT(stats.residual_ema_rad, 0.070);
+  // The per-node yaw disagreement is (0.30 - 0.10) × 0.1 = 0.02 rad.
+  EXPECT_GT(stats.residual_ema_rad, 0.015);
+  EXPECT_LT(stats.residual_ema_rad, 0.025);
 
-  // σ_x_eff = baseline + gain × (residual − floor) ≈ 0.05 + 10 × 0.05 ≈ 0.55 m
-  // Wide bounds — this just checks "inflated meaningfully".
+  // Baseline is 0.125 m for the travelled distance.  The residual adds
+  // roughly 10 × (0.02 - 0.005) = 0.15 m.
   EXPECT_GT(stats.wheel_sigma_x_eff, 0.15);
   EXPECT_LT(stats.wheel_sigma_x_eff, 0.65);
 }
@@ -142,8 +141,8 @@ TEST(AdaptiveNoise, EmaDecaysAfterSlipEnds)
   // 2 s of slip: σ_x ramps up.
   for (int i = 0; i < 20; ++i)
   {
-    gm.AddWheelTwist(0.0, 0.0, 0.30, kDt);
-    gm.AddGyroDelta(0.0, kDt);
+    gm.AddWheelTwist(0.20, 0.0, 0.30, kDt);
+    gm.AddGyroDelta(0.10, kDt);
     gm.Tick(kDt * (i + 1));
   }
   auto peak = gm.Stats();
@@ -166,9 +165,9 @@ TEST(AdaptiveNoise, EmaDecaysAfterSlipEnds)
               recovered.wheel_sigma_x_eff);
 
   // 10 τ of zero residual collapses the EMA to << floor; σ_x returns
-  // to the configured baseline (0.05).
+  // to the stationary translation floor (0.005 m).
   EXPECT_LT(recovered.residual_ema_rad, 0.001);
-  EXPECT_NEAR(recovered.wheel_sigma_x_eff, 0.05, 1.0e-6);
+  EXPECT_NEAR(recovered.wheel_sigma_x_eff, 0.005, 1.0e-6);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -186,8 +185,8 @@ TEST(AdaptiveNoise, GainZeroDisablesAdaptation)
   constexpr double kDt = 0.1;
   for (int i = 0; i < 50; ++i)
   {
-    gm.AddWheelTwist(0.0, 0.0, 0.30, kDt);
-    gm.AddGyroDelta(0.0, kDt);
+    gm.AddWheelTwist(0.20, 0.0, 0.30, kDt);
+    gm.AddGyroDelta(0.10, kDt);
     gm.Tick(kDt * (i + 1));
   }
   auto stats = gm.Stats();
@@ -196,6 +195,7 @@ TEST(AdaptiveNoise, GainZeroDisablesAdaptation)
               stats.wheel_sigma_x_eff);
 
   // EMA still tracks (it's a passive measurement), but σ_x_eff
-  // must equal the baseline — the gain=0 short-circuits inflation.
-  EXPECT_NEAR(stats.wheel_sigma_x_eff, 0.05, 1.0e-6);
+  // must equal the distance-scaled baseline — the gain=0 short-circuits
+  // inflation.
+  EXPECT_NEAR(stats.wheel_sigma_x_eff, 0.125, 1.0e-6);
 }

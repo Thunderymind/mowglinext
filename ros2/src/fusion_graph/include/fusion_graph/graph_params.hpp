@@ -158,9 +158,6 @@ struct GraphParams
   double slip_residual_thresh_rad = 0.01;
   double slip_gyro_max_rad = 0.005;
   double slip_wheel_min_rad = 0.005;
-  // Do not veto translation in a real moving turn.  The wheel-vs-gyro
-  // yaw residual is only a slip indicator when forward speed is low.
-  double slip_max_v_mps = 0.08;
 
   // Stationary multi-source gate. The wheel-only gate (above) can be
   // tricked by encoders that report no motion while the robot is
