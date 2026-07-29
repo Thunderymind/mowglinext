@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <string>
@@ -57,6 +58,10 @@ bool saveCoverageResumeState(const BTContext& ctx)
   std::ostringstream out;
   out << kHeader << '\n';
   out << "current_area " << ctx.current_area << '\n';
+  // Persist the active command so an interrupted mow is restored as a
+  // resumable session after a process restart.  Older v2 files omit this
+  // optional line and therefore retain BTContext's safe IDLE default.
+  out << "current_command " << static_cast<unsigned int>(ctx.current_command) << '\n';
   out << "completed_areas";
   for (uint32_t idx : ctx.completed_areas)
     out << ' ' << idx;
@@ -136,6 +141,14 @@ bool loadCoverageResumeState(BTContext& ctx)
       int v;
       if (ls >> v)
         ctx.current_area = v;
+    }
+    else if (tag == "current_command")
+    {
+      unsigned int v;
+      if (ls >> v && v <= std::numeric_limits<uint8_t>::max())
+      {
+        ctx.current_command = static_cast<uint8_t>(v);
+      }
     }
     else if (tag == "completed_areas")
     {
