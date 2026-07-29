@@ -27,93 +27,18 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
-#include "mowgli_behavior/detour_resume.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
-#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
 namespace mowgli_behavior
 {
-
-// ---------------------------------------------------------------------------
-// Swath (mow) angle sentinel. Any negative value = AUTO: the coverage server
-// picks the swath-count-minimising angle (F2C NSwath). 0..179 selects a fixed
-// swath angle in degrees. Operator-tunable end to end via mowgli_robot.yaml
-// (mow_angle_deg) → behavior_tree_node blackboard → PlanCoverageArea goal.
-// ---------------------------------------------------------------------------
-inline constexpr double kMowAngleAutoDeg = -1.0;
-
-// ---------------------------------------------------------------------------
-// Resume-cursor resolution — shared between FollowStrip (which trims the driven
-// prefix and marks fully-driven sub-paths done) and PlanCoverageArea (which aims
-// the blade-off transit at the resume point instead of the ring start). Both MUST
-// agree on WHERE a resume begins; if they don't, the robot arrives at one place
-// and then re-transits to another (the "arrive, wait, drive off elsewhere" bug).
-// Keeping the mapping in ONE function is what guarantees they can't drift apart.
-// ---------------------------------------------------------------------------
-struct ResumeLocation
-{
-  bool valid = false;    ///< false → no resumable cursor; mow fresh from pose 0.
-  std::size_t unit = 0;  ///< index of the sub-path the cursor lands in (units 0..unit-1 are done).
-  std::size_t local = 0;  ///< local offset to trim to; 0 → resume at the unit's front pose.
-};
-
-/// Map an absolute resume cursor (index into the sub-path concatenation) to the
-/// sub-path unit and local offset at which mowing resumes. Applies the guards
-/// FollowStrip uses: a cursor of 0 (or within 2 poses of the very end) is not
-/// resumable, and a landing offset is only trimmed mid-unit when it is strictly
-/// interior (local > 0 and at least 2 poses before the unit end) — otherwise the
-/// resume snaps to the unit's front. `total_poses` is the sum of unit sizes.
-ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& units,
-                                     std::size_t cursor, std::size_t total_poses);
-
-// ---------------------------------------------------------------------------
-// refreshSwathProgress — publish the GUI-facing live swath progress for the
-// area currently being mown.
-//
-// Sets ctx.total_swaths (the number of drivable UNITS in the current plan — the
-// denominator behind HighLevelStatus.current_path) and ctx.completed_swaths
-// (how many of those units are recorded mowed so far — the numerator behind
-// current_path_index). Called at pass START and on EVERY swath boundary, not
-// only when a whole area pass finishes, so current_path is > 0 throughout the
-// mow and the GUI %-readout (current_path_index / current_path) renders and
-// climbs live. Previously these scalars were written only at the terminal
-// branch, so they stayed 0 during mowing and the GUI showed no percentage.
-// Display-only: touches no blade/motion state.
-// ---------------------------------------------------------------------------
-void refreshSwathProgress(BTContext& ctx, uint32_t area_idx, std::size_t unit_count);
-
-// ---------------------------------------------------------------------------
-// coveragePercentFromCursor — smooth mowing progress (0..100) from the pose
-// cursor: 100 * absolute_cursor / total_poses, clamped to [0, 100]. absolute is
-// the index into the concatenation of all drivable units, so it is monotonic as
-// the robot drives forward across sub-paths within an area — giving a smooth
-// live percentage (vs the coarse unit-count ratio in refreshSwathProgress).
-// total_poses == 0 yields 0. Pure/free so it is unit-testable without ROS.
-// ---------------------------------------------------------------------------
-float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_poses);
-
-// ---------------------------------------------------------------------------
-// forwardSkipIndex — smallest index > `from` whose cumulative path arc-length
-// from poses[from] is at least `skip_dist_m`, bounded to poses.size()-1. Returns
-// `from` unchanged when the path is too short, `from` is out of range, or
-// skip_dist_m <= 0. Pure/free so it is unit-testable without ROS.
-//
-// Used to step the resume cursor PAST a non-obstacle FTC abort (issue #389): a
-// re-dispatch that resumes ON the identical abort pose re-aborts there forever
-// (deterministic ~20 % stall). Skipping a bounded arc-length ahead lands the
-// resume beyond the offending path feature (curvature spike / connector arc /
-// goal-checker quirk) and guarantees the cursor advances monotonically.
-// ---------------------------------------------------------------------------
-std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>& poses,
-                             std::size_t from, double skip_dist_m);
 
 // ---------------------------------------------------------------------------
 // FollowStrip — execute the planned coverage path, blade ON.
@@ -162,21 +87,7 @@ public:
 
   static BT::PortsList providedPorts()
   {
-    return {
-        // Per-SEGMENT detour budget (issue: FTC blocked by an un-skirtable
-        // obstacle). Each blade-off detour around an obstacle increments a
-        // counter; once it reaches this many, FollowStrip stops detouring and
-        // falls back to the abort-to-next-segment behaviour so it can never loop
-        // forever. Reset per segment (unit).
-        BT::InputPort<int>("max_detours_per_segment",
-                           5,
-                           "Max obstacle detours attempted per coverage segment before giving up"),
-        // Robot footprint radius (disc) used to test whether a candidate resume
-        // pose is clear of lethal costmap cells. Conservative chassis half-width.
-        BT::InputPort<double>("detour_footprint_radius_m",
-                              0.25,
-                              "Footprint disc radius for the resume-pose clearance test (m)"),
-    };
+    return {};
   }
 
   BT::NodeStatus onStart() override;
@@ -185,17 +96,6 @@ public:
 
 private:
   void setBladeEnabled(bool enabled);
-  // Detour-and-continue: on a FollowCoveragePath obstacle-abort, try to salvage
-  // the REST of the current segment instead of abandoning it. Confirms (via the
-  // latest global costmap) that a lethal cell really lies ahead, searches FORWARD
-  // for the first footprint-clear pose past the obstacle (>= min skip distance),
-  // trims the current unit to that pose, and dispatches the EXISTING blade-off
-  // NavigateToPose transit toward it (the Nav2 global planner routes around the
-  // obstacle). transit_active_ then re-dispatches FollowCoveragePath (blade on)
-  // for the remainder. Returns true when a detour was started (caller returns
-  // RUNNING); false when it should fall back to the abort-to-next path (no
-  // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
-  bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
   // Dispatch swaths_[swath_idx_]: if the robot is farther than
   // kSegmentTransitGap from the segment start, first run a NavigateToPose
   // transit (sets transit_active_); otherwise send the FollowPath goal
@@ -215,11 +115,6 @@ private:
   // restarting the whole path (and so GetNextUnmowedArea sees the progress and
   // does not abandon the area).
   void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
-  // Smooth live coverage percent (0..100) from the current pose cursor
-  // (swath_base_[swath_idx_] + resume_start_idx_ + path_progress_idx_) over
-  // total_path_poses_. Monotonic within an area; recomputed every following tick
-  // so the GUI %-readout climbs smoothly rather than jumping per sub-path.
-  float livePercent() const;
 
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
@@ -272,59 +167,6 @@ private:
   // Area being mowed (from ctx->current_area) — keys the swath-completion
   // tracking in BTContext so a resume/re-plan skips already-mowed segments.
   uint32_t area_idx_ = 0;
-
-  // --- Detour-and-continue state (obstacle blocking an un-skirtable segment) ---
-  // Latest global costmap, used to (a) confirm an abort is obstacle-related and
-  // (b) find a footprint-clear resume pose past the obstacle. Latched
-  // (transient_local) subscription; updated on the node's single MutuallyExclusive
-  // callback group so it is serialized against the BT tick (no extra mutex — see
-  // bt_context.hpp). Null until the first costmap arrives → detour falls back.
-  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
-  nav_msgs::msg::OccupancyGrid::SharedPtr latest_costmap_;
-  // Blade-off detours taken on the CURRENT segment (unit). Reset to 0 per unit
-  // (onStart and on advance() to the next unit). Bounded by max_detours_per_segment_.
-  std::size_t detours_used_ = 0;
-  // Ports read once in onStart.
-  std::size_t max_detours_per_segment_ = 5;
-  double detour_footprint_radius_m_ = 0.25;
-
-  // Resume pose must be at least this far (euclidean) past the stuck pose so the
-  // robot clears the obstacle. MUST exceed kSegmentTransitGap (0.6 m) so reaching
-  // the resume pose always triggers the structural blade-off transit rather than a
-  // blade-on drive-through (see sendCurrentSwath's gap guard, DetourResumeCfg).
-  static constexpr double kDetourMinSkipM = 0.8;
-  // Bounded forward search for a clear resume pose. Wider blockage → no resume →
-  // fall back (skip the segment) instead of scanning the whole field.
-  static constexpr double kDetourMaxSearchM = 8.0;
-  // OccupancyGrid cost at/above which a cell is lethal for the clearance test.
-  // MUST be 100 (TRUE lethal only): the published /global_costmap/costmap maps
-  // LETHAL(254)->100 and INSCRIBED(253)->99, and the inscribed band extends
-  // inflation_radius (0.20 m) from every keepout wall BY DESIGN. The outer
-  // headland ring rides ON the recorded line (chassis_safety_inset 0), i.e.
-  // permanently within 0.20 m of the boundary band — a 90 threshold counted
-  // those 99-cells as lethal, so EVERY outer-ring abort was "obstacle
-  // confirmed" (wedge) and NO ring pose was ever footprint-clear, which made
-  // decideDetour return no-resume and FollowStrip skip the ENTIRE sub-path
-  // (the whole field on a hole-free area). Field regression 2026-07-2x.
-  static constexpr int8_t kDetourLethalCost = 100;
-  // Radius of the "stalled beside an obstacle" wedge check around the stuck pose
-  // (spec Part B). Fires the detour when lethal cells hug the robot even with no
-  // dead-ahead blockage. Chassis half-width (~0.20 m) + margin. Safe against the
-  // boundary band only because kDetourLethalCost is 100 and the TRUE lethal wall
-  // sits enforce_boundary_margin_m (0.40 m) outside the outer ring (> 0.35).
-  static constexpr double kDetourWedgeRadiusM = 0.35;
-
-  // Arc-length the resume cursor is stepped FORWARD past a NON-obstacle FTC abort
-  // (issue #389). When tryStartDetour declines (no lethal cell ahead / budget
-  // spent / no costmap) the abort is not a skirtable obstacle, so persisting the
-  // cursor AT the abort pose makes the next dispatch resume on the identical pose
-  // and re-abort there forever (deterministic ~20 % stall, capping every
-  // sub-path). Skipping this far ahead lands the re-dispatch beyond the offending
-  // path feature and guarantees the cursor advances monotonically on every such
-  // abort. MUST exceed kSegmentTransitGap (0.6 m) so the resume reaches the
-  // skipped span as a blade-off transit (see sendCurrentSwath's gap guard) rather
-  // than driving through it blade-on. Matches kDetourMinSkipM for the same reason.
-  static constexpr double kNonObstacleAbortSkipM = 0.8;
 
   // Max time to hold (blade off) waiting for navigate_to_pose to become ready to
   // run a required inter-swath transit. If the server never comes up in this

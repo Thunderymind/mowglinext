@@ -398,9 +398,9 @@ TEST_F(AreaTypeTest, PromoteObstacleIsIdempotent)
 // rectangle from (-3,-2) to (3,2). With the default lethal_outside_areas=true
 // and enforce_boundary_margin_m=0.40, the mask must be:
 //   * FREE (0) for a point well INSIDE the rectangle,
-//   * MID-COST (50, traversable-but-penalised) for a point just OUTSIDE the
-//     edge but within 0.40 m — a start/goal there must not fail "Start
-//     occupied", yet A* must not corner-cut through the band,
+//   * FREE (0) for a point just OUTSIDE the edge but within 0.40 m — a
+//     start/goal there must not fail "Start occupied"; the hard boundary
+//     monitor rejects a true excursion,
 //   * LETHAL (100) for a point far OUTSIDE the rectangle (> 0.40 m past edge).
 // The mask is read back with the independent OccupancyGrid convention in
 // mask_at(), so a swapped width/height (the historical 90°-rotation bug,
@@ -420,12 +420,11 @@ TEST_F(AreaTypeTest, KeepoutMaskMarksOutsideAreasLethal)
   EXPECT_EQ(mask_at(mask, 2.0, 1.0), 0) << "interior corner of mowing area must be free";
 
   // Just outside the +X edge but within enforce_boundary_margin_m (0.40) →
-  // the mid-cost slack band (50): traversable for a boundary start pose but
-  // penalised so transits do not corner-cut outside the polygon.
-  EXPECT_EQ(mask_at(mask, 3.10, 0.0), 50) << "RTK-drift slack band must be mid-cost, not lethal";
+  // the free slack band: traversable for a boundary start pose.
+  EXPECT_EQ(mask_at(mask, 3.10, 0.0), 0) << "RTK-drift slack band must stay traversable";
   // 0.28 m past the edge: LETHAL under the old 0.25 m margin — pins the
   // widened 0.40 m slack (outer-ring "Start occupied" transit-skip fix).
-  EXPECT_EQ(mask_at(mask, 3.28, 0.0), 50) << "widened slack band (0.40 m) must stay non-lethal";
+  EXPECT_EQ(mask_at(mask, 3.28, 0.0), 0) << "widened slack band (0.40 m) must stay traversable";
 
   // Far outside the rectangle (> 0.40 m past the edge) → LETHAL.
   EXPECT_EQ(mask_at(mask, 3.55, 0.0), 100) << "cell just past the 0.40 m slack must be lethal";

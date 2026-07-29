@@ -64,8 +64,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   map_file_path_ = declare_parameter<std::string>("map_file_path", "");
   areas_file_path_ = declare_parameter<std::string>("areas_file_path", "");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
-  mow_progress_publish_period_s_ = declare_parameter<double>("mow_progress_publish_period_s", 2.0);
-  keepout_nav_margin_ = declare_parameter<double>("keepout_nav_margin", 0.45);
+  keepout_nav_margin_ = declare_parameter<double>("keepout_nav_margin", 1.5);
   // Hard area-boundary enforcement: when true (operator default), the keepout
   // mask marks every cell OUTSIDE the union of all areas (mowing + navigation)
   // as LETHAL — the planner cannot route there and MPPI cannot steer out of
@@ -74,7 +73,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // the legacy keepout_nav_margin_ free band governs. See the field note on the
   // 0.32 m concave-boundary excursion (project_coverage_boundary_excursion).
   lethal_outside_areas_ = declare_parameter<bool>("lethal_outside_areas", true);
-  enforce_boundary_margin_m_ = declare_parameter<double>("enforce_boundary_margin_m", 0.40);
+  enforce_boundary_margin_m_ = declare_parameter<double>("enforce_boundary_margin_m", 0.25);
   // Two-tier boundary: if the robot is outside every defined area, we
   // publish /boundary_violation (BT attempts a recovery back inside). If
   // the robot is further than lethal_boundary_margin beyond any area
@@ -108,8 +107,8 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   boundary_debounce_samples_ =
       static_cast<int>(declare_parameter<int>("boundary_debounce_samples", 3));
   boundary_recovery_offset_m_ = declare_parameter<double>("boundary_recovery_offset_m", 0.8);
-  boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.0);
-  strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 1.20);
+  boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.3);
+  strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 0.5);
   mow_angle_override_deg_ =
       declare_parameter<double>("mow_angle_deg", std::numeric_limits<double>::quiet_NaN());
 
@@ -125,7 +124,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // Extra LETHAL band around drawn obstacle polygons in the keepout mask.
   // Same key drives coverage_server's F2C hole buffering (injected at launch
   // from mowgli_robot.yaml.obstacle_margin) — keep the two in lockstep.
-  obstacle_margin_m_ = std::clamp(declare_parameter<double>("obstacle_margin", 0.15), 0.0, 1.0);
+  obstacle_margin_m_ = std::clamp(declare_parameter<double>("obstacle_margin", 0.0), 0.0, 1.0);
 
   // Dock body (physical structure the robot cannot drive into). Cells
   // inside are marked OBSTACLE_PERMANENT — F2C strips stop at the body
@@ -170,6 +169,8 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   init_map();
 
   // ── Publishers ───────────────────────────────────────────────────────────
+  grid_map_pub_ = create_publisher<grid_map_msgs::msg::GridMap>("~/grid_map", rclcpp::QoS(1));
+
   // Mowed-area progress overlay. transient_local so the GUI receives the latest
   // accumulated coverage immediately on (re)connect.
   mow_progress_pub_ =
@@ -185,6 +186,11 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   keepout_mask_pub_ =
       create_publisher<nav_msgs::msg::OccupancyGrid>("/keepout_mask", transient_qos);
+
+  speed_filter_info_pub_ =
+      create_publisher<nav2_msgs::msg::CostmapFilterInfo>("/speed_filter_info", transient_qos);
+
+  speed_mask_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/speed_mask", transient_qos);
 
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -220,7 +226,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // obstacles (separate concern: review/approve + survive restarts).
   const auto costmap_topic =
       declare_parameter<std::string>("costmap_topic", "/global_costmap/costmap");
-  costmap_obstacle_threshold_ = declare_parameter<int>("costmap_obstacle_threshold", 99);
+  costmap_obstacle_threshold_ = declare_parameter<int>("costmap_obstacle_threshold", 80);
   costmap_max_age_s_ = declare_parameter<double>("costmap_max_age_s", 2.0);
   costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       costmap_topic,
@@ -748,6 +754,9 @@ void MapServerNode::on_publish_timer()
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
 
+    auto grid_map_msg = grid_map::GridMapRosConverter::toMessage(map_);
+    grid_map_pub_->publish(std::move(grid_map_msg));
+
     // Only publish masks when something changed. The publishers use
     // transient_local QoS so late subscribers (e.g. costmap_filter)
     // automatically receive the most recent mask. Republishing a
@@ -758,25 +767,16 @@ void MapServerNode::on_publish_timer()
     if (masks_dirty_)
     {
       publish_keepout_mask();
+      publish_speed_mask();
       masks_dirty_ = false;
     }
 
-    // Republish the mowed overlay only when it grew, and at most once per
-    // mow_progress_publish_period_s_. Re-serializing the full-extent overlay on
-    // every tick is O(cells) per second while mowing — the dominant steady cost
-    // on a large map. transient_local keeps late subscribers up to date, and
-    // mow_progress_dirty_ stays set until we actually publish, so no growth is
-    // lost between throttled publishes.
+    // Republish the mowed overlay only when it grew this period (transient_local
+    // keeps late subscribers up to date without re-sending an unchanged grid).
     if (mow_progress_dirty_)
     {
-      const rclcpp::Time now_t = now();
-      if (last_mow_progress_pub_time_.nanoseconds() == 0 ||
-          (now_t - last_mow_progress_pub_time_).seconds() >= mow_progress_publish_period_s_)
-      {
-        publish_mow_progress();
-        last_mow_progress_pub_time_ = now_t;
-        mow_progress_dirty_ = false;
-      }
+      publish_mow_progress();
+      mow_progress_dirty_ = false;
     }
   }
 }

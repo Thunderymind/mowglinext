@@ -118,9 +118,8 @@ public:
     return apply_promoted_obstacle(area_index, polygon);
   }
 
-  /// Test-only: obstacle-store sizes, to assert promotion / load is
-  /// idempotent (one keepout → one entry in each store). Single-threaded test
-  /// use only — no locking.
+  /// Test-only: inspect the two persisted obstacle stores to keep promotion
+  /// idempotency covered without exposing them to runtime callers.
   size_t obstacle_polygon_count_for_test() const
   {
     return obstacle_polygons_.size();
@@ -330,7 +329,7 @@ private:
   /// holes) as LETHAL (100), so the Smac planner never routes there and MPPI
   /// never steers the robot out of the authorised zone. The free band that
   /// keepout_nav_margin_ would otherwise leave outside each edge is reduced
-  /// to enforce_boundary_margin_m_ (a small slack so RTK drift
+  /// to enforce_boundary_margin_m_ (a small robot-radius slack so RTK drift
   /// at the edge does not self-reject as "Start occupied"), and the dock
   /// corridor carve-out still keeps a non-lethal lane for transit/docking.
   /// When false, the legacy keepout_nav_margin_ behaviour is restored.
@@ -341,20 +340,13 @@ private:
   /// lethal_outside_areas_ is on. Absorbs RTK/pose drift at the boundary so
   /// the planner does not refuse a start pose that sits a few cm past the
   /// recorded line (the recorded outline IS the robot's CENTRE path, so the
-  /// footprint legitimately overhangs it). 0.40 m = the chassis half-width
-  /// (0.225) + one global-costmap cell (0.08) + drift headroom: with the 0.25
-  /// (~robot radius) value, a robot riding the outer headland ring (centerline
-  /// ON the recorded line) had only ~5 cm between its centre cell and the
-  /// inscribed-cost band (lethal wall 0.25 out, inflation 0.20 in) — under one
-  /// 0.08 m cell, so Smac transits sporadically failed "Start occupied" and
-  /// FollowStrip skipped whole sub-paths (headland rings) on no-LiDAR/GPS-only
-  /// installs. Still below lethal_boundary_margin_m_ (0.5) so the planner wall
-  /// engages before the e-stop tripwire, and still far under the 0.45 m
-  /// keepout_nav_margin_ regression that let transit detours drift outside.
-  /// Inflation of the lethal boundary is also bounded by listing
-  /// keepout_filter BEFORE inflation_layer in the costmap plugins so the wall
-  /// is not inflated inward (see nav2_params_*.yaml).
-  double enforce_boundary_margin_m_{0.40};
+  /// footprint legitimately overhangs it). Kept small (~robot radius) so the
+  /// planner cannot draft transit detours far outside the polygon — that is
+  /// the regression keepout_nav_margin_ at 0.45 m reopened. Inflation of the
+  /// lethal boundary is also bounded by listing keepout_filter BEFORE
+  /// inflation_layer in the costmap plugins so the wall is not inflated
+  /// inward (see nav2_params_*.yaml).
+  double enforce_boundary_margin_m_{0.25};
   /// Distance past the nearest allowed-area edge at which a boundary
   /// violation is classified as "lethal" (emergency stop) rather than
   /// just "soft" (attempt recovery back inside).
@@ -463,13 +455,6 @@ private:
   /// occupancy/classification lifecycle. Guarded by map_mutex_.
   grid_map::GridMap mow_progress_map_;
   bool mow_progress_dirty_{false};
-  /// Throttle for the mowed-overlay publish. The overlay is re-serialized (an
-  /// O(cells) full-grid pass that scales with map extent) at most once per this
-  /// period while mowing, instead of on every timer tick — the dominant steady
-  /// cost on a large map. transient_local keeps late subscribers current, and
-  /// mow_progress_dirty_ stays set until an actual publish, so no growth is lost.
-  double mow_progress_publish_period_s_{2.0};
-  rclcpp::Time last_mow_progress_pub_time_{0, 0, RCL_ROS_TIME};
 
   bool mow_blade_enabled_{false};
 

@@ -81,14 +81,24 @@ void MapServerNode::check_boundary_violation(double x, double y)
       inside_any = true;
       break;
     }
-    // Only track distance-to-edge for areas we're outside of; used to
-    // classify the violation as "soft" (still recoverable) vs "lethal"
-    // (blade/motor hazard — stop immediately).
     const double d = point_to_polygon_distance(x, y, area.polygon);
     if (d < min_edge_dist)
     {
       min_edge_dist = d;
     }
+  }
+
+  if (has_dock_exclusion_)
+  {
+    if (point_in_polygon(pt, dock_corridor_polygon_) ||
+        point_in_polygon(pt, dock_exclusion_polygon_) ||
+        point_in_polygon(pt, dock_body_polygon_))
+    {
+      inside_any = true;
+    }
+    const double d_corr = point_to_polygon_distance(x, y, dock_corridor_polygon_);
+    const double d_excl = point_to_polygon_distance(x, y, dock_exclusion_polygon_);
+    min_edge_dist = std::min({min_edge_dist, d_corr, d_excl});
   }
 
   // Sample debounce. on_odom fires at /odometry/filtered_map's rate
@@ -111,11 +121,12 @@ void MapServerNode::check_boundary_violation(double x, double y)
                                                                  consecutive_outside_samples_);
 
   std_msgs::msg::Bool soft_msg;
-  soft_msg.data = classification.soft;
-  boundary_violation_pub_->publish(soft_msg);
+  soft_msg.data = mow_blade_enabled_ ? classification.soft : false;
 
   std_msgs::msg::Bool lethal_msg;
-  lethal_msg.data = classification.lethal;
+  lethal_msg.data = mow_blade_enabled_ ? classification.lethal : false;
+
+  boundary_violation_pub_->publish(soft_msg);
   lethal_boundary_violation_pub_->publish(lethal_msg);
 
   // Only escalate logging when the blade is actively running. When the blade
@@ -285,22 +296,37 @@ bool MapServerNode::apply_promoted_obstacle(size_t area_index,
     if (polygon.points.size() < 3)
       return false;
 
-    // Idempotent promotion. Promoting an obstacle writes its polygon into the
-    // keepout mask (→ lethal costmap cells); the obstacle_tracker re-clusters
-    // that same costmap and can re-promote the SAME region. Without a dedup
-    // guard every re-promote (and every YAML reload) push_back'd an identical
-    // polygon, stacking unbounded duplicates. Skip when a polygon with a
-    // near-identical centroid already exists — a true no-op (no reclassify, no
-    // replan trigger). One promote → exactly one permanent obstacle.
-    if (has_duplicate_obstacle(obstacle_polygons_, polygon, kObstacleDedupEpsilonM) ||
-        has_duplicate_obstacle(areas_[area_index].obstacles, polygon, kObstacleDedupEpsilonM))
+    // Promotion may be retried by the GUI or by a reconnecting tracker.  Keep
+    // the persistent area model idempotent: a near-identical polygon must not
+    // stack duplicate keepouts, which would otherwise be saved permanently and
+    // repeatedly trigger replanning.  Centroid comparison is sufficient here:
+    // promoted tracker hulls are stable and a distinct obstacle is separated
+    // by far more than this 10 cm UI/quantisation tolerance.
+    auto centroid = [](const geometry_msgs::msg::Polygon& p)
     {
-      const auto c = polygon_centroid(polygon);
-      RCLCPP_INFO(get_logger(),
-                  "apply_promoted_obstacle: duplicate keepout near (%.2f, %.2f) ignored (no-op)",
-                  static_cast<double>(c.x),
-                  static_cast<double>(c.y));
-      return true;
+      double x = 0.0;
+      double y = 0.0;
+      for (const auto& point : p.points)
+      {
+        x += point.x;
+        y += point.y;
+      }
+      const double n = static_cast<double>(p.points.size());
+      return std::pair<double, double>{x / n, y / n};
+    };
+    const auto [cx, cy] = centroid(polygon);
+    constexpr double kPromotionDedupRadiusM = 0.10;
+    for (const auto& existing : areas_[area_index].obstacles)
+    {
+      if (existing.points.size() < 3)
+      {
+        continue;
+      }
+      const auto [ex, ey] = centroid(existing);
+      if (std::hypot(cx - ex, cy - ey) <= kPromotionDedupRadiusM)
+      {
+        return true;
+      }
     }
 
     areas_[area_index].obstacles.push_back(polygon);

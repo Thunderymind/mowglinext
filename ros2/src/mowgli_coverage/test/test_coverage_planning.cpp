@@ -41,6 +41,77 @@ f2c::types::Cell makeSquare(double size)
   return f2c::types::Cell(ring);
 }
 
+// ---------------------------------------------------------------------------
+// Field regression: the operator's current NYA area with obstacle 1.  These
+// coordinates are fetched from /map_server_node/get_mowing_area before the
+// test was added.  Keep the deployed knobs here so a planner change cannot
+// silently reintroduce an unplanned lobe, a gap at the perimeter, or a path
+// through obstacle 1.
+// ---------------------------------------------------------------------------
+TEST(CoverageRepro, NyaWithObstacle1HasSafeHighCoveragePlan)
+{
+  const std::vector<std::pair<double, double>> boundary = {
+      {-2.7657599, 4.8870902}, {-4.0418901, 6.4227700}, {-4.9719501, 6.7904701},
+      {-6.0966702, 5.5359702}, {-7.3295398, 2.0320301}, {-6.0434399, 1.0876700},
+      {-4.9686298, -0.1082490}, {-3.4266400, -1.6974800}, {-1.3396000, -0.5987200},
+      {-0.0062497, 1.1382600}, {-1.5405600, 3.1910300}};
+  const std::vector<std::pair<double, double>> obstacle = {
+      {-2.6382699, 2.1083200}, {-2.8882699, 2.5413301}, {-3.3882699, 2.5413301},
+      {-3.6382599, 2.1083200}, {-3.3882699, 1.6753100}, {-2.8882699, 1.6753100}};
+
+  f2c::types::LinearRing outer;
+  for (const auto& p : boundary)
+  {
+    outer.addPoint(f2c::types::Point(p.first, p.second));
+  }
+  const f2c::types::LinearRing clean_outer = dedupClosedRing(outer);
+
+  f2c::types::LinearRing raw_hole;
+  for (const auto& p : obstacle)
+  {
+    raw_hole.addPoint(f2c::types::Point(p.first, p.second));
+  }
+
+  // Active rover knobs: 16 cm operation width, two headland passes, no
+  // outer-boundary inset, 20 cm obstacle margin, and 0.5 m connector floor.
+  f2c::types::Cell cell(clean_outer);
+  cell.addRing(mowgli_coverage::bufferRingOutward(dedupClosedRing(raw_hole), 0.20));
+  const auto plan = planBoustrophedon(cell, 0.16, 0.18, 2, 0.0, -1.0, 0.15, 0, 0.50);
+  const auto subpaths = buildContinuousSubPaths(plan, plan.safe_boundary, 0.50, 0.50, 0.05);
+
+  std::cout << "[NYA] rings=" << plan.rings.size() << " swaths=" << plan.swaths.size()
+            << " subpaths=" << subpaths.size() << " planned_fraction="
+            << plan.diagnostics.planned_fraction << " drops=" << plan.diagnostics.drops.size()
+            << std::endl;
+  for (const auto& drop : plan.diagnostics.drops)
+  {
+    std::cout << "[NYA] " << drop << std::endl;
+  }
+
+  ASSERT_FALSE(plan.rings.empty());
+  ASSERT_FALSE(plan.swaths.empty());
+  ASSERT_FALSE(subpaths.empty());
+  ASSERT_FALSE(plan.safe_holes.empty());
+  EXPECT_GT(plan.diagnostics.planned_fraction, 0.85)
+      << "NYA plan leaves too much of the planned field unrepresented";
+
+  std::size_t inside_obstacle = 0;
+  std::size_t total_points = 0;
+  for (const auto& path : subpaths)
+  {
+    for (const auto& p : path)
+    {
+      ++total_points;
+      if (pointInRing(p.first, p.second, obstacle))
+      {
+        ++inside_obstacle;
+      }
+    }
+  }
+  EXPECT_EQ(inside_obstacle, 0u)
+      << inside_obstacle << "/" << total_points << " blade-on path points cross obstacle 1";
+}
+
 // A concave L-shape: a `size` square with a `notch`x`notch` bite removed from
 // the top-right corner. Hole-free but NON-convex (re-entrant corner).
 f2c::types::Cell makeLShape(double size, double notch)

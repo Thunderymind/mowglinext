@@ -41,7 +41,6 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<ReplanNeeded>("ReplanNeeded");
   factory.registerNodeType<IsBoundaryViolation>("IsBoundaryViolation");
   factory.registerNodeType<IsLethalBoundaryViolation>("IsLethalBoundaryViolation");
-  factory.registerNodeType<IsDocking>("IsDocking");
   factory.registerNodeType<IsNewRain>("IsNewRain");
   factory.registerNodeType<IsRainModeAtLeast>("IsRainModeAtLeast");
   factory.registerNodeType<IsResumeUndockAllowed>("IsResumeUndockAllowed");
@@ -50,8 +49,6 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<Nav2Active>("Nav2Active");
   factory.registerNodeType<IsObstacleStuck>("IsObstacleStuck");
   factory.registerNodeType<WasRecentlyInCollisionStop>("WasRecentlyInCollisionStop");
-  factory.registerNodeType<IsScanStale>("IsScanStale");
-  factory.registerNodeType<IsCollisionStopSustained>("IsCollisionStopSustained");
 
   // Action nodes
   factory.registerNodeType<SetMowerEnabled>("SetMowerEnabled");
