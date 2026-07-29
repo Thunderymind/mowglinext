@@ -269,7 +269,7 @@ def generate_launch_description() -> LaunchDescription:
     # inverts the front/back ground-filter sign on a slope). imu_yaw is
     # subtracted because the gravity "up" vector is expressed in the IMU
     # frame; it is 0 on this stack but kept general.
-    lidar_height_m = 0.30
+    lidar_height_m = 0.22
     lidar_mount_yaw = 0.0
     if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
@@ -374,10 +374,7 @@ def generate_launch_description() -> LaunchDescription:
     # Injected into coverage_server.connector_turn_radius; operator-tunable via
     # mowgli_robot.yaml (raise toward 0.30 if the tighter turns hesitate).
     connector_turn_radius = 0.18
-    # Fallback if progress_timeout_sec is absent from the resolved robot config
-    # (normally the mowgli_robot.yaml template supplies it — default 30.0, see
-    # #396). Kept equal to that default so the effective timeout is one number.
-    progress_timeout_sec = 30.0
+    progress_timeout_sec = 300.0
     # num_headland_passes: 0 = auto (ceil(headland_width / tool_width)),
     # >0 forces exactly that many concentric perimeter rings.
     num_headland_passes = 0
@@ -452,27 +449,15 @@ def generate_launch_description() -> LaunchDescription:
     # checks raw lethal cells only (see obstacle_inflation_radius's own
     # comment in the template for the full #49 rationale). Converted to a
     # FollowCoveragePath.obstacle_lookahead POSE COUNT at injection below
-    # (kF2CSamplingM). 1.0 (was 1.5): FTC now models the true chassis FOOTPRINT
-    # (use_footprint_clearance) instead of a swept line, so it reacts on the real
-    # body edge and needs less forward warning to skirt smoothly.
-    obstacle_detection_range_m = 1.0
+    # (kF2CSamplingM).
+    obstacle_detection_range_m = 1.5
     # Extra lateral clearance when skirting an obstacle, on top of FTC's
-    # footprint. Clearance-only (detection reach unchanged). 0.05 (was 0.10):
-    # the footprint models the true body edge, so the old margin — sized to
-    # cover the line model's centerline-miss gap — is now double what's needed.
-    obstacle_clearance_margin = 0.05
+    # obstacle_body_half_width. Clearance-only (detection reach unchanged).
+    obstacle_clearance_margin = 0.10
     # Hold time on a blocked/over-max deviation before aborting the strip.
-    obstacle_wait_timeout_s = 2.5
-    # Bounded reverse-escape (SAFETY-CRITICAL): back straight up (rear footprint
-    # permitting) to escape a wedge before holding/aborting. OPT-IN (default
-    # False) — drives the robot BACKWARDS; enable only after a supervised field
-    # test. See the template mowgli_robot.yaml + nav2_params_base.yaml for the
-    # full rationale.
-    obstacle_reverse_enabled = False
-    obstacle_reverse_max_dist_m = 0.30
-    obstacle_reverse_speed_mps = 0.10
-    obstacle_margin = 0.15
-    obstacle_slowdown_ratio = 0.5
+    obstacle_wait_timeout_s = 5.0
+    obstacle_margin = 0.0
+    obstacle_slowdown_ratio = 0.3
     enable_mag_cal = False
     mag_cal_path = "/ros2_ws/maps/mag_calibration.yaml"
     declination_deg = 1.5
@@ -543,12 +528,6 @@ def generate_launch_description() -> LaunchDescription:
             "obstacle_clearance_margin", obstacle_clearance_margin))
         obstacle_wait_timeout_s = float(rt_rp.get(
             "obstacle_wait_timeout_s", obstacle_wait_timeout_s))
-        obstacle_reverse_enabled = bool(rt_rp.get(
-            "obstacle_reverse_enabled", obstacle_reverse_enabled))
-        obstacle_reverse_max_dist_m = float(rt_rp.get(
-            "obstacle_reverse_max_dist_m", obstacle_reverse_max_dist_m))
-        obstacle_reverse_speed_mps = float(rt_rp.get(
-            "obstacle_reverse_speed_mps", obstacle_reverse_speed_mps))
         obstacle_margin = float(rt_rp.get("obstacle_margin", obstacle_margin))
         obstacle_slowdown_ratio = float(rt_rp.get(
             "obstacle_slowdown_ratio", obstacle_slowdown_ratio))
@@ -734,15 +713,6 @@ def generate_launch_description() -> LaunchDescription:
         # always won.
         fcp["obstacle_wait_timeout_s"] = min(
             60.0, max(0.5, obstacle_wait_timeout_s))
-        # Bounded reverse-escape (SAFETY-CRITICAL). Straight reverse to escape a
-        # wedge before holding/aborting; rear footprint is checked every tick and
-        # the distance is hard-capped. Clamps: dist [0.0, 1.0] m, speed
-        # [0.0, 0.30] m/s (must clear the firmware ~0.05 deadband to move at all).
-        fcp["obstacle_reverse_enabled"] = bool(obstacle_reverse_enabled)
-        fcp["obstacle_reverse_max_dist_m"] = min(
-            1.0, max(0.0, obstacle_reverse_max_dist_m))
-        fcp["obstacle_reverse_speed_mps"] = min(
-            0.30, max(0.0, obstacle_reverse_speed_mps))
         # LOCAL costmap inflation only. Floor 0.58: the nav2 inflation layer
         # degrades footprint-cost semantics below the chassis circumscribed
         # radius (~0.572 m) and FTC's deviation detector (threshold 253)
@@ -902,13 +872,6 @@ def generate_launch_description() -> LaunchDescription:
     nav2_navigation_group = GroupAction(
         actions=[
             SetParameter("bond_timeout", 10.0),
-            # Slow the lifecycle bond heartbeat from the Nav2 default 10 Hz to
-            # 2 Hz on every managed server. 9 nodes × 10 Hz = ~90 bond msgs/s was
-            # the lifecycle_manager's only steady-state load on the Pi; 2 Hz keeps
-            # crash/liveness detection (manager still tears down a dead node) at
-            # ~1/5 the executor churn. Set here (like bond_timeout) so it applies
-            # to all managed nodes from one place instead of 9 yaml blocks.
-            SetParameter("bond_heartbeat_period", 0.5),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(
@@ -1026,6 +989,10 @@ def generate_launch_description() -> LaunchDescription:
              "enable_mag_cal": enable_mag_cal,
              "mag_calibration_path": mag_cal_path,
              "stationary_seed_rate_hz": cog_stationary_rate,
+             "max_sample_dt_s": 1.5,
+             "cog_max_baseline_rotation_rad": 0.05236,
+             "min_omega_for_anchor_rps": 0.15,
+             "min_baseline_displacement_m": 0.20,
              # Stationary-yaw aging penalty. The republish_latched path
              # adds (rate · age)² to the variance to model the chance
              # that the latched yaw has gone stale (manual rotation,

@@ -126,7 +126,6 @@ static const char* high_level_mode_name(const uint8_t mode)
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav_msgs/msg/odometry.hpp"
-#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -350,28 +349,13 @@ private:
     // scale used by this bridge for host-side odometry and re-sent to the
     // STM32 so the firmware wheel PI / odom share the same tuned value.
     wheel_track_ = declare_parameter<double>("wheel_track", 0.325);
-    // Helper for declaring doubles with a floating_point_range descriptor so
-    // ros2 param set rejects out-of-bounds values at the framework level before
-    // the set-parameters callback fires. Ranges mirror the firmware validation.
-    auto bounded_double =
-        [this](const std::string& name, double default_val, double min, double max) -> double
-    {
-      rcl_interfaces::msg::ParameterDescriptor desc;
-      desc.floating_point_range.resize(1);
-      desc.floating_point_range[0].from_value = min;
-      desc.floating_point_range[0].to_value = max;
-      return declare_parameter<double>(name, default_val, desc);
-    };
-    ticks_per_meter_ = bounded_double("ticks_per_meter",
-                                      300.0,
-                                      kMinRuntimeTicksPerMeter,
-                                      kMaxRuntimeTicksPerMeter);
+    ticks_per_meter_ = declare_parameter<double>("ticks_per_meter", 300.0);
     // Runtime max wheel-speed cap pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS)
     // alongside wheel_track_ as the wheel base, so both can be retuned without a
     // reflash. Default mirrors the firmware compile-time MAX_MPS fallback; the
     // firmware clamps the cap to at most its own compiled MAX_MPS (wire can only
     // LOWER it). Sourced from the sparse mowgli_robot.yaml (Invariant 15).
-    max_mps_ = bounded_double("max_mps", 0.5, 0.01, 0.5);
+    max_mps_ = declare_parameter<double>("max_mps", 0.5);
     // Runtime safety limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS)
     // so the charge ceiling + e-stop timeouts can be TIGHTENED without a reflash.
     // Defaults mirror the firmware compile-time board_defaults.h values; the
@@ -387,23 +371,14 @@ private:
     play_clear_ms_ = declare_parameter<int>("play_button_clear_emergency_ms", 2000);
     // Drive-motor wheel-velocity PID gains + feedforward. Pushed to the STM32
     // firmware (PACKET_ID_LL_SET_DRIVE_PID) so the GUI can retune the per-wheel
-    // loop without reflashing. Fallback defaults match the mowgli_bringup
-    // template (pre-calibration field defaults; a per-robot auto-tune overrides
-    // them). Live-tunable via the set-parameters callback below; the firmware
-    // re-clamps every value. The floating_point_range on these parameters
-    // mirrors the firmware validation bounds so ros2 param set rejects
-    // out-of-range values at the framework level before the callback fires.
-    wheel_pid_kp_ = bounded_double("wheel_pid_kp", 0.2, kMinRuntimeWheelKp, kMaxRuntimeWheelKp);
-    wheel_pid_ki_ = bounded_double("wheel_pid_ki", 0.092, kMinRuntimeWheelKi, kMaxRuntimeWheelKi);
-    wheel_pid_kd_ = bounded_double("wheel_pid_kd", 0.01, kMinRuntimeWheelKd, kMaxRuntimeWheelKd);
-    wheel_pid_integral_limit_ = bounded_double("wheel_pid_integral_limit",
-                                               15.0,
-                                               kMinRuntimeWheelIntegralLimit,
-                                               kMaxRuntimeWheelIntegralLimit);
-    wheel_pid_pwm_per_mps_ = bounded_double("wheel_pid_pwm_per_mps",
-                                            282.135,
-                                            kMinRuntimePwmPerMps,
-                                            kMaxRuntimePwmPerMps);
+    // loop without reflashing. Defaults mirror the firmware compile-time
+    // fallback (cpp_main.cpp WHEEL_PI_* / board.h PWM_PER_MPS). Live-tunable via
+    // the set-parameters callback below; the firmware re-clamps every value.
+    wheel_pid_kp_ = declare_parameter<double>("wheel_pid_kp", 30.0);
+    wheel_pid_ki_ = declare_parameter<double>("wheel_pid_ki", 5000.0);
+    wheel_pid_kd_ = declare_parameter<double>("wheel_pid_kd", 0.0);
+    wheel_pid_integral_limit_ = declare_parameter<double>("wheel_pid_integral_limit", 100.0);
+    wheel_pid_pwm_per_mps_ = declare_parameter<double>("wheel_pid_pwm_per_mps", 300.0);
     // Firmware gyro yaw-rate loop (Option C, task #33/#34 — replaces the
     // removed host-side angular_rate_controller.hpp). Pushed to the STM32 via
     // PACKET_ID_LL_SET_YAW_PID (see send_yaw_pid()). Defaults are the
@@ -414,18 +389,15 @@ private:
     // trim_limit∈[0,0.5]); loop_enabled/gyro_sign are read once at startup —
     // gyro_sign is the field sign-check remedy for the physical IMU mounting
     // (UNVALIDATED default +1) and is not expected to change at runtime.
-    yaw_kp_ = bounded_double("yaw_kp", 0.12, kMinRuntimeYawKp, kMaxRuntimeYawKp);
-    yaw_ki_ = bounded_double("yaw_ki", 0.40, kMinRuntimeYawKi, kMaxRuntimeYawKi);
-    yaw_trim_limit_mps_ = bounded_double("yaw_trim_limit_mps",
-                                         0.15,
-                                         kMinRuntimeYawTrimLimitMps,
-                                         kMaxRuntimeYawTrimLimitMps);
+    yaw_kp_ = declare_parameter<double>("yaw_kp", 0.12);
+    yaw_ki_ = declare_parameter<double>("yaw_ki", 0.40);
+    yaw_trim_limit_mps_ = declare_parameter<double>("yaw_trim_limit_mps", 0.15);
     yaw_loop_enabled_ = declare_parameter<bool>("yaw_loop_enabled", true);
     yaw_gyro_sign_ = declare_parameter<int>("yaw_gyro_sign", 1);
     // Sub-deadband forward-velocity clamp threshold (see min_linear_vel_).
     // Default 0.05 (was a hardcoded 0.15) — the PX4 PID firmware can track
     // slow setpoints now. Live-tunable via the callback below.
-    min_linear_vel_ = bounded_double("min_linear_vel", 0.05, 0.0, 1.0);
+    min_linear_vel_ = declare_parameter<double>("min_linear_vel", 0.05);
     min_lin_vel_cb_handle_ = add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter>& params)
         {
@@ -712,6 +684,13 @@ private:
         rclcpp::QoS(10),
         [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
         {
+          const auto now_stamp = this->now();
+          const bool recent_cmd = last_cmd_vel_motion_stamp_.has_value() &&
+                                  (now_stamp - *last_cmd_vel_motion_stamp_).seconds() < 1.0;
+          if (msg->state == HL_MODE_IDLE && (recent_cmd || mow_enabled_))
+          {
+            return;
+          }
           const uint8_t previous_mode = current_mode_;
           const std::string previous_state_name = current_mode_state_name_;
           current_mode_ = msg->state;
@@ -1601,12 +1580,6 @@ private:
         imu_cal_collecting_ = false;
         imu_cal_ready_ = true;
         imu_cal_last_completed_ = now();
-
-        // Push the freshly-measured gyro-Z bias into the firmware yaw loop so it
-        // subtracts it before regulation (keeps open-loop BackUp straight). This
-        // fires on the first cal AND every periodic re-cal, so the firmware
-        // always has a current bias as it drifts on the dock.
-        send_yaw_pid();
         RCLCPP_INFO(get_logger(),
                     "IMU calibration complete (%d samples) — "
                     "accel offset [%.4f, %.4f] m/s², "
@@ -2051,23 +2024,17 @@ private:
     pkt.trim_limit_mps = static_cast<float>(yaw_trim_limit_mps_);
     pkt.enabled = yaw_loop_enabled_ ? 1u : 0u;
     pkt.gyro_sign = static_cast<int8_t>(yaw_gyro_sign_);
-    // Forward the measured at-rest gyro-Z bias (raw sensor frame, the same value
-    // subtracted before the /imu publish) so the firmware yaw loop regulates the
-    // TRUE rate — otherwise an open-loop BackUp arcs by the bias. 0 until the IMU
-    // has calibrated; the firmware clamps it hard before applying.
-    pkt.gyro_bias_radps = imu_cal_ready_ ? static_cast<float>(imu_cal_offset_gz_) : 0.0f;
     if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
                         sizeof(LlSetYawPid) - sizeof(uint16_t)))
     {
       RCLCPP_INFO(get_logger(),
                   "Sent yaw-loop params: kp=%.3f ki=%.3f trim_limit_mps=%.3f enabled=%d "
-                  "gyro_sign=%d gyro_bias=%.6f rad/s",
+                  "gyro_sign=%d",
                   yaw_kp_,
                   yaw_ki_,
                   yaw_trim_limit_mps_,
                   static_cast<int>(pkt.enabled),
-                  static_cast<int>(pkt.gyro_sign),
-                  static_cast<double>(pkt.gyro_bias_radps));
+                  static_cast<int>(pkt.gyro_sign));
     }
   }
 
@@ -2437,7 +2404,11 @@ private:
     // promote the firmware to AUTONOMOUS — exactly the kind of side effect
     // Invariant 9 (firmware is sole safety authority) means to prevent from
     // ever being masked by ROS2-side state.
-    if (current_mode_ == HL_MODE_NULL && !fw_latched_emergency_ && (vx != 0.0 || wz != 0.0))
+    if (vx != 0.0 || wz != 0.0)
+    {
+      last_cmd_vel_motion_stamp_ = this->now();
+    }
+    if ((current_mode_ == HL_MODE_NULL || current_mode_ == HL_MODE_IDLE) && !fw_latched_emergency_ && (vx != 0.0 || wz != 0.0))
     {
       current_mode_ = HL_MODE_AUTONOMOUS;
       current_mode_state_name_ = "AUTONOMOUS_CMD_VEL_FALLBACK";
@@ -2508,13 +2479,24 @@ private:
   {
     mow_enabled_ = (req->mow_enabled != 0u);
 
+    if (mow_enabled_)
+    {
+      current_mode_ = HL_MODE_MANUAL_MOWING;
+      current_mode_state_name_ = "MANUAL_MOWING";
+    }
+
     RCLCPP_INFO(get_logger(),
-                "MowerControl: mow_enabled=%s mow_direction=%u",
+                "MowerControl: mow_enabled=%s mow_direction=%u current_mode=%u (%s)",
                 mow_enabled_ ? "true" : "false",
-                req->mow_direction);
+                req->mow_direction,
+                current_mode_,
+                current_mode_state_name_.c_str());
 
     // Send blade command to STM32
     send_blade_command(mow_enabled_ ? 1u : 0u, req->mow_direction);
+
+    // Send updated high level state (mode) to STM32
+    send_high_level_state();
 
     res->success = true;
   }
@@ -2642,11 +2624,11 @@ private:
   // (re)connect; pid_resend_count_ > 0 makes send_drive_pid() fire on the next
   // N heartbeat ticks (seeded so the first packet survives USB re-enumeration /
   // firmware boot even if one is dropped).
-  double wheel_pid_kp_{0.2};
-  double wheel_pid_ki_{0.092};
-  double wheel_pid_kd_{0.01};
-  double wheel_pid_integral_limit_{15.0};
-  double wheel_pid_pwm_per_mps_{282.135};
+  double wheel_pid_kp_{30.0};
+  double wheel_pid_ki_{5000.0};
+  double wheel_pid_kd_{0.0};
+  double wheel_pid_integral_limit_{100.0};
+  double wheel_pid_pwm_per_mps_{300.0};
   int pid_resend_count_{5};
 
   // Firmware gyro yaw-rate loop (Option C, task #33/#34). Defaults are the
@@ -2687,6 +2669,7 @@ private:
   double min_linear_vel_{0.05};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr min_lin_vel_cb_handle_;
   bool mow_enabled_{false};
+  std::optional<rclcpp::Time> last_cmd_vel_motion_stamp_;
   bool is_charging_{false};
   uint8_t current_mode_{0};
   std::string current_mode_state_name_{"UNSET"};

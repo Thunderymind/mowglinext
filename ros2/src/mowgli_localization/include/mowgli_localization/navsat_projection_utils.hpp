@@ -43,11 +43,21 @@ inline bool HasAuthoritativeRtkPoseState(
 {
   using sensor_msgs::msg::NavSatStatus;
 
-  return authoritative_status.has_value()
-             ? (mowgli_interfaces::gnss_status_utils::IsRtkFixed(*authoritative_status) ||
-                mowgli_interfaces::gnss_status_utils::IsRtkFloat(*authoritative_status))
-             : (navsat_status == NavSatStatus::STATUS_GBAS_FIX ||
-                navsat_status == NavSatStatus::STATUS_SBAS_FIX);
+  if (authoritative_status.has_value())
+  {
+    const auto & status = *authoritative_status;
+    if (mowgli_interfaces::gnss_status_utils::IsRtkFixed(status))
+    {
+      return true;
+    }
+    // A receiver can retain its Float enum after correction delivery stops.
+    // Such a solution is ordinary uncorrected GNSS and must not move the map.
+    return mowgli_interfaces::gnss_status_utils::IsRtkFloat(status) &&
+           status.differential_corrections && status.corrections_active;
+  }
+
+  return navsat_status == NavSatStatus::STATUS_GBAS_FIX ||
+         navsat_status == NavSatStatus::STATUS_SBAS_FIX;
 }
 
 }  // namespace mowgli_localization

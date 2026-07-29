@@ -90,6 +90,11 @@ private:
   uint32_t odom_acc_dt_ms_{0};
   bool wheels_stationary_{true};
 
+  // Integrated differential-drive pose; keeps Odometry orientation valid during pivots.
+  double odom_x_m_{0.0};
+  double odom_y_m_{0.0};
+  double odom_yaw_rad_{0.0};
+
   // Per-wheel cumulative-magnitude tick counters + last direction (for
   // WheelTick). Magnitude is monotonic-up; direction is 1=fwd/0=rev.
   uint32_t wheel_ticks_mag_left_{0};

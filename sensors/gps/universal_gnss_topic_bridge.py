@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 from diagnostic_msgs.msg import DiagnosticArray
 import rclpy
@@ -11,6 +12,7 @@ from mowgli_interfaces.msg import GnssStatus as PublicGnssStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rtcm_msgs.msg import Message as PublicRtcmMessage
+from sensor_msgs.msg import NavSatFix
 from universal_gnss_ros2.msg import GnssStatus as UniversalGnssStatus
 from universal_gnss_ros2.msg import RtcmFrame
 
@@ -163,6 +165,8 @@ class UniversalGnssTopicBridge(Node):
         self.declare_parameter("backend", "universal")
         self.declare_parameter("receiver_family", "auto")
         self.declare_parameter("frame_id", "gps_link")
+        self.declare_parameter("input_fix_topic", "/_gps_internal/universal/fix")
+        self.declare_parameter("output_fix_topic", "/gps/fix")
         self.declare_parameter("input_status_topic", "/_gps_internal/universal/status")
         self.declare_parameter("output_status_topic", "/gps/status")
         self.declare_parameter("input_diagnostics_topic", "/diagnostics")
@@ -176,11 +180,22 @@ class UniversalGnssTopicBridge(Node):
 
         input_status_topic = str(self.get_parameter("input_status_topic").value)
         output_status_topic = str(self.get_parameter("output_status_topic").value)
+        input_fix_topic = str(self.get_parameter("input_fix_topic").value)
+        output_fix_topic = str(self.get_parameter("output_fix_topic").value)
         input_diagnostics_topic = str(self.get_parameter("input_diagnostics_topic").value)
         input_rtcm_topic = str(self.get_parameter("input_rtcm_topic").value)
         output_rtcm_topic = str(self.get_parameter("output_rtcm_topic").value)
 
         self._diagnostic_entries: dict[str, tuple[str, dict[str, str]]] = {}
+        # receiver_node publishes its latest parsed fix at a configurable ROS
+        # rate.  The LC29HDA supplies new PVT epochs at 1 Hz, so republishing
+        # that cached fix at 5 Hz made fusion reset its wheel-distance window
+        # four times before the next real GNSS epoch arrived.
+        self._last_fix_signature: tuple[Any, ...] | None = None
+        # receiver_node emits a status message for each parsed GNSS epoch.  Its
+        # stamp is the receiver epoch, while NavSatFix may otherwise inherit
+        # the receiver-node timer's publish time.
+        self._latest_status: UniversalGnssStatus | None = None
 
         reliable_qos = QoSProfile(
             depth=10,
@@ -198,12 +213,19 @@ class UniversalGnssTopicBridge(Node):
             output_status_topic,
             reliable_qos,
         )
+        self._fix_pub = self.create_publisher(NavSatFix, output_fix_topic, reliable_qos)
         self._rtcm_pub = self.create_publisher(
             PublicRtcmMessage,
             output_rtcm_topic,
             rtcm_qos,
         )
 
+        self.create_subscription(
+            NavSatFix,
+            input_fix_topic,
+            self._on_fix,
+            reliable_qos,
+        )
         self.create_subscription(
             UniversalGnssStatus,
             input_status_topic,
@@ -225,12 +247,35 @@ class UniversalGnssTopicBridge(Node):
 
         self.get_logger().info(
             "Bridging Universal GNSS topics: "
+            f"{input_fix_topic} -> {output_fix_topic} (new epochs only), "
             f"{input_status_topic} -> {output_status_topic}, "
             f"{input_diagnostics_topic} -> {output_status_topic} correction_stream/msm_summary, "
             f"{input_rtcm_topic} -> {output_rtcm_topic}"
         )
 
+    def _on_fix(self, msg: NavSatFix) -> None:
+        """Publish a fix only when receiver data, not its ROS timer, changed."""
+        status = self._latest_status
+        if status is not None and (status.stamp.sec != 0 or status.stamp.nanosec != 0):
+            msg.header.stamp = status.stamp
+        msg.header.frame_id = self._frame_id
+        self._apply_fix_covariance(msg, status)
+        signature = (
+            msg.status.status,
+            msg.status.service,
+            msg.latitude,
+            msg.longitude,
+            msg.altitude,
+            msg.position_covariance_type,
+            *msg.position_covariance,
+        )
+        if signature == self._last_fix_signature:
+            return
+        self._last_fix_signature = signature
+        self._fix_pub.publish(msg)
+
     def _on_status(self, msg: UniversalGnssStatus) -> None:
+        self._latest_status = msg
         public_msg = PublicGnssStatus()
         public_msg.header.stamp = msg.stamp
         public_msg.header.frame_id = self._frame_id
@@ -248,9 +293,38 @@ class UniversalGnssTopicBridge(Node):
             msg.rtk_mode,
             PublicGnssStatus.RTK_MODE_UNKNOWN,
         )
-        public_msg.quality_percent = FIX_TYPE_QUALITY.get(fix_type, 0.0)
         public_msg.capability_flags = _map_capability_flags(msg.capability_flags)
         public_msg.value_flags = _map_capability_flags(msg.value_flags)
+
+        # LC29H-DA reports its resolved RTK state through rtk_mode, but the
+        # generic NMEA parser leaves fix_type and correction flags at their
+        # single-point defaults.  The public Mowgli contract must expose the
+        # receiver's authoritative resolved state so clients do not present a
+        # live RTK-fixed solution as a plain GPS fix.
+        if (
+            msg.fix_valid
+            and public_msg.rtk_mode == PublicGnssStatus.RTK_MODE_FIXED
+        ):
+            fix_type = PublicGnssStatus.FIX_TYPE_RTK_FIXED
+            public_msg.differential_corrections = True
+            public_msg.corrections_active = True
+            public_msg.capability_flags |= (
+                PublicGnssStatus.CAP_DIFFERENTIAL_CORRECTIONS
+                | PublicGnssStatus.CAP_CORRECTIONS_ACTIVE
+            )
+            public_msg.value_flags |= (
+                PublicGnssStatus.CAP_DIFFERENTIAL_CORRECTIONS
+                | PublicGnssStatus.CAP_CORRECTIONS_ACTIVE
+            )
+        else:
+            public_msg.differential_corrections = msg.differential_corrections
+            public_msg.corrections_active = msg.corrections_active
+
+        public_msg.quality_percent = FIX_TYPE_QUALITY.get(fix_type, 0.0)
+        public_msg.fix_type = fix_type
+        public_msg.dead_reckoning = (
+            fix_type == PublicGnssStatus.FIX_TYPE_DEAD_RECKONING
+        )
 
         public_msg.hdop = msg.hdop
         public_msg.vdop = msg.vdop
@@ -258,8 +332,6 @@ class UniversalGnssTopicBridge(Node):
         public_msg.vertical_accuracy_m = msg.vertical_accuracy_m
         public_msg.heading_deg = msg.heading_deg
         public_msg.heading_accuracy_deg = msg.heading_accuracy_deg
-        public_msg.differential_corrections = msg.differential_corrections
-        public_msg.corrections_active = msg.corrections_active
         public_msg.satellites_used = msg.satellites_used
         public_msg.satellites_visible = msg.satellites_visible
         public_msg.satellites_tracked = msg.satellites_tracked
@@ -281,6 +353,50 @@ class UniversalGnssTopicBridge(Node):
         self._apply_diagnostic_projection(public_msg)
 
         self._status_pub.publish(public_msg)
+
+    @staticmethod
+    def _finite_positive(value: float) -> float | None:
+        return value if math.isfinite(value) and value > 0.0 else None
+
+    def _apply_fix_covariance(
+        self,
+        fix: NavSatFix,
+        status: UniversalGnssStatus | None,
+    ) -> None:
+        """Project LC29H solution quality to an explicit ENU covariance.
+
+        The generic NMEA parser has no vendor accuracy sentence, and therefore
+        leaves NavSatFix covariance at zero (which falsely means perfect
+        position).  Use receiver-reported accuracy when available; otherwise
+        use conservative RTK-mode and DOP based estimates.
+        """
+        if status is None:
+            return
+
+        horizontal = self._finite_positive(status.horizontal_accuracy_m)
+        vertical = self._finite_positive(status.vertical_accuracy_m)
+        hdop = self._finite_positive(status.hdop)
+        vdop = self._finite_positive(status.vdop)
+
+        if status.rtk_mode == UniversalGnssStatus.RTK_MODE_FIXED:
+            default_h, default_v, dop_scale = 0.025, 0.050, 0.05
+        elif status.rtk_mode == UniversalGnssStatus.RTK_MODE_FLOAT:
+            default_h, default_v, dop_scale = 0.30, 0.60, 0.40
+        else:
+            default_h, default_v, dop_scale = 1.50, 3.00, 1.50
+
+        sigma_h = horizontal if horizontal is not None else max(
+            default_h, (hdop if hdop is not None else 1.0) * dop_scale
+        )
+        sigma_v = vertical if vertical is not None else max(
+            default_v, (vdop if vdop is not None else 1.5) * dop_scale
+        )
+        fix.position_covariance = [
+            sigma_h * sigma_h, 0.0, 0.0,
+            0.0, sigma_h * sigma_h, 0.0,
+            0.0, 0.0, sigma_v * sigma_v,
+        ]
+        fix.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
 
     def _on_diagnostics(self, msg: DiagnosticArray) -> None:
         for status in msg.status:

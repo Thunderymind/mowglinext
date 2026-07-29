@@ -142,7 +142,7 @@ public:
     rotation_quiet_min_samples_ = declare_parameter<int>("rotation_quiet_min_samples", 2);
     max_pos_accuracy_ = declare_parameter<double>("max_pos_accuracy_m", 0.05);
     min_dt_ = declare_parameter<double>("min_sample_dt_s", 0.05);
-    max_dt_ = declare_parameter<double>("max_sample_dt_s", 0.50);
+    max_dt_ = declare_parameter<double>("max_sample_dt_s", 2.50);
     max_yaw_var_ = declare_parameter<double>("max_yaw_variance", 3.0);
     min_yaw_var_ = declare_parameter<double>("min_yaw_variance", 7.6e-5);
 
@@ -284,7 +284,7 @@ public:
 
     RCLCPP_INFO(get_logger(),
                 "cog_to_imu started — publish /imu/cog_heading once the "
-                "RTK-Fixed baseline accumulates %.3f m at |wheel_vx| > "
+                "GPS baseline accumulates %.3f m at |wheel_vx| > "
                 "%.2f m/s. Turns up to |ω| = %.2f rad/s are accepted; "
                 "the antenna lever-arm (r=[%+.2f, %+.2f] m) and the "
                 "mid-baseline yaw drift are subtracted from the raw COG "
@@ -317,7 +317,12 @@ private:
   void on_fix(const sensor_msgs::msg::NavSatFix& msg)
   {
     using sensor_msgs::msg::NavSatStatus;
-    if (msg.status.status < NavSatStatus::STATUS_GBAS_FIX)
+    // COG remains meaningful with a Float solution; the positional
+    // covariance below expands the resulting yaw variance accordingly.  This
+    // makes /imu/cog_heading observable during Float without granting it
+    // Fixed-quality authority: fusion_graph still gates yaw factors on the
+    // separate fresh RTK-Fixed status stream.
+    if (msg.status.status < NavSatStatus::STATUS_FIX)
     {
       ++rejected_fix_;
       return;
@@ -325,15 +330,14 @@ private:
 
     const double var_lat = msg.position_covariance[0];
     const double var_lon = msg.position_covariance[4];
-    double pos_acc;
-    if (var_lat <= 0.0 || var_lon <= 0.0)
-    {
-      pos_acc = 10.0;
-    }
-    else
-    {
-      pos_acc = std::sqrt((var_lat + var_lon) * 0.5);
-    }
+    const bool covariance_known =
+        msg.position_covariance_type != sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN &&
+        std::isfinite(var_lat) && std::isfinite(var_lon) && var_lat > 0.0 && var_lon > 0.0;
+    // LC29H via the generic NMEA bridge reports a zero/unknown NavSatFix
+    // covariance even for an RTK-quality fix. The RTK gate above is still
+    // mandatory; once it passes, use a conservative 2 cm fallback so COG can
+    // be formed instead of treating the fix as a 10 m solution.
+    double pos_acc = covariance_known ? std::sqrt((var_lat + var_lon) * 0.5) : 0.02;
     if (pos_acc > max_pos_accuracy_)
     {
       ++rejected_accuracy_;

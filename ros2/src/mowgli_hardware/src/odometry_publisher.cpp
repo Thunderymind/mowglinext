@@ -48,6 +48,9 @@ void OdometryPublisher::reset()
   odom_acc_delta_right_ = 0;
   odom_acc_dt_ms_ = 0;
   wheels_stationary_ = true;
+  odom_x_m_ = 0.0;
+  odom_y_m_ = 0.0;
+  odom_yaw_rad_ = 0.0;
 }
 
 void OdometryPublisher::handle_packet(const LlOdometry& pkt,
@@ -216,6 +219,23 @@ void OdometryPublisher::handle_packet(const LlOdometry& pkt,
     vx = 0.0;
     vyaw = 0.0;
   }
+  else
+  {
+    const double ds = (d_left_m + d_right_m) * 0.5;
+    const double d_yaw = (d_right_m - d_left_m) / wheel_track;
+    const double mid_yaw = odom_yaw_rad_ + 0.5 * d_yaw;
+    odom_x_m_ += ds * std::cos(mid_yaw);
+    odom_y_m_ += ds * std::sin(mid_yaw);
+    odom_yaw_rad_ += d_yaw;
+  }
+
+  msg.pose.pose.position.x = odom_x_m_;
+  msg.pose.pose.position.y = odom_y_m_;
+  msg.pose.pose.orientation.z = std::sin(0.5 * odom_yaw_rad_);
+  msg.pose.pose.orientation.w = std::cos(0.5 * odom_yaw_rad_);
+  msg.pose.covariance[0] = 1.0e3;
+  msg.pose.covariance[7] = 1.0e3;
+  msg.pose.covariance[35] = 1.0e3;
 
   msg.twist.twist.linear.x = vx;
   msg.twist.twist.angular.z = vyaw;

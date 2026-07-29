@@ -290,7 +290,9 @@ resolve_publish_rate_hz() {
     return 0
   fi
 
-  printf '5\n'
+  # LC29H-DA PVT epochs are 1 Hz.  Publishing a cached fix faster corrupts
+  # downstream wheel-distance and latency accounting.
+  printf '1\n'
 }
 
 print_command() {
@@ -334,6 +336,7 @@ trap cleanup EXIT INT TERM
 
 internal_status_topic="/_gps_internal/universal/status"
 internal_rtcm_topic="/_gps_internal/universal/rtcm"
+internal_fix_topic="/_gps_internal/universal/fix"
 receiver_family="$(resolve_receiver_family)"
 transport="$(resolve_transport)"
 serial_device="$(resolve_serial_device)"
@@ -383,27 +386,17 @@ receiver_node_cmd=(
   -p "frame_id:=${frame_id}"
   -r "status:=${internal_status_topic}"
   -r "diagnostics:=/diagnostics"
-  -r "fix:=/gps/fix"
+  -r "fix:=${internal_fix_topic}"
   -r "rtcm:=${internal_rtcm_topic}"
 )
 
-# Topic bridge ("topic manager"): C++ (mowgli_gnss_bridge) by default — a
-# behaviour-exact, lower-CPU port of universal_gnss_topic_bridge.py. Set
-# GNSS_BRIDGE_IMPL=python to fall back to the retained Python script (identical
-# --ros-args), e.g. for A/B comparison or if the C++ build is unavailable.
-if [ "$(normalize_lower "${GNSS_BRIDGE_IMPL:-cpp}")" = "python" ]; then
-  bridge_cmd=(
-    "$PYTHON3_BIN" "$UNIVERSAL_BRIDGE_SCRIPT" --ros-args
-  )
-else
-  bridge_cmd=(
-    "$ROS2_BIN" run mowgli_gnss_bridge universal_gnss_topic_bridge --ros-args
-  )
-fi
-bridge_cmd+=(
+bridge_cmd=(
+  "$PYTHON3_BIN" "$UNIVERSAL_BRIDGE_SCRIPT" --ros-args
   -p "backend:=universal"
   -p "receiver_family:=${receiver_family}"
   -p "frame_id:=${frame_id}"
+  -p "input_fix_topic:=${internal_fix_topic}"
+  -p "output_fix_topic:=/gps/fix"
   -p "input_status_topic:=${internal_status_topic}"
   -p "output_status_topic:=/gps/status"
   -p "input_diagnostics_topic:=/diagnostics"

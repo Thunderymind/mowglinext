@@ -239,12 +239,24 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
 
   // Position accuracy from covariance diagonal (metres, 1-sigma).
   // NavSatFix covariance is [lat, lon, alt] in m² (ENU if type is known).
-  if (msg->position_covariance_type != NavSat::COVARIANCE_TYPE_UNKNOWN)
+  if (msg->position_covariance_type != NavSat::COVARIANCE_TYPE_UNKNOWN && msg->position_covariance[0] > 0.0)
   {
     // Take the mean of lat/lon variance as horizontal accuracy.
     const double lat_var = msg->position_covariance[0];
     const double lon_var = msg->position_covariance[4];
     out.position_accuracy = static_cast<float>(std::sqrt((lat_var + lon_var) / 2.0));
+  }
+  else if (msg->status.status >= sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX)
+  {
+    out.position_accuracy = 0.02f;
+  }
+  else if (msg->status.status == sensor_msgs::msg::NavSatStatus::STATUS_SBAS_FIX)
+  {
+    out.position_accuracy = 0.1f;
+  }
+  else if (msg->status.status == sensor_msgs::msg::NavSatStatus::STATUS_FIX)
+  {
+    out.position_accuracy = 1.0f;
   }
   else
   {

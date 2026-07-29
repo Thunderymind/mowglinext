@@ -120,12 +120,6 @@ controller_server:
       plugin: "nav2_controller::PoseProgressChecker"
       required_movement_radius: 0.15
       required_movement_angle: 0.5     # rad (~28°), gates corner pivots
-      # NOTE: this value is OVERWRITTEN at launch by navigation.launch.py from
-      # mowgli_robot.yaml's operator knob `progress_timeout_sec` (default 30.0
-      # s). Change the timeout THERE, not here — editing this line has no
-      # effect on the running robot. Kept in sync only to avoid confusion.
-      # See #396: 10 s was too tight to ride through a transient RTK-jump +
-      # collision-slow stall and aborted mowing strips mid-swath (~0.80 m bands).
       movement_time_allowance: 30.0
 
     stopped_goal_checker:
@@ -274,25 +268,12 @@ controller_server:
       # --- RegulatedPurePursuitController (primary) params ---
       transform_tolerance: 0.3            # ARM TF jitter envelope
       desired_linear_vel: 0.30            # transit speed cap (m/s)
-      # 0.16 kept conservative. The old host clamp (kMinLinVel=0.15) is gone:
-      # hardware_bridge now floors |vx| at the RUNTIME param min_linear_vel
-      # (hardware_bridge_node.cpp, default 0.05), so this MAY be lowered.
-      min_approach_linear_velocity: 0.16
+      min_approach_linear_velocity: 0.16  # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       approach_velocity_scaling_dist: 0.6
-      # Lookahead: velocity-scaled = lookahead_time × v, clamped to
-      # [min_lookahead_dist, max_lookahead_dist]. At 0.30 m/s → 0.60 m; floored
-      # at 0.45 m below ~0.225 m/s.
-      # 2026-07-21 FIELD TUNING: raised lookahead_time 1.5→2.0 and
-      # min_lookahead_dist 0.30→0.45 to kill a slow (meter-scale) S-weave on
-      # transits. Diagnosing transit oscillation: a FAST 2–4 Hz buzz is the
-      # firmware yaw-rate loop (Option C) lagging the wheel command — tune that
-      # in FIRMWARE, not here; a SLOW, meter-scale S is the pure-pursuit limit
-      # cycle (lookahead too short for the lagged yaw loop → RPP overshoots each
-      # carrot then corrects), which lengthening the lookahead damps (this
-      # change). Field-tunable: shorten again only if near-dock cornering slops.
+      # Lookahead: velocity-scaled. At 0.30 m/s → 0.45 m, at 0.13 m/s → 0.20 m.
       use_velocity_scaled_lookahead_dist: true
-      lookahead_time: 2.0
-      min_lookahead_dist: 0.45            # long enough to damp the pursuit S-weave
+      lookahead_time: 1.5
+      min_lookahead_dist: 0.30            # short-radius near goal
       max_lookahead_dist: 0.90
       # Curvature-based slowdown: when steering radius < 0.9 m, drop to
       # min 0.20 m/s. Keeps tight turns controllable without stalling.
@@ -341,13 +322,9 @@ controller_server:
       speed_fast: 0.20
       speed_fast_threshold: 0.5
       speed_fast_threshold_angle: 10.0
-      # 0.16 kept conservative. The host clamp is now the RUNTIME param
-      # min_linear_vel (hardware_bridge_node.cpp, default 0.05 — not the old
-      # kMinLinVel=0.15), so this MAY be lowered.
-      speed_slow: 0.16
+      speed_slow: 0.16                 # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       speed_angular: 45.0
       acceleration: 0.2
-      min_speed_mps: 0.15
       # Anti-wheelspin / traction control. When the carrot commands forward speed
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
       # command for stall_grace_s, the wheels are slipping / the chassis is
@@ -398,7 +375,7 @@ controller_server:
       # motor model. PathProgressGoalChecker still gates path-progress ≥ 95%, so a
       # loose tolerance CANNOT fire mid-traversal.
       max_goal_distance_error: 0.50
-      max_goal_angle_error: 30.0
+      max_goal_angle_error: 5.0
       goal_timeout: 10.0
       max_follow_distance: 2.0
       # forward_only=true: FTC never drives a path segment in reverse — it
@@ -420,64 +397,27 @@ controller_server:
       # `ros2 launch` of this file with no robot-config injection.
       obstacle_lookahead: 30
       obstacle_footprint: true
-      # Model the robot as its actual rectangular chassis FOOTPRINT (from the
-      # costmap's robot_footprint, 0.60 m × 0.40 m) for BOTH detection and the
-      # deviation-clearance search, instead of the swept ±half_width line below.
-      # The footprint is rasterised against the local costmap at cell resolution
-      # and thresholds on TRUE LETHAL (254) only: it models the body explicitly,
-      # so FTC no longer leans on the inscribed-inflation band (253) as a
-      # body-width proxy — decoupling coverage-time avoidance from the costmap
-      # footprint/inflation radius entirely. When false (or no footprint
-      # published) it falls back to the obstacle_body_half_width line model at
-      # threshold 253 (the prior behaviour).
-      # 2026-07-22 FIELD: defaulted to FALSE. The footprint model proved TOO
-      # conservative live — it found NO clear side even at max_lateral_deviation
-      # = 3.0 m for skirtable obstacles, so FTC flip-flopped hold/resume and the
-      # progress-checker aborted whole segments. The half-width line model
-      # (below) skirts those obstacles cleanly. Re-enable only after the
-      # footprint sweep is made less conservative (probe the front of the
-      # footprint, not its full length) and field-validated.
-      use_footprint_clearance: false
-      # Front-clip length (m) for the SKIRT clearance footprint when
-      # use_footprint_clearance is true (OBSTACLE_WEDGE_RECOVERY_SPEC.md Part A
-      # middle ground). Only the leading 0.30 m of the 0.60 m chassis is probed
-      # for a clear side — the full-length footprint proved too conservative live
-      # (found NO clear side even at max_lateral_deviation = 3.0 m for skirtable
-      # obstacles, so FTC flip-flopped hold/resume and aborted whole segments).
-      # Detection still uses the FULL footprint. 0 disables the clip.
-      obstacle_footprint_front_length_m: 0.30
-      # Cul-de-sac guard (OBSTACLE_WEDGE_RECOVERY_SPEC.md Part A, highest
-      # leverage). Before committing to a lateral skirt, require the obstacle's
-      # FAR edge to be visible inside the obstacle_lookahead window. An obstacle
-      # that stays blocked to the end of the lookahead (a wall / pocket) is NOT
-      # skirted sideways — that is exactly how the robot boxed ITSELF in beside
-      # obstacles and then could not recover. Instead FTC holds / (opt-in)
-      # reverse-escapes / aborts, and the coverage detour-and-continue net routes
-      # a blade-off transit around it. Model-independent (works with the
-      # half-width line model below AND the footprint model). true = wedge-safe.
-      require_clear_exit: true
-      # FALLBACK-ONLY body half-width for the lateral obstacle sweep, used when
-      # use_footprint_clearance is false. 2026-06-25 FIELD (line model): the
-      # detection threshold is 253 (lethal OR inscribed) and the costmap already
-      # inflates obstacles by the inscribed radius (~0.14 m), so 0.12 (≈
-      # footprint_half − inscribed) gave effective reach ≈ the full footprint
-      # without the over-reach that 0.20 caused. With the footprint model above
-      # this knob no longer governs coverage-time avoidance; kept for the
-      # fallback path only.
+      # Body half-width for the lateral obstacle-detection sweep. 2026-06-25
+      # FIELD: the detection threshold is 253 (lethal OR inscribed), and the
+      # costmap ALREADY inflates every obstacle by the inscribed radius (~0.14 m)
+      # — so a sample already "sees" obstacles 0.14 m out. Footprint half-width is
+      # 0.25 m, so the real centerline-miss gap is only 0.25−0.14 ≈ 0.11 m. The
+      # first cut (0.20) double-counted the inscribed radius → effective reach
+      # 0.20+0.14 ≈ 0.34 m, ~0.09 m too wide. That over-reach caught boundary
+      # structures / inflation halos the rings intentionally hug → 15× "deviation
+      # > max → hold 5 s" stalls per mow. 0.12 (≈ footprint_half − inscribed)
+      # gives effective reach 0.12+0.14 ≈ 0.26 m ≈ the full footprint, no over-reach.
       obstacle_body_half_width: 0.12
-      # Extra lateral room demanded when SKIRTING, on top of the body. With the
-      # footprint model the footprint is expanded LATERALLY by this margin for
-      # the clearance search only — detection reach is unchanged, so pass-by
-      # margin grows without re-opening the over-reach stalls that plagued the
-      # line model. 0.05 (was 0.10): the footprint already models the true body
-      # edge, so the old 0.10 (chosen to cover the line model's centerline-miss
-      # gap) is now double margin — halved to keep skirts tight to obstacles
-      # while still clearing them. This is the knob to raise if the robot passes
-      # obstacles too closely; costmap inflation_radius CANNOT do it (the
-      # footprint checks threshold at 254, above the inflation band entirely).
+      # Extra lateral clearance demanded when SKIRTING, on top of the body
+      # half-width above. Applied to the clearance search only — detection
+      # stays at 0.12, so margin grows without re-opening the over-reach
+      # stalls that drove that value down. This is the knob to raise if the
+      # robot passes obstacles too closely; costmap inflation_radius CANNOT
+      # do it (the deviation checks threshold at 253, whose band is set by the
+      # footprint's inscribed radius, not by inflation_radius).
       # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_clearance_margin,
       # clamped [0.0, 0.50] — see navigation.launch.py.
-      obstacle_clearance_margin: 0.05
+      obstacle_clearance_margin: 0.10
       enable_obstacle_deviation: true
       # OVERRIDDEN AT LAUNCH: navigation.launch.py injects
       # mowgli_robot.yaml.max_obstacle_avoidance_distance (default 2.0,
@@ -494,28 +434,8 @@ controller_server:
       # observation_persistence:0 costmap's window-edge flicker. Listed
       # explicitly (GUI-tunable) alongside their siblings above; previously
       # only the C++ declare_double default applied.
-      obstacle_wait_timeout_s: 2.5
+      obstacle_wait_timeout_s: 5.0
       obstacle_clear_hold_s: 1.5
-      # Bounded reverse-escape for the WEDGED case (both sides of an obstacle
-      # blocked, or the skirt needed exceeds max_lateral_deviation). Before
-      # holding zero velocity and aborting the strip, FTC backs STRAIGHT up (no
-      # rotation — a turning reverse re-creates the ±180° pirouette deadlock that
-      # forward_only avoids) a bounded distance, then re-attempts the deviation
-      # search from the new pose. SAFETY-CRITICAL (blades + reversing): the rear
-      # footprint is checked against TRUE-lethal cells before every reverse tick
-      # and the maneuver fails safe (stops → wait/abort) on any ambiguity (no
-      # footprint, rear blocked, budget spent). It is a distinct escape sub-state
-      # and does NOT relax forward_only for normal path following. Reversed
-      # distance is odom-integrated and hard-capped at obstacle_reverse_max_dist_m.
-      # OPT-IN — bounded reverse-escape drives the robot BACKWARDS; enable only
-      # after a supervised field test (see PR notes). Fails safe when false
-      # (wedged → hold/abort as before).
-      # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml (see navigation.launch.py).
-      # Static default kept in sync with the template (true, 2026-07-23) so a
-      # raw `ros2 launch` with no robot-config injection is behaviour-preserving.
-      obstacle_reverse_enabled: true
-      obstacle_reverse_max_dist_m: 0.30
-      obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -537,19 +457,7 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 8.0
-      # 3.0 (was 2.0, issue #393, 2026-07-23): weight of the costmap cell cost in
-      # A*'s traversal term. Higher = the transit planner prefers routes with more
-      # BERTH from obstacle-adjacent (inflated) cells, so a blade-off transit hop is
-      # less likely to be handed an un-followable approach that noses the chassis to
-      # within ~0.7 m of a lethal cell in a pocket (the RPP transit-wedge). This is
-      # the SAFE berth lever: it only re-weights already-traversable cells, so a
-      # tight gap between areas stays plannable — unlike raising global inflation_radius,
-      # which is a documented landmine (0.30/0.40 m made the footprint corners land in
-      # the inscribed band → Smac "Start occupied" → 9-min TRANSIT stalls, see
-      # global_costmap.inflation_layer below). Berth here is still bounded by the
-      # 0.20 m global inflation gradient, so it is a NUDGE — the #393 reverse-escape
-      # (collision_monitor PolygonStopNarrow → approach) is the real wedge safety net.
-      cost_travel_multiplier: 3.0
+      cost_travel_multiplier: 2.0
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
@@ -710,7 +618,7 @@ global_costmap:
       # FREE (0), area obstacle holes are LETHAL. The operator draws navigation
       # areas as the transit/dock corridors, so the dock + approach fall inside
       # an allowed (free) region; the dock corridor is also explicitly carved
-      # back to free in map_server. enforce_boundary_margin_m (default 0.40 m)
+      # back to free in map_server. enforce_boundary_margin_m (default 0.25 m)
       # leaves a small free slack outside each edge for RTK drift; disable the
       # whole hard boundary via map_server lethal_outside_areas:=false if a
       # site has no navigation area over the dock (legacy wide keepout_nav_margin
@@ -720,11 +628,8 @@ global_costmap:
       # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
       # backup) still function near edges.
       # inflation_layer is listed AFTER keepout so keepout lethals are inflated
-      # by inflation_radius (0.20 m) only — wall 0.40 m outside the centre line
-      # → the inflated band ends 0.20 m OUTSIDE it, so a robot riding the
-      # outer headland ring (centerline ON the recorded line) keeps its centre
-      # cell clear of the inscribed-cost band and Smac transits no longer
-      # sporadically fail "Start occupied" at the boundary.
+      # by inflation_radius (0.20 m) only — wall 0.25 m outside the centre line
+      # → ~0.05 m bite inside it, clear of the swath centres.
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
@@ -820,13 +725,7 @@ local_costmap:
         # a raw `ros2 launch` of this file with no robot-config injection.
         # Kept in sync with the template default (test_nav2_params.py's
         # test_obstacle_template_defaults_match_static_yaml enforces this).
-        # 0.58 (was 1.0, 2026-07-23): the 1.0 m halo smeared a side obstacle's
-        # cost across the WHOLE front of a 0.5-1.0 m gap, so RPP transit read
-        # "collision ahead" and Nav2 backup/spin recoveries could not escape a
-        # physically-passable pocket (obstacle-wedge). 0.58 == the clamp floor
-        # (chassis circumscribed radius ~0.572) — the smallest inflation that
-        # keeps footprint-cost semantics intact.
-        inflation_radius: 0.58
+        inflation_radius: 1.0
 
 # ---------------------------------------------------------------------------
 # Map server / AMCL (unused — map->odom is published by fusion_graph_node;
@@ -1049,37 +948,18 @@ collision_monitor:
     state_topic: collision_monitor_state
     controller.transform_tolerance: 0.5
     # Source timeout: how long before stale sensor data triggers a stop.
-    # 1.5 s (was 5.0 — SAFETY_REVIEW_2026-07-23 A-C2): at the 0.20 m/s mow
-    # speed a 5 s stale window let a dead LiDAR/scan-filter chain mow BLIND for
-    # a full metre before the stop fired. 1.5 s caps the blind run at ~0.3 m
-    # while still riding through ARM TF/scan timing jitter (LD19 publishes at
-    # ~10 Hz; 1.5 s = 15 missed scans, far beyond any observed jitter). The
-    # BT-side IsScanStale guard (main_tree.xml SensorSafetyGuard) additionally
-    # cuts the BLADE when the scan stream dies — this timeout only zeroes
-    # cmd_vel.
-    source_timeout: 1.5
+    # ARM boards can have TF/scan timing jitter — 5s avoids false stops
+    # while still catching genuinely dead sensors.
+    source_timeout: 5.0
     base_shift_correction: true
     stop_pub_timeout: 2.0
     # The active `polygons`, the polygon definitions, and `observation_sources`
-    # are variant-specific and live in the overlay (LiDAR: a velocity-projected
-    # FootprintApproach hard-stop + a PolygonSlow soft slowdown on
-    # /scan_collision; no-LiDAR: pass-through with scan disabled).
-    # HISTORY (LiDAR): the original hard stop was a STATIC PolygonStop box
-    # around the chassis. It kept firing on obstacles already steered-around
-    # that lingered inside that fixed box, freezing cmd_vel mid-skirt (the FTC
-    # lateral-deviation manoeuvre parks the obstacle abeam the robot, still
-    # geometrically inside a static box even though there is no collision
-    # course). It was therefore disabled, which left ROS2 with NO stop layer —
-    # the robot drove into undetected/low obstacles at ≥half speed and dug in.
-    # 2026-07-21 REPLACEMENT: an `approach`-type polygon (FootprintApproach)
-    # projects the published footprint forward along the CURRENT velocity for
-    # time_before_collision and scales the command so the robot halts just short
-    # of a predicted contact. Because it keys on the velocity vector, a skirted
-    # obstacle now abeam/behind is no longer on the forward projection, so it
-    # does NOT freeze cmd_vel — the exact flap the static box caused. min_points
-    # adds hysteresis against single stray returns. See the LiDAR overlay.
-    # The STM32 firmware remains the SOLE emergency-stop authority (CLAUDE.md
-    # invariant 9); collision_monitor is only the soft pre-contact layer.
+    # are variant-specific and live in the overlay (LiDAR: PolygonSlow soft
+    # slowdown on /scan_costmap; no-LiDAR: pass-through with scan disabled).
+    # Common note: PolygonStop is intentionally NOT in the active set — it kept
+    # firing on obstacles already steered-around lingering in the chassis box,
+    # freezing cmd_vel. The STM32 firmware remains the sole emergency-stop
+    # authority (CLAUDE.md invariant 9); collision_monitor is the soft layer.
 
 # ---------------------------------------------------------------------------
 # Coverage server (mowgli_coverage, Fields2Cover v3 backend)
