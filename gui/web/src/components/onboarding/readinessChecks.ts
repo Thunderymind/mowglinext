@@ -82,7 +82,7 @@ function countValidAreas(workingArea: WorkingAreaLike[] | undefined): number {
 function rtkCheck(snap: ReadinessSnapshot): ReadinessCheck {
     const gps = deriveGpsStatus(snap.gnss);
     const state: ReadinessState =
-        gps.fixType === "RTK_FIX" ? "pass" : gps.fixType === "NO_FIX" ? "fail" : "pending";
+        (gps.fixType === "RTK_FIX" || gps.fixType === "RTK_FLOAT") ? "pass" : gps.fixType === "NO_FIX" ? "fail" : "pending";
     return {
         id: "rtk",
         required: true,

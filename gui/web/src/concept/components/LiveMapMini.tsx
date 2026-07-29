@@ -34,7 +34,7 @@ interface LiveMapMiniProps {
   /** Mow-progress overlay. When set, replaces the synthetic coverage band. */
   progress?: MiniProgress | null;
   /** Robot position 0..1. */
-  robot?:   {x: number; y: number; heading: number};
+  robot?:   {x: number; y: number; heading: number; headingSigmaDeg?: number; headingRangeNorm?: number};
   /** Coverage fraction 0..1 -- synthetic band drawn only when no `progress`. */
   coverage?: number;
   height?: number;
@@ -68,6 +68,20 @@ export function LiveMapMini({
   const h = height * (w / 600);
   const toX = (x: number) => x * w;
   const toY = (y: number) => y * h;
+  // Heading is a circular quantity: the visible sector spans ±2σ, capped at
+  // a half-turn so a pathological covariance cannot turn the map into a disc.
+  const headingHalfAngle = Math.min(180, Math.max(0, (robot.headingSigmaDeg ?? 0) * 2));
+  // The sector length represents the 2σ horizontal position radius, mapped
+  // from the page's normalised garden coordinates. Keep a small base length
+  // so a well-localised rover still has a legible heading indicator.
+  const headingRadius = Math.min(160, 38 + Math.max(0, robot.headingRangeNorm ?? 0) * w);
+  const wedgeStartX = -headingRadius * Math.sin(headingHalfAngle * Math.PI / 180);
+  const wedgeStartY = -headingRadius * Math.cos(headingHalfAngle * Math.PI / 180);
+  const wedgeEndX = headingRadius * Math.sin(headingHalfAngle * Math.PI / 180);
+  const wedgeEndY = wedgeStartY;
+  const headingWedgePath = headingHalfAngle > 0.05
+    ? `M 0 0 L ${wedgeStartX.toFixed(1)} ${wedgeStartY.toFixed(1)} A ${headingRadius} ${headingRadius} 0 ${headingHalfAngle > 90 ? 1 : 0} 1 ${wedgeEndX.toFixed(1)} ${wedgeEndY.toFixed(1)} Z`
+    : "";
 
   // Prefer the real multi-area set; fall back to the single legacy polygon.
   const areas: MiniArea[] = (polygons && polygons.length > 0)
@@ -163,6 +177,14 @@ export function LiveMapMini({
 
         {/* robot dot */}
         <g transform={`translate(${toX(robot.x)} ${toY(robot.y)})`}>
+          {/* Heading uncertainty: ENU heading maps through the same rotation as
+              the rover arrow. The sector is neutral and intentionally has no
+              severity colour; it is an immediate geometric readout of ±2σ. */}
+          {headingWedgePath && (
+            <g transform={`rotate(${90 - robot.heading})`}>
+              <path d={headingWedgePath} fill="rgba(236,255,244,0.10)" stroke="rgba(236,255,244,0.62)" strokeWidth={1}/>
+            </g>
+          )}
           {/* outer glow */}
           <circle r={14} fill="rgba(124,255,178,0.55)" filter="url(#robotGlow)"/>
           {/* heading wedge -- ENU yaw (0=+X east, 90=+Y north). Arrow base

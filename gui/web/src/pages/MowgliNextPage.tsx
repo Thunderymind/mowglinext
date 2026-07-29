@@ -162,8 +162,27 @@ export const MowgliNextPage = () => {
     ? (Math.atan2(2 * (ori.w * ori.z + ori.x * ori.y),
                   1 - 2 * (ori.y * ori.y + ori.z * ori.z)) * 180) / Math.PI
     : 0;
+  const yawVariance = odom?.pose?.covariance?.[35];
+  const robotHeadingSigmaDeg = typeof yawVariance === "number" && yawVariance >= 0
+    ? Math.sqrt(yawVariance) * 180 / Math.PI
+    : undefined;
+  const poseCovariance = odom?.pose?.covariance;
+  const positionTwoSigmaM = poseCovariance && poseCovariance.length >= 8
+    ? (() => {
+        const xx = poseCovariance[0] ?? 0;
+        const xy = poseCovariance[1] ?? 0;
+        const yy = poseCovariance[7] ?? 0;
+        const traceHalf = (xx + yy) / 2;
+        const largestEigenvalue = traceHalf + Math.hypot((xx - yy) / 2, xy);
+        return largestEigenvalue >= 0 ? 2 * Math.sqrt(largestEigenvalue) : undefined;
+      })()
+    : undefined;
+  const headingRangeNorm = bbox && positionTwoSigmaM !== undefined
+    ? 0.8 * positionTwoSigmaM / Math.max(bbox.dx, bbox.dy)
+    : undefined;
   const robotNormalised = (pose && bbox)
-    ? {...norm(pose.x ?? 0, pose.y ?? 0), heading: robotYawDeg}
+    ? {...norm(pose.x ?? 0, pose.y ?? 0), heading: robotYawDeg,
+       headingSigmaDeg: robotHeadingSigmaDeg, headingRangeNorm}
     : undefined;
 
   // Real mowed-cell overlay: same OccupancyGrid MapPage renders, rasterised
@@ -474,7 +493,7 @@ function HeroCard({
 interface LiveMapCardProps {
   polygons: MiniArea[];
   progress: MiniProgress | null;
-  robot?: {x: number; y: number; heading: number};
+  robot?: {x: number; y: number; heading: number; headingSigmaDeg?: number; headingRangeNorm?: number};
   coverage: number;
   height?: number;
   onViewMap?: () => void;
