@@ -5,6 +5,7 @@
 // split across several translation units to keep each file within the project's 600-line budget;
 // all share fusion_graph_node.hpp + fusion_graph_node_util.hpp.)
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -174,7 +175,7 @@ void FusionGraphNode::OnTimer()
 
   // ── Scan-to-keyframe ABSOLUTE constraint (the RTK-Float carry) ───────
   // Match the live scan to nearby frozen RTK-anchored keyframes and queue a
-  // PriorFactor<Pose2> that pins absolute xy + yaw — this is what holds <2 cm
+  // PoseTranslationPrior that pins absolute xy — this is what holds <2 cm
   // through a Float window where dead-reckoning would otherwise drift. ENGAGE
   // only when RTK-Fixed is NOT recent (during Float / no-fix): under Fixed the
   // GnssLeverArmFactor owns absolute position and double-counting would
@@ -198,9 +199,8 @@ void FusionGraphNode::OnTimer()
                                                       kf_match_max_dist_m_,
                                                       kf_max_candidates_);
         double best_rmse = 1e9;
-        gtsam::Pose2 best_abs_meas;
+        gtsam::Vector2 best_xy;
         double best_sigma = 0.0;
-        double best_sigma_theta = 0.0;
         bool have_best = false;
         for (uint64_t kid : cand)
         {
@@ -221,50 +221,42 @@ void FusionGraphNode::OnTimer()
             graph_->RecordIcpRejectInliers();
             continue;
           }
-          if (res.rmse > kf_match_max_rmse_m_)
+          if (res.rmse > icp_max_rmse_m_)
           {
             graph_->RecordIcpRejectRmse();
             continue;
           }
-          // NOTE: icp_max_delta_* sanity check SKIPPED here — res.delta is
-          // the full cross-viewpoint transform (keyframe → live scan), not
-          // an incremental between two consecutive scans ~50ms apart. The
-          // divergence check below already guards against pathological ICP.
+          if (std::abs(res.delta.x()) > icp_max_delta_xy_m_ ||
+              std::abs(res.delta.y()) > icp_max_delta_xy_m_ ||
+              std::abs(res.delta.theta()) > icp_max_delta_theta_rad_)
+          {
+            graph_->RecordIcpRejectSanity();
+            continue;
+          }
           const gtsam::Pose2 dev = init.between(res.delta);
-          if (std::hypot(dev.x(), dev.y()) > kf_match_max_divergence_xy_m_ ||
-              std::abs(dev.theta()) > kf_match_max_divergence_theta_rad_)
+          if (std::hypot(dev.x(), dev.y()) > icp_max_divergence_xy_m_ ||
+              std::abs(dev.theta()) > icp_max_divergence_theta_rad_)
           {
             graph_->RecordIcpRejectDivergence();
             continue;
           }
           const gtsam::Pose2 abs_meas = kf->abs_pose.compose(res.delta.inverse());
-          // Mirror-guard (xy): a swapped/mirror match lands far from the
+          // Mirror-guard: a swapped/mirror match lands far from the
           // wheel-predicted pose (Huber can't reject a low-rmse mirror).
           if (std::hypot(abs_meas.x() - pred.x(), abs_meas.y() - pred.y()) >
-              kf_match_max_divergence_xy_m_)
-            continue;
-          // Mirror-guard (yaw): reject a match whose implied ABSOLUTE yaw is far
-          // from the gyro-predicted yaw — a mirrored/flipped ICP solution can
-          // sit within the xy bound yet carry a grossly wrong heading, and this
-          // prior engages during Float where COG yaw can't correct it.
-          if (!KeyframeYawWithinGate(abs_meas.theta(), pred.theta(), kf_match_max_yaw_dev_rad_))
+              icp_max_divergence_xy_m_)
             continue;
           if (res.rmse < best_rmse)
           {
             best_rmse = res.rmse;
-            best_abs_meas = abs_meas;
-            // Positional σ can never be tighter than the capture gate: a
-            // keyframe frozen up to kf_capture_sigma_max_m off its true pose
-            // must not be applied as a tighter anchor than that error.
-            best_sigma =
-                std::max(res.sigma_xy, std::max(kf_apply_sigma_floor_m_, kf_capture_sigma_max_m_));
-            best_sigma_theta = std::max(res.sigma_theta, kf_apply_sigma_theta_rad_);
+            best_xy = gtsam::Vector2(abs_meas.x(), abs_meas.y());
+            best_sigma = std::max(res.sigma_xy, kf_apply_sigma_floor_m_);
             have_best = true;
           }
         }
         if (have_best)
         {
-          graph_->QueueScanToKeyframe(best_abs_meas, best_sigma, best_sigma_theta, /*robust=*/true);
+          graph_->QueueScanToKeyframe(best_xy, best_sigma, /*robust=*/true);
           ++kf_matches_ok_;
         }
         else if (!cand.empty())
@@ -275,9 +267,31 @@ void FusionGraphNode::OnTimer()
     }
   }
 
-  auto out = graph_->Tick(now_s);
+  double graph_time_s = now_s;
+  if (last_imu_stamp_ && last_imu_stamp_->seconds() <= now_s &&
+      now_s - last_imu_stamp_->seconds() < 0.25)
+  {
+    graph_time_s = last_imu_stamp_->seconds();
+  }
+  auto out = graph_->Tick(graph_time_s);
   if (out)
   {
+    // GNSS may be unavailable while the robot is charging.  The dock pose is
+    // still authoritative in that state, so do not make the dock re-anchor
+    // depend on OnGnss being called.  Re-assert the full pose once per newly
+    // created node; this keeps yaw pinned as well as position during a long
+    // dock dwell with a silent receiver.
+    if (last_is_charging_valid_ && last_is_charging_ &&
+        out->node_index != last_dock_reanchor_node_)
+    {
+      const gtsam::Pose2 dock(dock_pose_x_, dock_pose_y_, dock_pose_yaw_);
+      graph_->ForceAnchor(out->node_index,
+                          dock,
+                          dock_reanchor_sigma_xy_m_,
+                          std::max(dock_pose_yaw_sigma_rad_, 0.035));
+      last_dock_reanchor_node_ = out->node_index;
+    }
+
     // Attach the current scan to the new node (used for loop closures
     // + persistence). Use the still-valid current_scan we captured
     // above; reusing it as prev_node_scan is OK since std::move only
@@ -438,16 +452,88 @@ void FusionGraphNode::OnTimer()
   //      windows.
   if (auto snap = graph_->LatestSnapshot())
   {
-    if (!t_map_odom_anchor_valid_ || snap->node_index != last_anchored_node_index_)
+    // Keep the map→odom anchor fixed during a pure in-place pivot.  The
+    // local odom leg continues to integrate gyro yaw, so map→base follows the
+    // rotation without allowing an optimiser correction at a new node to
+    // reframe the entire map.  Translation resumes normal anchor updates.
+    const bool pure_pivot = t_map_odom_anchor_valid_ &&
+                            std::abs(wheel_vx_) <= gps_pivot_max_vx_mps_ &&
+                            std::abs(wheel_wz_) >= gps_pivot_min_wz_rad_per_s_;
+    // Keep the local integration direction convergent with the graph's yaw.
+    // Publishing graph yaw by rotating map→odom was geometrically wrong when
+    // the robot had travelled far from the odom origin: even a modest yaw
+    // correction moved map xy by metres. Rebase dr_yaw instead; dr_x/dr_y are
+    // unchanged at this instant, so map position stays continuous and only
+    // future dead reckoning adopts the corrected direction.
+    if (t_map_odom_anchor_valid_ && !pure_pivot && trusted_yaw_anchor_update_)
     {
-      // tf_state_mu_: the anchor VALUE and valid flag are read together by
-      // TfBroadcastLoop; write the {value, valid=true} pair atomically so the
-      // loop never composes a stale anchor with fresh dr_*. dr_* is read here
-      // too (it is concurrently integrated by OnImu).
       std::lock_guard<std::mutex> lock(tf_state_mu_);
-      const gtsam::Pose2 dr_at_node(dr_x_, dr_y_, dr_yaw_);
-      t_map_odom_anchor_ = snap->pose.compose(dr_at_node.inverse());
-      last_anchored_node_index_ = snap->node_index;
+      const double map_yaw = t_map_odom_anchor_.theta() + dr_yaw_;
+      const double yaw_error = std::atan2(std::sin(snap->pose.theta() - map_yaw),
+                                          std::cos(snap->pose.theta() - map_yaw));
+      const double yaw_step = std::clamp(yaw_error,
+                                         -local_yaw_sync_max_step_rad_,
+                                         local_yaw_sync_max_step_rad_);
+      dr_yaw_ = std::atan2(std::sin(dr_yaw_ + yaw_step),
+                           std::cos(dr_yaw_ + yaw_step));
+      trusted_yaw_anchor_update_ = false;
+    }
+    // REP-105 map correction at a GNSS epoch: graph provides
+    // map→base(t_gps), while the TF buffer provides odom→base(t_gps).
+    // Never mix a historical GNSS factor with a latest-node / latest-odom
+    // pair: that turns receiver latency into a false correction.
+    std::optional<gtsam::Pose2> anchor_map_pose;
+    std::optional<gtsam::Pose2> anchor_odom_pose;
+    uint64_t anchor_node_index = snap->node_index;
+    uint64_t anchor_sequence = last_anchored_gnss_factor_sequence_;
+    if (!t_map_odom_anchor_valid_)
+    {
+      anchor_map_pose = snap->pose;
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      anchor_odom_pose = gtsam::Pose2(dr_x_, dr_y_, dr_yaw_);
+    }
+    else if (pending_gnss_anchor_ &&
+             pending_gnss_anchor_->sequence != last_anchored_gnss_factor_sequence_ &&
+             tf_buffer_)
+    {
+      anchor_map_pose = graph_->GetPose(pending_gnss_anchor_->node_index);
+      if (anchor_map_pose)
+      {
+        try
+        {
+          const rclcpp::Time epoch(pending_gnss_anchor_->stamp_ns, RCL_ROS_TIME);
+          const auto odom_base = tf_buffer_->lookupTransform(
+              odom_frame_, base_frame_, epoch, tf2::durationFromSec(0.02));
+          const auto& t = odom_base.transform.translation;
+          const auto& q = odom_base.transform.rotation;
+          const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                        1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+          anchor_odom_pose = gtsam::Pose2(t.x, t.y, yaw);
+          anchor_node_index = pending_gnss_anchor_->node_index;
+          anchor_sequence = pending_gnss_anchor_->sequence;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+              "fusion_graph: no odom TF at GNSS epoch; holding map→odom (%s)", ex.what());
+        }
+      }
+    }
+    if (anchor_map_pose && anchor_odom_pose && !pure_pivot)
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      const double anchor_yaw = t_map_odom_anchor_valid_
+          ? t_map_odom_anchor_.theta()
+          : anchor_map_pose->theta() - anchor_odom_pose->theta();
+      const double c = std::cos(anchor_yaw);
+      const double ss = std::sin(anchor_yaw);
+      t_map_odom_anchor_ = gtsam::Pose2(
+          anchor_map_pose->x() - c * anchor_odom_pose->x() + ss * anchor_odom_pose->y(),
+          anchor_map_pose->y() - ss * anchor_odom_pose->x() - c * anchor_odom_pose->y(),
+          anchor_yaw);
+      trusted_yaw_anchor_update_ = false;
+      last_anchored_node_index_ = anchor_node_index;
+      last_anchored_gnss_factor_sequence_ = anchor_sequence;
       t_map_odom_anchor_valid_ = true;
     }
     // Odom re-base: once the robot has driven odom_rebase_dist_m from the odom

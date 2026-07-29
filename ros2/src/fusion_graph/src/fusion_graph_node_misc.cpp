@@ -41,6 +41,10 @@ void FusionGraphNode::SeedFromDockPose()
   {
     graph_->Initialize(pose, this->now().seconds());
     t_map_odom_anchor_valid_ = false;
+    // The TF thread may still hold a published anchor from a preceding
+    // graph session.  When OnTimer captures the dock anchor, force its
+    // slew state to snap to that new frame so TF and filtered_map agree.
+    force_pub_resync_.store(true, std::memory_order_release);
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: bootstrap init from dock pose "
                 "(%.2f, %.2f, %.1f°)",
@@ -112,6 +116,12 @@ void FusionGraphNode::SeedFromDockPose()
     dr_y_ = 0.0;
     dr_yaw_ = 0.0;
     t_map_odom_anchor_valid_ = false;
+    // Docking changes the global gauge and re-bases odom together.  This is
+    // the same coordinated discontinuity handled by OnTimer's odom re-base:
+    // discard the TF thread's old slewed map->odom value before it publishes
+    // again, otherwise TF can retain the pre-dock yaw while filtered_map has
+    // already adopted dock_pose_yaw.
+    force_pub_resync_.store(true, std::memory_order_release);
   }
   // Latch the RTK-Fixed override one-shot so it doesn't fire later if
   // the robot undocks mid-session — same rationale as OnSetPose: the

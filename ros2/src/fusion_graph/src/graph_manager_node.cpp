@@ -79,16 +79,6 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     return latest_.value_or(TickOutput{});
   }
 
-  // Cadence scaling for the per-tick dead-reckoning gates below. Each gate
-  // compares the PER-TICK accumulated wheel/gyro delta against a fixed radian/
-  // metre threshold, so its effective rad/s (or m/s) trip point is
-  // threshold / node_period_s and would drift with cadence. Multiplying the
-  // thresholds by this factor keeps the tuned trip points invariant across the
-  // 25 Hz (launch default), 50 Hz (yaml default) and 10 Hz configurations.
-  // At the 25 Hz reference the factor is exactly 1.0 (no behaviour change on
-  // the deployed robot). See kTunedNodePeriodS in graph_params.hpp.
-  const double tick_scale = params_.node_period_s / kTunedNodePeriodS;
-
   // 1. Build the wheel between-factor: relative pose from X_{k-1} to X_k.
   //    Yaw selection rules:
   //    a. Wheel encoder is ground truth when it reads zero. Encoders
@@ -114,11 +104,9 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   //       estimate is dominated by encoder slip and the gyro is strictly
   //       better. The wheel sigma_theta path only fires when no gyro
   //       sample arrived this tick (pre-cog seed window, IMU restart).
-  const double stationary_thresh_xy_m = params_.stationary_thresh_xy_m * tick_scale;
-  const double stationary_thresh_theta = params_.stationary_thresh_theta * tick_scale;
-  const bool wheel_stationary = std::abs(accum_.dx) < stationary_thresh_xy_m &&
-                                std::abs(accum_.dy) < stationary_thresh_xy_m &&
-                                std::abs(accum_.dtheta_wheel) < stationary_thresh_theta;
+  const bool wheel_stationary = std::abs(accum_.dx) < params_.stationary_thresh_xy_m &&
+                                std::abs(accum_.dy) < params_.stationary_thresh_xy_m &&
+                                std::abs(accum_.dtheta_wheel) < params_.stationary_thresh_theta;
   // Publish to AddGyroDelta so it can decide whether to EMA-update
   // the bias estimate from incoming samples. wheel_stationary_now_
   // stays at the latest tick's value until the next tick, so the
@@ -192,10 +180,9 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // happens on every normal turn. The combination "wheels rotating
   // hard, gyro near zero" is the genuine slip signature.
   const double wheel_gyro_residual = std::abs(accum_.dtheta_wheel - accum_.dtheta_gyro);
-  const bool slip_detected =
-      wheel_gyro_residual > params_.slip_residual_thresh_rad * tick_scale &&
-      std::abs(accum_.dtheta_gyro) < params_.slip_gyro_max_rad * tick_scale &&
-      std::abs(accum_.dtheta_wheel) > params_.slip_wheel_min_rad * tick_scale;
+  const bool slip_detected = wheel_gyro_residual > params_.slip_residual_thresh_rad &&
+                             std::abs(accum_.dtheta_gyro) < params_.slip_gyro_max_rad &&
+                             std::abs(accum_.dtheta_wheel) > params_.slip_wheel_min_rad;
   double dx_eff = accum_.dx;
   double dy_eff = accum_.dy;
   if (slip_detected)
@@ -229,23 +216,25 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // stationary logic that drove dtheta — reuse it here so both halves
   // of the BetweenFactor stay consistent.
   //
-  // sigma_x gates on the per-tick gyro yaw delta: during fast pivots
-  // the wheels report phantom forward velocity (see GraphParams
-  // comment) so swap to a loose sigma and let GPS / scan-matching
-  // constrain XY. Gating on the gyro (not wheel-derived) dtheta
-  // avoids feedback from the same encoder that's misreporting.
-  double wheel_sigma_x_eff =
-      std::abs(accum_.dtheta_gyro) > params_.pivot_gate_dtheta_rad * tick_scale
-          ? params_.pivot_wheel_sigma_x
-          : params_.wheel_sigma_x;
+  // Wheel translation uncertainty must follow travelled distance, not yaw
+  // rate.  A radius threshold cannot distinguish a pivot from an arbitrarily
+  // tight curve; assigning 0.5 m on every turning tick therefore made both
+  // cases an artificial xy random walk.  Preserve the full encoder arc for
+  // every radius and scale the configured nominal sigma from its 0.2 m/s,
+  // 25 Hz reference increment.  The floor covers encoder quantisation and
+  // tyre scrub when the true increment is zero.
+  constexpr double kWheelNoiseReferenceDistanceM = 0.008;
+  constexpr double kWheelTranslationSigmaFloorM = 0.005;
+  const double translation_distance = std::hypot(dx_eff, dy_eff);
+  const double translation_scale = translation_distance / kWheelNoiseReferenceDistanceM;
+  double wheel_sigma_x_eff = std::max(
+      kWheelTranslationSigmaFloorM, params_.wheel_sigma_x * translation_scale);
 
   // Adaptive σ_x inflation from wheel↔gyro residual EMA. Skipped
   // entirely when adaptive_noise_enabled_gain == 0 (the parameter
-  // defaults to 10 but yaml can disable). Pivot mode already
-  // inflates σ_x to params_.pivot_wheel_sigma_x; in that case the
-  // adaptive term layers on top, but the floor (pivot sigma) is
-  // typically much larger than any residual-driven contribution
-  // so the practical effect is negligible during pivots.
+  // defaults to 10 but yaml can disable). Scale the adaptive contribution by
+  // actual translation too; a stationary rotation cannot acquire metres of
+  // xy covariance merely because its yaw sensors disagree.
   if (params_.adaptive_noise_enabled_gain > 0.0)
   {
     // |wheel↔gyro residual| this tick. We compare the per-tick yaw
@@ -267,7 +256,8 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     // Floor: anything below this is sensor jitter, not slip.
     const double net_residual =
         std::max(0.0, residual_ema_ - params_.adaptive_noise_residual_floor_rad);
-    wheel_sigma_x_eff += params_.adaptive_noise_enabled_gain * net_residual;
+    wheel_sigma_x_eff += params_.adaptive_noise_enabled_gain * net_residual *
+                         std::min(1.0, translation_scale);
   }
   last_wheel_sigma_x_eff_ = wheel_sigma_x_eff;
 
@@ -320,7 +310,14 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     new_factors_.add(gtsam::BetweenFactor<double>(k_bias_prev, k_bias_curr, 0.0, bias_rw_noise));
   }
 
-  // 3. Queued unary factors. Wrap in Huber when caller flagged the
+  // 3. Queued unary factors.  A newly accepted GNSS observation is an
+  // absolute constraint and must also make the *reported* marginal fresh.
+  // Do not wait for the generic diagnostics throttle: at the stationary
+  // node cadence that can leave a 1 Hz RTK improvement invisible for
+  // several seconds even though iSAM2 has already incorporated it.
+  const bool has_gnss_factor = queue_.gnss.has_value();
+
+  // Wrap in Huber when caller flagged the
   // measurement as outlier-prone (RTK-Float / single fix on GPS;
   // magnetometer on yaw).
   if (queue_.gnss)
@@ -335,8 +332,12 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
                                                     params_.huber_k_gps),
                                                 noise);
     }
+    const uint64_t gnss_index = queue_.gnss->target_node.value_or(next_index_);
+    // A loaded/rebased graph may have discarded an old node. In that case
+    // retain the old safe behavior rather than create a factor with a missing key.
+    const auto gnss_key = HasPoseAt(gnss_index) ? PoseKey(gnss_index) : k_curr;
     new_factors_.add(GnssLeverArmFactor(
-        k_curr, queue_.gnss->xy, gtsam::Vector2(params_.lever_arm_x, params_.lever_arm_y), noise));
+        gnss_key, queue_.gnss->xy, gtsam::Vector2(params_.lever_arm_x, params_.lever_arm_y), noise));
   }
   if (queue_.yaw)
   {
@@ -361,22 +362,12 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   }
   if (queue_.scan_to_keyframe)
   {
-    // ABSOLUTE XY-ONLY constraint on the current node from an RTK-anchored
-    // keyframe match. PoseTranslationPrior pins X_curr.translation() to
-    // abs_pose's xy (heading UNTOUCHED), bounding position drift during RTK-Float
-    // windows while yaw stays owned by the gyro between-factors and the loose
-    // (σ≥0.30 rad) scan-between yaw. Huber-wrapped so a single biased match is
-    // down-weighted.
-    //
-    // 2026-07-22: reverted from the PriorFactor<Pose2> (xy+yaw) variant. A
-    // keyframe yaw prior — even σ-floored — can inject a mirrored / 180°-flipped
-    // cross-viewpoint ICP heading, which corrupted map→odom on the robot (yaw
-    // flip ~180°, kf_matches_fail spiking, robot fought the path and dug). The
-    // yaw mirror-guard in fusion_graph_node OnTimer still REJECTS such matches
-    // before they are queued (so the xy anchor is protected from a mirror too),
-    // but no keyframe heading is ever fed into the graph. This keeps the Float
-    // position-holding benefit without the heading-flip risk. abs_pose still
-    // carries yaw for that guard; only its translation is used here.
+    // ABSOLUTE xy constraint on the current node from a frozen RTK-anchored
+    // keyframe match. PoseTranslationPrior pins X_curr.translation() to abs_xy
+    // (yaw untouched). Huber-wrapped like the GPS factor so a single biased
+    // keyframe match is down-weighted, not trusted. This is the factor that
+    // bounds absolute error during RTK-Float; rides the same new_factors_ batch
+    // through ApplyIsamUpdateLocked so it's rebase-safe.
     const double s = std::max(queue_.scan_to_keyframe->sigma_xy, 1.0e-4);
     gtsam::SharedNoiseModel noise = MakeDiagonal({s, s});
     if (queue_.scan_to_keyframe->robust)
@@ -386,7 +377,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
                                                 noise);
     }
     new_factors_.add(gtsam::PoseTranslationPrior<gtsam::Pose2>(
-        k_curr, gtsam::Point2(queue_.scan_to_keyframe->abs_pose.translation()), noise));
+        k_curr, gtsam::Point2(queue_.scan_to_keyframe->abs_xy), noise));
   }
 
   // 4. iSAM2 update. Mark the cached full estimate dirty — callers
@@ -421,16 +412,15 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     }
   }
 
-  // 5. Marginal covariance — throttled. marginalCovariance is O(node
-  //    count) on the Bayes tree path and dominates CPU once the graph
-  //    passes a few thousand nodes. The value is only consumed by the
-  //    diagnostics topic + published Odometry, neither of which needs
-  //    10 Hz freshness — recomputing every Nth tick (default 10 → 1 Hz)
-  //    keeps the displayed σ accurate without burning CPU on every
-  //    Tick. Re-uses the previous tick's covariance when not due.
+  // 5. Marginal covariance — wall-clock throttled.  Node count cannot be
+  //    used here: stationary-node throttling turns a "10 tick" cache into
+  //    an arbitrary multi-second UI delay.  A fresh GNSS factor always wins
+  //    so RTK quality is reflected in the same graph update.
   Eigen::Matrix3d cov = Eigen::Matrix3d::Identity() * 1.0;
-  ++ticks_since_cov_;
-  const bool refresh_cov = ticks_since_cov_ >= std::max(1, params_.cov_update_every_n);
+  const double cov_period_s = std::max(0.0, params_.cov_update_period_s);
+  const bool refresh_cov = has_gnss_factor || last_cov_update_s_ < 0.0 ||
+                           now_s < last_cov_update_s_ ||
+                           now_s - last_cov_update_s_ >= cov_period_s;
   if (refresh_cov)
   {
     try
@@ -441,7 +431,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     {
       // leave conservative default
     }
-    ticks_since_cov_ = 0;
+    last_cov_update_s_ = now_s;
   }
   else if (latest_)
   {
@@ -458,6 +448,12 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // 6. Reset for next tick.
   ++next_index_;
   last_node_time_s_ = now_s;
+  node_time_index_.emplace_back(now_s, out.node_index);
+  while (!node_time_index_.empty() &&
+         now_s - node_time_index_.front().first > kNodeTimeHistoryS)
+  {
+    node_time_index_.pop_front();
+  }
   accum_.Reset();
   queue_.gnss.reset();
   queue_.yaw.reset();

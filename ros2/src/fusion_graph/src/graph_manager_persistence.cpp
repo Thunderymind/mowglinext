@@ -106,6 +106,7 @@ void GraphManager::ResetLocked()
 
   next_index_ = 0;
   last_node_time_s_ = 0.0;
+  node_time_index_.clear();
   initialized_ = false;
 
   accum_.Reset();
@@ -113,7 +114,7 @@ void GraphManager::ResetLocked()
 
   latest_.reset();
   loop_closures_added_ = 0;
-  ticks_since_cov_ = 0;
+  last_cov_update_s_ = -1.0;
   loop_closure_edges_.clear();
   scans_.clear();
   // keyframes_ is deliberately NOT cleared here. This reset is the live-graph
@@ -393,6 +394,10 @@ bool GraphManager::Load(const std::string& prefix)
   const double now_s =
       std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
   last_node_time_s_ = std::min(last_t, now_s);
+  // Persisted graphs do not store per-node ROS timestamps. Start a fresh
+  // short live index; until it fills, delayed GNSS safely falls back to the
+  // current node rather than guessing a timestamp for old saved poses.
+  node_time_index_.clear();
   initialized_ = true;
 
   // Populate latest_ with the highest-index loaded pose so consumers

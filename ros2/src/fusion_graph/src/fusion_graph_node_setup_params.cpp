@@ -67,12 +67,19 @@ void FusionGraphNode::DeclareParameters()
     scan_yield_timeout_s_ = declare_parameter<double>("scan_yield_timeout_s", 2.0);
     scan_yield_sigma_xy_ = declare_parameter<double>("scan_yield_sigma_xy", 0.5);
     scan_yield_sigma_theta_ = declare_parameter<double>("scan_yield_sigma_theta", 0.3);
+    // GPS is nominally 1 Hz. Keep the map anchor mobile for a little longer
+    // than one epoch so ordinary receiver latency/jitter does not create a
+    // sawtooth, but freeze it promptly when GPS disappears.
+    map_anchor_gps_max_age_s_ =
+        declare_parameter<double>("map_anchor_gps_max_age_s", 3.0);
+    gps_float_sigma_floor_m_ =
+        declare_parameter<double>("gps_float_sigma_floor_m", 0.75);
+    float_gnss_factor_min_interval_s_ =
+        declare_parameter<double>("float_gnss_factor_min_interval_s", 5.0);
 
     // ── RTK-anchored keyframe map (absolute scan-to-keyframe localization) ──
-    // Requires scan matching (this block). Code default OFF (yaml enables).
-    // CAPTURE under stable RTK-Fixed; APPLY a PriorFactor<Pose2> (xy + yaw)
-    // during RTK-Float to hold <2 cm. Yaw is protected by the GraphManager
-    // kf_yaw_sigma_floor + the mirror-guard below.
+    // Requires scan matching (this block). Default OFF. CAPTURE under stable
+    // RTK-Fixed; APPLY a PoseTranslationPrior during RTK-Float to hold <2 cm.
     use_keyframe_map_ = declare_parameter<bool>("use_keyframe_map", false);
     kf_capture_sigma_max_m_ = declare_parameter<double>("kf_capture_sigma_max_m", 0.01);
     kf_capture_rtk_debounce_ = declare_parameter<int>("kf_capture_rtk_debounce", 3);
@@ -80,16 +87,7 @@ void FusionGraphNode::DeclareParameters()
     kf_match_max_dist_m_ = declare_parameter<double>("kf_match_max_dist_m", 3.0);
     kf_max_candidates_ = static_cast<size_t>(declare_parameter<int>("kf_max_candidates", 5));
     kf_apply_sigma_floor_m_ = declare_parameter<double>("kf_apply_sigma_floor_m", 0.02);
-    kf_apply_sigma_theta_rad_ = declare_parameter<double>("kf_apply_sigma_theta_rad", 0.05);
     kf_engage_age_s_ = declare_parameter<double>("kf_engage_age_s", 0.3);
-    kf_match_max_rmse_m_ = declare_parameter<double>("kf_match_max_rmse_m", 0.15);
-    kf_match_max_divergence_xy_m_ = declare_parameter<double>("kf_match_max_divergence_xy_m", 0.30);
-    kf_match_max_divergence_theta_rad_ =
-        declare_parameter<double>("kf_match_max_divergence_theta_rad", 0.50);
-    // Absolute-yaw mirror-guard bound (see fusion_graph_node.hpp): reject a
-    // keyframe match whose implied map-frame yaw is more than this off the
-    // gyro-predicted yaw — catches mirrored / flipped ICP the xy guard misses.
-    kf_match_max_yaw_dev_rad_ = declare_parameter<double>("kf_match_max_yaw_dev_rad", 0.5);
   }
 
   // 180° yaw-flip recovery (see fusion_graph_node.hpp). Declared outside the
@@ -133,7 +131,7 @@ void FusionGraphNode::DeclareParameters()
   // long IDLE windows produces O(N²) LC factors with the lower 30/120s
   // defaults. Real revisits across a mowing pattern are minutes apart,
   // so 600s is a comfortable floor. Override per-test if needed.
-  lc_min_age_s_ = declare_parameter<double>("lc_min_age_s", 30.0);
+  lc_min_age_s_ = declare_parameter<double>("lc_min_age_s", 600.0);
   lc_max_candidates_ = static_cast<size_t>(declare_parameter<int>("lc_max_candidates", 3));
   lc_min_delta_m_ = declare_parameter<double>("lc_min_delta_m", 0.05);
   lc_min_delta_theta_ = declare_parameter<double>("lc_min_delta_theta", 0.05);
@@ -159,7 +157,7 @@ void FusionGraphNode::DeclareParameters()
   scan_retention_nodes_ =
       static_cast<uint64_t>(declare_parameter<int>("scan_retention_nodes", 18000));
   isam2_rebase_every_nodes_ =
-      static_cast<uint64_t>(declare_parameter<int>("isam2_rebase_every_nodes", 2000));
+      static_cast<uint64_t>(declare_parameter<int>("isam2_rebase_every_nodes", 1000000));
   const bool autoload = declare_parameter<bool>("autoload_graph", true);
 
   // RTK-Fixed override of the autoloaded pose: if the autoloaded graph

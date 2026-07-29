@@ -43,37 +43,138 @@ bool FusionGraphNode::DockingApproachActive() const
 
 void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 {
-  // Suppress the COG yaw factor during the dock approach. The COG is the
-  // physical travel direction; in the slow reverse approach it is noise-
-  // dominated and jolts the fused yaw, which the graceful controller chases
-  // into divergence (field 2026-06-10). Gyro carries yaw over the short approach.
-  // NEVER gate a yet-uninitialized graph: TrySeedInitialPose needs the COG yaw
-  // seed, so gating it during seeding stalls re-initialization (field 2026-06-10,
-  // clear_graph just before docking left the graph stuck at total_nodes=0).
-  if (gate_cog_during_docking_ && DockingApproachActive() && graph_->IsInitialized())
-  {
-    return;
-  }
-  // OpenMower-style single-antenna heading discipline (yaw_gates.hpp,
-  // unit-tested). A COG derived from Float/NO_FIX GPS or from slow/reverse
-  // motion is heading-garbage and corrupts the weakly-observable yaw (map→odom
-  // balloons → lever-arm amplifies jitter into position jumps → robot drives
-  // out of bounds). Apply it only when RTK-Fixed AND translating forward; else
-  // the gyro carries yaw. Before init the seed always needs it.
-  const bool rtk_fresh = last_rtk_fixed_stamp_ &&
-                         (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
-  if (!CogShouldApply(
-          graph_->IsInitialized(), rtk_fresh, wheel_vx_, cog_require_rtk_, cog_min_speed_mps_))
+  // COG is the yaw authority, but only from a fresh RTK-Fixed receiver.  Once
+  // Fixed, every COG sample is accepted: dock/slow/reverse and temporary
+  // motion-quality gates must not strand the graph on a stale gyro lineage.
+  const bool rtk_fixed = last_rtk_fixed_stamp_ &&
+      (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
+  if (!rtk_fixed)
   {
     ++cog_rtk_gated_;
     return;
   }
   const double yaw = YawFromQuat(msg->orientation);
-  // Soft σ (floored): COG only TRENDS the gyro heading, never snaps to a noisy
-  // per-fix course. covariance[8] is the message yaw variance.
-  const double sigma = CogEffectiveSigma(msg->orientation_covariance[8], cog_min_sigma_rad_);
-  graph_->QueueYaw(yaw, sigma);
+  constexpr double kCogYawSigmaRad = 0.01;  // hard, ≈0.6° absolute yaw datum
+  const rclcpp::Time meas_stamp(msg->header.stamp);
+  const auto historical_node = meas_stamp.nanoseconds() != 0
+      ? graph_->FindNodeAtOrBefore(meas_stamp.seconds()) : std::nullopt;
+  if (!graph_->IsInitialized() || meas_stamp.nanoseconds() == 0 || historical_node)
+    graph_->QueueYaw(yaw, kCogYawSigmaRad, /*robust=*/false, historical_node);
+
+  if (graph_->IsInitialized())
+  {
+    if (auto snap = graph_->LatestSnapshot())
+    {
+      // Anchor the live node as well as the historical measurement node.
+      // Preserve the local odom origin: resetting dr_x/dr_y rotates a distant
+      // odom pose around its origin and produces metre-scale map jumps.  The
+      // timer's trusted-yaw path applies the graph yaw to future local
+      // integration while preserving the current map xy.
+      graph_->ForceAnchor(snap->node_index,
+                          gtsam::Pose2(snap->pose.x(), snap->pose.y(), yaw),
+                          0.05, kCogYawSigmaRad);
+      {
+        std::lock_guard<std::mutex> lock(tf_state_mu_);
+        trusted_yaw_anchor_update_ = true;
+      }
+      ++cog_yaw_recoveries_;
+    }
+  }
   seed_yaw_ = yaw;
+  TrySeedInitialPose();
+  return;
+
+  // Two coherent RTK-Fixed COG baselines that disagree with map->base prove
+  // that local wheel/gyro yaw has drifted.  Shift only the future local yaw;
+  // rotating map->odom would move a distant odom origin by metres.
+  if (false && cog_yaw_recovery_enabled_ && graph_->IsInitialized())
+  {
+    if (auto snap = graph_->LatestSnapshot())
+    {
+      const double map_yaw = [&]() {
+        std::lock_guard<std::mutex> lock(tf_state_mu_);
+        return t_map_odom_anchor_valid_ ? t_map_odom_anchor_.theta() + dr_yaw_
+                                         : snap->pose.theta();
+      }();
+      const double err = std::atan2(std::sin(yaw - map_yaw), std::cos(yaw - map_yaw));
+      const bool cog_consistent = cog_yaw_recovery_prev_yaw_ &&
+          std::abs(std::atan2(std::sin(yaw - *cog_yaw_recovery_prev_yaw_),
+                              std::cos(yaw - *cog_yaw_recovery_prev_yaw_))) <=
+              cog_yaw_recovery_consistency_rad_;
+      cog_yaw_recovery_prev_yaw_ = yaw;
+      if (std::abs(err) >= cog_yaw_recovery_threshold_rad_ && cog_consistent)
+        ++cog_yaw_recovery_count_;
+      else if (std::abs(err) < cog_yaw_recovery_threshold_rad_)
+        cog_yaw_recovery_count_ = 0;
+
+      const bool interval_ok = !last_cog_yaw_recovery_stamp_ ||
+          (this->now() - *last_cog_yaw_recovery_stamp_).seconds() >=
+              cog_yaw_recovery_min_interval_s_;
+      if (interval_ok && cog_yaw_recovery_count_ >= cog_yaw_recovery_consecutive_n_)
+      {
+        const double step = std::clamp(err, -cog_yaw_recovery_max_step_rad_,
+                                       cog_yaw_recovery_max_step_rad_);
+        {
+          std::lock_guard<std::mutex> lock(tf_state_mu_);
+          dr_yaw_ = std::atan2(std::sin(dr_yaw_ + step), std::cos(dr_yaw_ + step));
+          trusted_yaw_anchor_update_ = false;
+        }
+        graph_->ForceAnchor(snap->node_index,
+                            gtsam::Pose2(snap->pose.x(), snap->pose.y(),
+                                         snap->pose.theta() + step),
+                            0.05, 0.08);
+        last_cog_yaw_recovery_stamp_ = this->now();
+        cog_yaw_recovery_count_ = 0;
+        ++cog_yaw_recoveries_;
+        RCLCPP_WARN(get_logger(), "fusion_graph: RTK COG yaw recovery %.1f deg (error %.1f deg, node %lu)",
+                    step * 180.0 / M_PI, err * 180.0 / M_PI,
+                    static_cast<unsigned long>(snap->node_index));
+      }
+    }
+  }
+  // This COG sample is RTK-Fixed and forward-motion gated above.  It is the
+  // only heading innovation allowed to rebase the local odom lineage; graph
+  // wheel/IMU refinement alone must not rotate a live coverage trajectory.
+  trusted_yaw_anchor_update_ = false;  // COG only constrains its historical graph node.
+  // COG improves the graph estimate but must not rotate map→odom on each
+  // receiver update.  That transform is the continuity boundary seen by the
+  // controller and map; changing its yaw reframes a perfectly straight local
+  // odometry trajectory into a large apparent arc.  The anchor is established
+  // at initialization and retained thereafter; its xy is still recomputed at
+  // every node so RTK position corrections remain visible in the map.
+  seed_yaw_ = yaw;
+
+  // An autoloaded graph already reports initialized after a restart, so the
+  // normal seed path cannot correct a stale persisted yaw. The first
+  // physics-grounded COG is therefore a one-shot yaw datum: keep map xy
+  // untouched, anchor graph yaw to COG and rebase local odom by the full
+  // innovation. Subsequent COG samples use the normal bounded path.
+  if (false && autoload_succeeded_ && !boot_cog_yaw_override_done_ && graph_->IsInitialized())
+  {
+    if (auto snap = graph_->LatestSnapshot())
+    {
+      double yaw_error = 0.0;
+      {
+        std::lock_guard<std::mutex> lock(tf_state_mu_);
+        const double map_yaw = t_map_odom_anchor_valid_
+            ? t_map_odom_anchor_.theta() + dr_yaw_
+            : snap->pose.theta();
+        yaw_error = std::atan2(std::sin(yaw - map_yaw), std::cos(yaw - map_yaw));
+        dr_yaw_ = std::atan2(std::sin(dr_yaw_ + yaw_error),
+                             std::cos(dr_yaw_ + yaw_error));
+        trusted_yaw_anchor_update_ = false;
+      }
+      graph_->ForceAnchor(snap->node_index,
+                          gtsam::Pose2(snap->pose.x(), snap->pose.y(), yaw),
+                          0.05,
+                          0.035);
+      boot_cog_yaw_override_done_ = true;
+      RCLCPP_WARN(get_logger(),
+                  "fusion_graph: boot COG yaw datum on node %lu, applied %.1f°",
+                  static_cast<unsigned long>(snap->node_index),
+                  yaw_error * 180.0 / M_PI);
+    }
+  }
 
   // 180° yaw-flip recovery. The COG yaw is the physical travel direction
   // (wheels + GPS displacement, only emitted on a solid straight baseline),
@@ -82,7 +183,7 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // it back across the half-turn. After N consecutive flipped samples, snap
   // the yaw onto the COG (keep the estimated xy) so the robot stops believing
   // it faces backwards.
-  if (cog_flip_recovery_enabled_ && graph_->IsInitialized())
+  if (false && cog_flip_recovery_enabled_ && graph_->IsInitialized())
   {
     // Only trust the COG for a flip recovery when it is GPS-grounded
     // (RTK-Fixed fresh). With cog_to_imu's straight-baseline gate the COGs
@@ -159,16 +260,19 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 void FusionGraphNode::OnMagYaw(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 {
   const double yaw = YawFromQuat(msg->orientation);
-  double var = msg->orientation_covariance[8];
-  if (!std::isfinite(var) || var <= 0.0)
-    var = 0.1 * 0.1;
-  // Mag yaw carries heading-dependent calibration bias (~5-15° peaks)
-  // even after tilt compensation. Always robustify so when COG is also
-  // active the optimizer pulls toward COG and treats mag as a soft
-  // anchor that prevents free drift, not as a precise observation.
-  graph_->QueueYaw(yaw, std::sqrt(var), /*robust=*/true);
   if (!seed_yaw_)
+  {
     seed_yaw_ = yaw;
+  }
+  // Mag yaw carries high magnetic distortion from chassis metal & motor currents.
+  // Use a soft sigma (0.8 rad ~ 46 deg) so it acts as a very loose anchor
+  // preventing unbounded gyro drift without fighting wheel+gyro heading.
+  double sigma = 0.8;
+  const rclcpp::Time meas_stamp(msg->header.stamp);
+  const auto historical_node = meas_stamp.nanoseconds() != 0
+      ? graph_->FindNodeAtOrBefore(meas_stamp.seconds()) : std::nullopt;
+  if (!graph_->IsInitialized() || meas_stamp.nanoseconds() == 0 || historical_node)
+    graph_->QueueYaw(yaw, sigma, /*robust=*/true, historical_node);
   TrySeedInitialPose();
 }
 

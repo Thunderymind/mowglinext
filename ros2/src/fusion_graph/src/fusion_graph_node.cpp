@@ -38,14 +38,17 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.prior_sigma_theta = declare_parameter<double>("prior_sigma_theta", 0.05);
   gp.lever_arm_x = declare_parameter<double>("lever_arm_x", 0.0);
   gp.lever_arm_y = declare_parameter<double>("lever_arm_y", 0.0);
+  lever_arm_x_ = gp.lever_arm_x;
+  lever_arm_y_ = gp.lever_arm_y;
   // Cache the radial lever-arm magnitude for the RTK wrong-fix gate.
   // The graph itself consumes lever_arm_x/y via GnssLeverArmFactor;
   // we only mirror the magnitude here for the gate-side threshold
   // and never re-apply the offset to the GPS sample.
   lever_arm_radius_m_ = std::hypot(gp.lever_arm_x, gp.lever_arm_y);
   gp.cov_update_every_n = declare_parameter<int>("cov_update_every_n", 10);
+  gp.cov_update_period_s = declare_parameter<double>("cov_update_period_s", 1.0);
   gp.isam2_relinearize_skip = declare_parameter<int>("isam2_relinearize_skip", 5);
-  gp.max_graph_nodes = static_cast<uint64_t>(declare_parameter<int>("max_graph_nodes", 6000));
+  gp.max_graph_nodes = static_cast<uint64_t>(declare_parameter<int>("max_graph_nodes", 3000));
   gp.stationary_motion_thresh_m = declare_parameter<double>("stationary_motion_thresh_m", 0.02);
   gp.stationary_motion_thresh_theta =
       declare_parameter<double>("stationary_motion_thresh_theta", 0.01);
@@ -63,6 +66,8 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.slip_residual_thresh_rad = declare_parameter<double>("slip_residual_thresh_rad", 0.01);
   gp.slip_gyro_max_rad = declare_parameter<double>("slip_gyro_max_rad", 0.005);
   gp.slip_wheel_min_rad = declare_parameter<double>("slip_wheel_min_rad", 0.005);
+  gp.slip_max_v_mps = declare_parameter<double>("slip_max_v_mps", 0.08);
+  dr_slip_max_vx_mps_ = declare_parameter<double>("dr_slip_max_vx_mps", 0.08);
   gp.gyro_bias_estimation_enabled = declare_parameter<bool>("gyro_bias_estimation_enabled", true);
   gp.gyro_bias_ema_tau_s = declare_parameter<double>("gyro_bias_ema_tau_s", 30.0);
   gp.gyro_bias_max_sample_rad_per_s =
@@ -88,12 +93,22 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // Accounts for GPS-latency × velocity + lever-arm sweep that the receiver
   // covariance omits. 0 = disabled (raw receiver σ, prior behaviour).
   gps_sigma_speed_coeff_ = declare_parameter<double>("gps_sigma_speed_coeff", 0.0);
+  gps_sigma_omega_coeff_ = declare_parameter<double>("gps_sigma_omega_coeff", 1.0);
+  gps_turn_max_wz_rad_per_s_ = declare_parameter<double>("gps_turn_max_wz_rad_per_s", 0.08);
   // SAFETY: reject any fix whose computed σ_xy exceeds this (m), so a garbage /
   // standalone fix can't enter the graph. 0 = disabled. Sized generously (it must
   // NOT reject genuine RTK-Float, which the multi-minute ride-through depends on
   // and which can legitimately sit at dm-to-m σ); it only catches truly unusable
   // fixes. The unknown/zero-covariance reject below is unconditional and separate.
   gps_max_sigma_reject_m_ = declare_parameter<double>("gps_max_sigma_reject_m", 0.0);
+  // A GNSS antenna offset makes a position factor observable in yaw. During a
+  // pure pivot that is undesirable: the gyro/wheel between-factor measures
+  // rotation, while centimetre-scale GPS jitter at the antenna can rotate the
+  // whole map anchor. Suppress only those transient GNSS factors.
+  gps_pivot_max_vx_mps_ = declare_parameter<double>("gps_pivot_max_vx_mps", 0.05);
+  gps_pivot_min_wz_rad_per_s_ =
+      declare_parameter<double>("gps_pivot_min_wz_rad_per_s", 0.15);
+  gps_pivot_hold_s_ = declare_parameter<double>("gps_pivot_hold_s", 2.0);
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the full
   // dock_pose once per new node (replaces the weak live-GPS factor that walked
   // the docked pose 11.5 cm + 53° over a dwell — field 2026-06-10). σ small so
@@ -105,6 +120,14 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   docking_active_timeout_s_ = declare_parameter<double>("docking_active_timeout_s", 1.0);
   gate_cog_during_docking_ = declare_parameter<bool>("gate_cog_during_docking", true);
   gate_float_gps_during_docking_ = declare_parameter<bool>("gate_float_gps_during_docking", true);
+  cog_yaw_recovery_enabled_ = declare_parameter<bool>("cog_yaw_recovery_enabled", true);
+  cog_yaw_recovery_threshold_rad_ = declare_parameter<double>("cog_yaw_recovery_threshold_rad", 0.175);
+  cog_yaw_recovery_consistency_rad_ = declare_parameter<double>("cog_yaw_recovery_consistency_rad", 0.140);
+  cog_yaw_recovery_max_step_rad_ = declare_parameter<double>("cog_yaw_recovery_max_step_rad", 1.20);
+  cog_yaw_recovery_consecutive_n_ = declare_parameter<int>("cog_yaw_recovery_consecutive_n", 2);
+  cog_yaw_recovery_min_interval_s_ = declare_parameter<double>("cog_yaw_recovery_min_interval_s", 2.0);
+  rtk_wrongfix_max_wheel_m_ = declare_parameter<double>("rtk_wrongfix_max_wheel_m", 0.02);
+
   datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
   datum_cos_lat_ = std::cos(datum_lat_ * M_PI / 180.0);
@@ -117,16 +140,12 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.datum_lon = datum_lon_;
   gp.kf_spacing_m = declare_parameter<double>("kf_spacing_m", 0.5);
   gp.max_keyframes = static_cast<uint64_t>(declare_parameter<int>("max_keyframes", 2000));
-  // Hard yaw-σ floor on the scan-to-keyframe absolute prior (GraphManager-side,
-  // enforced in CreateNodeLocked). Mirrors the scan/loop-closure LiDAR-yaw floor
-  // so the keyframe heading can only weakly correct gyro drift. See graph_params.
-  gp.kf_yaw_sigma_floor_rad = declare_parameter<double>("kf_apply_yaw_sigma_floor_rad", 0.30);
   kf_spacing_m_ = gp.kf_spacing_m;  // node reuses for the capture-spacing gate
 
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
   base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
-  tf_publish_lead_s_ = declare_parameter<double>("tf_publish_lead_s", 0.05);
+  tf_publish_lead_s_ = declare_parameter<double>("tf_publish_lead_s", 0.0);
   // Dedicated TF-broadcast thread rate (see fusion_graph_node.hpp). 20 Hz
   // halves worst-case TF staleness vs the 25 Hz tick cadence while staying
   // cheap (constant anchor + integrated dr_*). <= 0 disables the thread and
@@ -138,7 +157,7 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // per-node graph corrections enter map→base as continuous sub-second
   // ramps instead of steps (the weave/hunting root cause). A jump past the
   // snap thresholds is a genuine relocalization → applied immediately.
-  anchor_slew_enabled_ = declare_parameter<bool>("anchor_slew_enabled", true);
+  anchor_slew_enabled_ = declare_parameter<bool>("anchor_slew_enabled", false);
   anchor_max_lin_slew_mps_ = declare_parameter<double>("anchor_max_lin_slew_mps", 0.10);
   anchor_max_ang_slew_radps_ = declare_parameter<double>("anchor_max_ang_slew_radps", 0.20);
   anchor_snap_dist_m_ = declare_parameter<double>("anchor_snap_dist_m", 0.50);

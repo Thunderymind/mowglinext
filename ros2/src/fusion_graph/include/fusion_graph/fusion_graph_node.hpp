@@ -41,6 +41,7 @@
 #include <Eigen/Core>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <mowgli_interfaces/msg/high_level_status.hpp>
+#include <mowgli_interfaces/msg/gnss_status.hpp>
 #include <mowgli_interfaces/msg/status.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -68,6 +69,7 @@ private:
   void OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
+  void OnGnssStatus(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg);
   void OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnMagYaw(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg);
@@ -150,8 +152,8 @@ private:
   std::optional<rclcpp::Time> last_imu_stamp_;
 
   // ── Local-frame dead reckoning ──────────────────────────────────
-  // odom→base_footprint TF + /odometry/filtered. Wheel vx + gyro_z
-  // integrated at IMU rate (~91 Hz) so the local frame is continuous,
+  // odom→base_footprint TF + /odometry/filtered. Wheel vx plus the wheel
+  // odometry's accumulated yaw are used so the local frame is continuous,
   // GPS-independent, and never jumps — REP-105 odom invariants.
   // Replaces the standalone robot_localization ekf_odom_node (which
   // ran the same wheel+gyro fusion at 25 Hz via a generic EKF). The
@@ -161,6 +163,10 @@ private:
   double dr_x_ = 0.0;
   double dr_y_ = 0.0;
   double dr_yaw_ = 0.0;
+  // Bound each graph→local yaw rebase to ~0.2 rad/s at the 25 Hz timer
+  // cadence. This corrects the *future* dead-reckoning direction without
+  // rotating the map frame around a distant odom origin.
+  double local_yaw_sync_max_step_rad_ = 0.008;
   // Latest DR velocities, cached under tf_state_mu_ alongside dr_*. The TF
   // broadcast uses them to forward-propagate the pose by tf_publish_lead_s_ so
   // the future-stamped TF is an honest constant-velocity prediction rather than
@@ -168,8 +174,23 @@ private:
   // error during pivots). dr_last_vx_eff_ is the slip-vetoed forward velocity.
   double dr_last_gz_ = 0.0;  // bias-corrected gyro yaw rate (rad/s)
   double dr_last_vx_eff_ = 0.0;  // slip-adjusted forward velocity (m/s)
+  // GNSS is associated with a historical graph node.  Retain only that node
+  // and epoch; the independent odom pose is obtained from TF at the epoch.
+  struct PendingGnssAnchor
+  {
+    uint64_t sequence = 0;
+    uint64_t node_index = 0;
+    int64_t stamp_ns = 0;
+  };
+  std::optional<PendingGnssAnchor> pending_gnss_anchor_;
   double wheel_vx_ = 0.0;  // latest forward velocity cached from /wheel_odom
   double wheel_wz_ = 0.0;  // latest wheel-derived yaw rate (slip-veto cross-check)
+  // Absolute wheel-odometry heading.  We consume heading *increments* rather
+  // than integrating twist.angular.z: the hardware's filtered twist rate is
+  // not exactly the derivative of its encoder pose and caused a persistent
+  // ~11.5 degree under-rotation in the local odom frame.
+  std::optional<double> wheel_yaw_;
+  std::optional<double> consumed_wheel_yaw_;
 
   // Dead-reckoning slip veto (mirrors the graph-side slip veto in
   // graph_manager.cpp, but in rate form because OnImu integrates one
@@ -187,6 +208,7 @@ private:
   // above so a normal coordinated turn (both agree) is never vetoed.
   double dr_slip_gyro_max_rad_per_s_ = 0.15;
   double dr_slip_wheel_min_rad_per_s_ = 0.15;
+  double dr_slip_max_vx_mps_ = 0.08;
 
   // GPS antenna radial offset from base_link, hypot(lever_arm_x,
   // lever_arm_y). Used by the RTK wrong-fix gate in OnGnss to
@@ -195,6 +217,8 @@ private:
   // NOT used to correct mx/my — the graph's GnssLeverArmFactor
   // already applies R(yaw)·lever_arm in its residual; the gate
   // only consults this scalar to relax its threshold.
+  double lever_arm_x_ = 0.0;
+  double lever_arm_y_ = 0.0;
   double lever_arm_radius_m_ = 0.0;
   // |Δθ| (rad) accumulated from gyro_z since the last accepted GPS
   // sample. Paired with wheel_dist_since_last_gps_m_; both are
@@ -306,6 +330,11 @@ private:
   // large threshold + N consecutive samples so it never fires in normal
   // operation. Field 2026-05-29: "robot thinks it faces backwards, drives in
   // reverse toward a goal that is in front."
+  // A persisted graph is initialized but can carry an old yaw after a
+  // reboot. The first RTK-Fixed, forward COG is a bootstrap observation, not
+  // a gentle running correction: align graph + local odom once, then return
+  // to the normal bounded COG innovations.
+  bool boot_cog_yaw_override_done_ = false;
   bool cog_flip_recovery_enabled_ = true;
   double cog_flip_threshold_rad_ = 2.618;  // ~150°
   int cog_flip_consecutive_n_ = 3;
@@ -339,6 +368,20 @@ private:
   // term. Mirrors xbot_positioning's min_speed gate + cov=1e4 soft update.
   double cog_min_speed_mps_ = 0.08;
   double cog_min_sigma_rad_ = 0.15;  // ~8.6° floor
+
+  // RTK-Fixed COG is the physical travel direction.  A persistent mismatch
+  // detects wheel/gyro yaw drift during a skid.  Recovery changes yaw only,
+  // preserving the current map position.
+  bool cog_yaw_recovery_enabled_ = true;
+  double cog_yaw_recovery_threshold_rad_ = 0.175;
+  double cog_yaw_recovery_consistency_rad_ = 0.140;
+  double cog_yaw_recovery_max_step_rad_ = 1.20;
+  int cog_yaw_recovery_consecutive_n_ = 2;
+  double cog_yaw_recovery_min_interval_s_ = 2.0;
+  int cog_yaw_recovery_count_ = 0;
+  uint64_t cog_yaw_recoveries_ = 0;
+  std::optional<double> cog_yaw_recovery_prev_yaw_;
+  std::optional<rclcpp::Time> last_cog_yaw_recovery_stamp_;
 
   // ── LiDAR yaw yield (Level 2) ───────────────────────────────────
   // Scan-matching (and loop closure) between-factors carry BOTH position and
@@ -410,6 +453,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_wheel_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_;
+  rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr sub_gnss_status_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_cog_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_mag_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
@@ -545,11 +589,22 @@ private:
   // covariance ignores motion-induced position error (GPS latency × speed,
   // lever-arm sweep during motion). 0 = disabled (raw receiver σ). [seconds]
   double gps_sigma_speed_coeff_ = 0.0;
+  // GPS σ turn inflation coefficient: σ_eff = sqrt(σ_msg² + (speed_coeff·v + omega_coeff·|w|·r_sweep)²).
+  double gps_sigma_omega_coeff_ = 1.0;
+  // Maximum turning rate (|wz|) above which GPS-XY position factors are withheld during steady cornering. [rad/s]
+  double gps_turn_max_wz_rad_per_s_ = 0.08;
 
   // SAFETY: reject a fix whose computed σ_xy exceeds this (m). 0 = disabled.
   // Guards against fusing a garbage / standalone fix; sized to NOT reject
   // genuine RTK-Float (the ride-through depends on it). [metres]
   double gps_max_sigma_reject_m_ = 0.0;
+
+  // GNSS factors are withheld during pure in-place pivots so the antenna
+  // lever-arm cannot turn GPS position jitter into a map-frame yaw update.
+  double gps_pivot_max_vx_mps_ = 0.05;
+  double gps_pivot_min_wz_rad_per_s_ = 0.15;
+  double gps_pivot_hold_s_ = 2.0;
+  std::optional<rclcpp::Time> last_pivot_motion_stamp_;
 
   // RTK wrong-fix detection state. F9P can re-solve carrier-phase
   // ambiguity on a different integer set after a brief signal drop,
@@ -565,11 +620,13 @@ private:
   // the check.
   std::optional<gtsam::Vector2> last_gps_map_xy_;
   double wheel_dist_since_last_gps_m_ = 0.0;
-  // GPS jump (m) above which the sample is rejected as a wrong-fix (motion-
-  // consistent gate: compare jump against actual wheel travel since last fix).
-  // 50 mm sits above the σ~1 cm noise floor (2026-05-17: 8-12 mm σ on raw
-  // /gps/fix stationary) and below vx_max≈0.30 m/s × 0.1 s = 30 mm of
-  // legitimate motion. See rtk_wrongfix_gate.hpp for the decision function.
+  // GPS jump (m) above which the sample is rejected when the wheel
+  // accumulator stayed under rtk_wrongfix_max_wheel_m_. Picked to be
+  // well above the σ ~1 cm noise floor we measured 2026-05-17 (8-12
+  // mm σ on raw /gps/fix stationary), and below the smallest
+  // legitimate motion the robot can produce in one GPS period
+  // (vx_max ≈ 0.30 m/s × 0.1 s = 30 mm). 50 mm leaves headroom for
+  // 1-2σ outliers while still catching ≥0.5σ wrong-fix jumps.
   double rtk_wrongfix_max_jump_m_ = 0.05;
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the FULL
   // dock_pose (x,y,yaw) ONCE PER NEW NODE, replacing the weak live-GPS factor
@@ -594,6 +651,13 @@ private:
   bool gate_cog_during_docking_ = true;
   bool gate_float_gps_during_docking_ = true;
   std::optional<rclcpp::Time> last_docking_cmd_stamp_;
+  // Wheel-derived distance (m) traveled since the last GPS sample,
+  // below which a GPS jump > rtk_wrongfix_max_jump_m_ is judged
+  // inconsistent. 20 mm sits just above the per-tick encoder noise
+  // floor — at 0.30 m/s the robot covers 30 mm in 100 ms (one fix
+  // period), so a real motion easily clears 20 mm.
+  double rtk_wrongfix_max_wheel_m_ = 0.02;
+
   // ICP guard-rail thresholds — see GraphParams comments for the
   // physical intuition. Declared as ROS params so we can tighten or
   // loosen them in mowgli_robot.yaml without a rebuild.
@@ -621,18 +685,33 @@ private:
   double scan_yield_sigma_xy_ = 0.5;
   double scan_yield_sigma_theta_ = 0.3;
   std::optional<rclcpp::Time> last_rtk_fixed_stamp_;
+  // Timestamp of the most recent GNSS factor actually accepted by the graph.
+  // This deliberately tracks queued factors (not raw receiver messages): when
+  // GPS is absent or rejected, map→odom must stay a rigid transform so the
+  // map follows the local wheel/IMU dead-reckoning instead of being reframed
+  // by graph-only corrections.
+  std::optional<rclcpp::Time> last_gnss_factor_stamp_;
+  double map_anchor_gps_max_age_s_ = 3.0;
+  // RTK-Float epochs are temporally correlated multipath estimates, not
+  // independent 1 Hz observations. Rate-limit and downweight them so they
+  // cannot accumulate into a fictitiously precise lateral pull.
+  double gps_float_sigma_floor_m_ = 0.75;
+  double float_gnss_factor_min_interval_s_ = 5.0;
+  std::optional<rclcpp::Time> last_float_gnss_factor_stamp_;
+  uint64_t gnss_factor_sequence_ = 0;
+  uint64_t last_anchored_gnss_factor_sequence_ = 0;
+  bool trusted_yaw_anchor_update_ = false;
+  std::optional<rclcpp::Time> last_gnss_status_stamp_;
+  bool gnss_rtk_fixed_ = false;
 
   // ── RTK-anchored keyframe map (scan-to-keyframe absolute localization) ──
   // Requires use_scan_matching_ (reuses scan_matcher_ + the scan subscription
   // + the ICP guard rails). CAPTURE: under stable RTK-Fixed, freeze the
   // GPS-fused node pose + scan as a keyframe (builds the absolute map). APPLY:
   // during RTK-Float, match the live scan to nearby keyframes and queue a
-  // PriorFactor<Pose2> that pins absolute xy + yaw — the mechanism that holds
-  // <2 cm through a Float window where dead-reckoning would otherwise drift.
-  // The yaw component is protected by the kf_yaw_sigma_floor (GraphManager)
-  // and the yaw mirror-guard below so LiDAR heading can't override the gyro.
-  // Code default OFF; the in-repo yaml enables it. See graph_manager_keyframe.cpp
-  // + the OnTimer capture/apply blocks.
+  // PoseTranslationPrior that pins absolute xy — the mechanism that holds <2 cm
+  // through a Float window where dead-reckoning would otherwise drift. Default
+  // OFF. See graph_manager_keyframe.cpp + the OnScan capture/apply blocks.
   bool use_keyframe_map_ = false;
   double kf_capture_sigma_max_m_ = 0.01;  // max GPS σ to allow a capture
   int kf_capture_rtk_debounce_ = 3;  // consecutive RTK-Fixed epochs first
@@ -640,30 +719,8 @@ private:
   double kf_spacing_m_ = 0.5;  // min move between captures
   double kf_match_max_dist_m_ = 3.0;  // apply-side keyframe search radius
   size_t kf_max_candidates_ = 5;
-  // Apply-side σ floors. The positional floor is raised to the capture gate
-  // (kf_capture_sigma_max_m_) at apply time so a keyframe frozen up to that far
-  // off its true pose can never be trusted TIGHTER than its own capture error.
-  double kf_apply_sigma_floor_m_ = 0.02;  // ICP-realism floor on the positional σ
-  double kf_apply_sigma_theta_rad_ = 0.05;  // ICP-realism floor on the yaw σ (~3°);
-                                            // GraphManager's kf_yaw_sigma_floor
-                                            // (~0.30 rad) is the effective floor
+  double kf_apply_sigma_floor_m_ = 0.02;  // floor on the PoseTranslationPrior σ
   double kf_engage_age_s_ = 0.3;  // engage apply when Fixed older than this
-  // Relaxed ICP guard rails for keyframe matching (cross-viewpoint, not
-  // incremental). Matches the shared scan_matcher_'s internal min_inliers
-  // but overrides RMSE / divergence thresholds. The icp_max_delta_* checks
-  // (0.30 m / 0.50 rad) are inappropriate here — res.delta is the full
-  // transform between keyframe and live scan (up to kf_match_max_dist_m_).
-  double kf_match_max_rmse_m_ = 0.15;
-  double kf_match_max_divergence_xy_m_ = 0.30;
-  double kf_match_max_divergence_theta_rad_ = 0.50;
-  // Absolute-yaw mirror-guard (KeyframeYawWithinGate): reject a keyframe match
-  // whose implied ABSOLUTE map-frame yaw deviates from the gyro-predicted yaw by
-  // more than this. Catches mirrored / 180°-flipped ICP solutions on symmetric
-  // scenery that the xy mirror-guard and Huber let through — the keyframe prior
-  // engages during RTK-Float where COG is gated off, so this is the only guard
-  // on its heading. Sized to reject gross flips while leaving room for the
-  // keyframe to correct genuine slow gyro drift (< a few ° over a Float window).
-  double kf_match_max_yaw_dev_rad_ = 0.5;
   // Latches updated in OnGnss for the capture gate.
   double last_gps_sigma_ = -1.0;  // most-recent valid GPS σ (m); <0 = none
   int rtk_fixed_streak_ = 0;  // consecutive RTK-Fixed epochs

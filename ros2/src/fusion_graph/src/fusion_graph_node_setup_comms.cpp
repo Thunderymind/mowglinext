@@ -113,6 +113,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
 
   sub_gps_ = create_subscription<sensor_msgs::msg::NavSatFix>(
       "/gps/fix", sensor_qos, std::bind(&FusionGraphNode::OnGnss, this, std::placeholders::_1));
+  sub_gnss_status_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
+      "/gps/status", sensor_qos, std::bind(&FusionGraphNode::OnGnssStatus, this, std::placeholders::_1));
 
   // /imu/cog_heading and /imu/mag_yaw are published BEST_EFFORT by
   // cog_to_imu.py and mag_yaw_publisher.py — use SensorDataQoS or

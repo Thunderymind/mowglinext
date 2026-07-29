@@ -157,9 +157,40 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // and the map→odom TF stay glued to out.pose for up to
   // stationary_node_period_s (5 s by default) → robot looks frozen
   // in viz, then teleports when the next Tick lands.
-  const gtsam::Pose2 dr_now(dr_x_, dr_y_, dr_yaw_);
+  gtsam::Pose2 dr_now;
+  gtsam::Pose2 raw_anchor;
+  gtsam::Pose2 published_anchor;
+  bool raw_anchor_valid;
+  bool published_anchor_valid;
+  {
+    // The TF thread owns the slew state, but mirrors its result here.  Taking
+    // one snapshot ensures /odometry/filtered_map uses exactly the same
+    // map->odom transform as TF, instead of bypassing the limiter with the
+    // discontinuous graph anchor.
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    dr_now = gtsam::Pose2(dr_x_, dr_y_, dr_yaw_);
+    raw_anchor = t_map_odom_anchor_;
+    raw_anchor_valid = t_map_odom_anchor_valid_.load(std::memory_order_acquire);
+    published_anchor = t_map_odom_pub_shared_;
+    published_anchor_valid = t_map_odom_pub_shared_valid_;
+  }
+
+  // Without the dedicated TF thread this executor owns the slew state. Keep
+  // the inline TF and map odometry on the same anchor in that mode as well.
+  if (!tf_thread_.joinable())
+  {
+    const double now_s = this->now().seconds();
+    const double dt = last_map_pub_s_ < 0.0 ? 0.0 : now_s - last_map_pub_s_;
+    last_map_pub_s_ = now_s;
+    published_anchor = SlewPublishedAnchor(raw_anchor, raw_anchor_valid, dt);
+    published_anchor_valid = raw_anchor_valid;
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    t_map_odom_pub_shared_ = published_anchor;
+    t_map_odom_pub_shared_valid_ = published_anchor_valid;
+  }
+
   const gtsam::Pose2 extrapolated_map_base =
-      t_map_odom_anchor_valid_ ? t_map_odom_anchor_.compose(dr_now) : out.pose;
+      published_anchor_valid ? published_anchor.compose(dr_now) : out.pose;
 
   // 1. nav_msgs/Odometry on /odometry/filtered_map.
   nav_msgs::msg::Odometry odom;
@@ -237,11 +268,11 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // motion in the composition map→base = map→odom × odom→base, so
   // the robot would freeze at the snapshot pose between Ticks.
   tf2::Transform T_map_odom;
-  if (t_map_odom_anchor_valid_)
+  if (published_anchor_valid)
   {
-    T_map_odom.setOrigin(tf2::Vector3(t_map_odom_anchor_.x(), t_map_odom_anchor_.y(), 0.0));
+    T_map_odom.setOrigin(tf2::Vector3(published_anchor.x(), published_anchor.y(), 0.0));
     tf2::Quaternion q_map_odom;
-    q_map_odom.setRPY(0.0, 0.0, t_map_odom_anchor_.theta());
+    q_map_odom.setRPY(0.0, 0.0, published_anchor.theta());
     T_map_odom.setRotation(q_map_odom);
   }
   else
@@ -365,12 +396,20 @@ void FusionGraphNode::TfBroadcastLoop()
     // map→odom only once the graph has produced its first node — the
     // constant anchor is the single source of truth (see the anchor
     // comment block in the header).
+    const gtsam::Pose2 published_anchor =
+        SlewPublishedAnchor(anchor, anchor_valid, period.count());
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      t_map_odom_pub_shared_ = published_anchor;
+      t_map_odom_pub_shared_valid_ = anchor_valid;
+    }
+
     if (anchor_valid)
     {
       tf2::Transform T_map_odom;
-      T_map_odom.setOrigin(tf2::Vector3(anchor.x(), anchor.y(), 0.0));
+      T_map_odom.setOrigin(tf2::Vector3(published_anchor.x(), published_anchor.y(), 0.0));
       tf2::Quaternion q_map_odom;
-      q_map_odom.setRPY(0.0, 0.0, anchor.theta());
+      q_map_odom.setRPY(0.0, 0.0, published_anchor.theta());
       T_map_odom.setRotation(q_map_odom);
 
       geometry_msgs::msg::TransformStamped t_map_odom;

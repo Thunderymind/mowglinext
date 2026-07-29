@@ -101,17 +101,30 @@ public:
   // Gyro yaw rate (rad/s) integrated with given dt.
   void AddGyroDelta(double wz, double dt);
 
+  // Apply the same current bias correction used by AddGyroDelta.  The
+  // node's local odom/TF extrapolator must use this too; otherwise it
+  // integrates raw gyro bias even while the graph itself is stationary.
+  double CorrectedGyroZ(double wz);
+
   // GPS measurement (in map frame, datum-anchored). Cached and consumed
   // at next tick. sigma is per-axis; pass < 0 to use floor. When
   // `robust` is true, the noise model is wrapped in a Huber kernel —
   // appropriate for RTK-Float / single-fix samples where multipath
   // outliers can lie outside the reported covariance.
-  void QueueGnss(double x, double y, double sigma_xy, bool robust = false);
+  // If target_node is set, attach the measurement to that existing pose node
+  // rather than to the next node created. This associates delayed receiver
+  // epochs with their actual graph time without transforming the measurement.
+  void QueueGnss(double x,
+                 double y,
+                 double sigma_xy,
+                 bool robust = false,
+                 std::optional<uint64_t> target_node = std::nullopt);
 
   // Yaw observation (COG or mag). sigma_yaw is rad. `robust` should be
   // true for magnetometer yaw (uncalibrated / heading-dependent bias),
   // false for COG (gated on forward motion + RTK-Fixed).
-  void QueueYaw(double yaw, double sigma_yaw, bool robust = false);
+  void QueueYaw(double yaw, double sigma_yaw, bool robust = false,
+                std::optional<uint64_t> target_node = std::nullopt);
 
   // Scan-matching relative motion to apply at next node creation as a
   // BetweenFactor(X_{k-1}, X_k, delta, [sigma_xy, sigma_xy, sigma_theta]).
@@ -119,18 +132,12 @@ public:
   // their respective covariances.
   void QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, double sigma_theta);
 
-  // Scan-to-keyframe ABSOLUTE full-pose constraint to apply at next node creation
-  // as a PriorFactor<Pose2>(X_curr, abs_pose). `abs_pose` is the map-frame pose
-  // (xy + yaw) the current node should have per an ICP match to a frozen
-  // keyframe. `robust` wraps the noise model in Huber (a keyframe match on
-  // symmetric scenery can be a gross outlier, like a wrong-fix GPS sample). The
-  // yaw σ is additionally floored at params_.kf_yaw_sigma_floor_rad in
-  // CreateNodeLocked so the LiDAR-derived absolute heading can only weakly
-  // correct gyro drift, never override it.
-  void QueueScanToKeyframe(const gtsam::Pose2& abs_pose,
-                           double sigma_xy,
-                           double sigma_theta,
-                           bool robust = true);
+  // Scan-to-keyframe ABSOLUTE xy constraint to apply at next node creation as a
+  // PoseTranslationPrior(X_curr, abs_xy). `abs_xy` is the map-frame position the
+  // current node should have per an ICP match to a frozen keyframe. `robust`
+  // wraps the noise model in Huber (a keyframe match on symmetric scenery can be
+  // a gross outlier, like a wrong-fix GPS sample).
+  void QueueScanToKeyframe(const gtsam::Vector2& abs_xy, double sigma_xy, bool robust = true);
 
   // Initial-pose seed. Required before the first tick if no GPS has
   // arrived yet — sets the prior on X_0. Must be called exactly once
@@ -158,6 +165,11 @@ public:
   // Read-only accessors (snapshot of current state).
   std::optional<TickOutput> LatestSnapshot() const;
   GraphStats Stats() const;
+
+  // Return the newest pose node at or before timestamp_s. GNSS commonly
+  // arrives about one second after its receiver epoch, so callers use this
+  // to bind the factor to the historical state it actually observed.
+  std::optional<uint64_t> FindNodeAtOrBefore(double timestamp_s) const;
 
   // Count of pose ('x') variables currently live in the iSAM2 graph.
   // Distinct from GraphStats::total_nodes, which is the monotonic
@@ -388,12 +400,14 @@ private:
       gtsam::Vector2 xy;
       double sigma;
       bool robust;
+      std::optional<uint64_t> target_node;
     };
     struct Yaw
     {
       double yaw;
       double sigma;
       bool robust;
+      std::optional<uint64_t> target_node;
     };
     std::optional<Gnss> gnss;
     std::optional<Yaw> yaw;
@@ -406,17 +420,15 @@ private:
       double sigma_theta;
     };
     std::optional<ScanBetween> scan_between;
-    // Scan-to-keyframe ABSOLUTE constraint: the pre-computed map-frame full pose
-    // the current node should have, derived from an ICP match to a frozen keyframe
-    // (abs_pose = kf.abs_pose.compose(delta.inverse())). Applied as a
-    // PriorFactor<Pose2> on X_curr — xy + yaw, so the keyframe constrains heading
-    // during RTK-Float windows instead of letting it drift. Engaged only during
-    // RTK-Float (see fusion_graph_node).
+    // Scan-to-keyframe ABSOLUTE constraint: the pre-computed map-frame xy the
+    // current node should have, derived from an ICP match to a frozen keyframe
+    // (abs_xy = kf.abs_pose.compose(delta.inverse()).translation()). Applied as
+    // a PoseTranslationPrior on X_curr — xy-only, so yaw stays owned by the
+    // gyro/COG factors. Engaged only during RTK-Float (see fusion_graph_node).
     struct ScanToKeyframe
     {
-      gtsam::Pose2 abs_pose;
+      gtsam::Vector2 abs_xy;
       double sigma_xy;
-      double sigma_theta;
       bool robust;
     };
     std::optional<ScanToKeyframe> scan_to_keyframe;
@@ -446,16 +458,20 @@ private:
 
   uint64_t next_index_ = 0;  // index of the next node to create
   double last_node_time_s_ = 0.0;  // wall time of last created node
+  // Live node timestamps, in creation order. The small history is enough for
+  // receiver-delivery latency while avoiding a second unbounded trajectory.
+  std::deque<std::pair<double, uint64_t>> node_time_index_;
+  static constexpr double kNodeTimeHistoryS = 10.0;
 
   Accumulator accum_;
   UnaryQueue queue_;
 
   std::optional<TickOutput> latest_;
   uint64_t loop_closures_added_ = 0;
-  // How many ticks since the last marginalCovariance refresh; used to
-  // throttle that O(N) call without losing covariance freshness on
-  // the diagnostics + odom outputs.
-  int ticks_since_cov_ = 0;
+  // Timestamp of the last marginal-covariance query.  A wall-clock bound,
+  // rather than a node-count bound, keeps diagnostic latency stable when
+  // stationary-node throttling reduces the graph cadence.
+  double last_cov_update_s_ = -1.0;
   std::vector<std::pair<uint64_t, uint64_t>> loop_closure_edges_;
 
   // Health counters surfaced via Stats(). All bumps go through the

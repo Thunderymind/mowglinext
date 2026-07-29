@@ -158,20 +158,34 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   }
 }
 
-void GraphManager::QueueGnss(double x, double y, double sigma_xy, bool robust)
+double GraphManager::CorrectedGyroZ(double wz)
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  const double bias_correction = params_.use_imu_preint
+                                     ? current_bias_estimate_
+                                     : (params_.gyro_bias_estimation_enabled ? gyro_bias_z_ : 0.0);
+  return wz - bias_correction;
+}
+
+void GraphManager::QueueGnss(double x,
+                             double y,
+                             double sigma_xy,
+                             bool robust,
+                             std::optional<uint64_t> target_node)
 {
   std::lock_guard<std::mutex> lock(mu_);
   if (sigma_xy < params_.gps_sigma_floor)
     sigma_xy = params_.gps_sigma_floor;
-  queue_.gnss = UnaryQueue::Gnss{gtsam::Vector2(x, y), sigma_xy, robust};
+  queue_.gnss = UnaryQueue::Gnss{gtsam::Vector2(x, y), sigma_xy, robust, target_node};
 }
 
-void GraphManager::QueueYaw(double yaw, double sigma_yaw, bool robust)
+void GraphManager::QueueYaw(double yaw, double sigma_yaw, bool robust,
+                            std::optional<uint64_t> target_node)
 {
   std::lock_guard<std::mutex> lock(mu_);
   if (sigma_yaw <= 0.0)
     sigma_yaw = 0.05;
-  queue_.yaw = UnaryQueue::Yaw{yaw, sigma_yaw, robust};
+  queue_.yaw = UnaryQueue::Yaw{yaw, sigma_yaw, robust, target_node};
 }
 
 void GraphManager::QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, double sigma_theta)
@@ -184,17 +198,12 @@ void GraphManager::QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, 
   queue_.scan_between = UnaryQueue::ScanBetween{delta, sigma_xy, sigma_theta};
 }
 
-void GraphManager::QueueScanToKeyframe(const gtsam::Pose2& abs_pose,
-                                       double sigma_xy,
-                                       double sigma_theta,
-                                       bool robust)
+void GraphManager::QueueScanToKeyframe(const gtsam::Vector2& abs_xy, double sigma_xy, bool robust)
 {
   std::lock_guard<std::mutex> lock(mu_);
   if (sigma_xy <= 0.0)
     sigma_xy = 0.1;
-  if (sigma_theta <= 0.0)
-    sigma_theta = 0.1;
-  queue_.scan_to_keyframe = UnaryQueue::ScanToKeyframe{abs_pose, sigma_xy, sigma_theta, robust};
+  queue_.scan_to_keyframe = UnaryQueue::ScanToKeyframe{abs_xy, sigma_xy, robust};
 }
 
 void GraphManager::Initialize(const gtsam::Pose2& X0,
@@ -236,6 +245,8 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
 
   next_index_ = 1;
   last_node_time_s_ = timestamp;
+  node_time_index_.clear();
+  node_time_index_.emplace_back(timestamp, 0);
   initialized_ = true;
 
   TickOutput out;
@@ -245,6 +256,17 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
   out.node_index = 0;
   out.timestamp = timestamp;
   latest_ = out;
+}
+
+std::optional<uint64_t> GraphManager::FindNodeAtOrBefore(double timestamp_s) const
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  for (auto it = node_time_index_.rbegin(); it != node_time_index_.rend(); ++it)
+  {
+    if (it->first <= timestamp_s)
+      return it->second;
+  }
+  return std::nullopt;
 }
 
 std::optional<TickOutput> GraphManager::LatestSnapshot() const
