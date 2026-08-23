@@ -1045,6 +1045,13 @@ def generate_launch_description() -> LaunchDescription:
              "enable_mag_cal": enable_mag_cal,
              "mag_calibration_path": mag_cal_path,
              "stationary_seed_rate_hz": cog_stationary_rate,
+             # Field receiver is 1 Hz.  The COG core compensates antenna
+             # tangential velocity during turns and rejects sweep-dominated
+             # baselines, so retain only straight, meaningful samples.
+             "max_sample_dt_s": 1.5,
+             "cog_max_baseline_rotation_rad": 0.05236,
+             "min_omega_for_anchor_rps": 0.15,
+             "min_baseline_displacement_m": 0.20,
              # Stationary-yaw aging penalty. The republish_latched path
              # adds (rate · age)² to the variance to model the chance
              # that the latched yaw has gone stale (manual rotation,

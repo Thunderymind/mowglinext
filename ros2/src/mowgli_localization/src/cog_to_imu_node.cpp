@@ -142,7 +142,9 @@ public:
     rotation_quiet_min_samples_ = declare_parameter<int>("rotation_quiet_min_samples", 2);
     max_pos_accuracy_ = declare_parameter<double>("max_pos_accuracy_m", 0.05);
     min_dt_ = declare_parameter<double>("min_sample_dt_s", 0.05);
-    max_dt_ = declare_parameter<double>("max_sample_dt_s", 0.50);
+    // The field receiver publishes at 1 Hz.  Keep the default wide enough to
+    // accept that cadence; launch configuration may still tighten it per site.
+    max_dt_ = declare_parameter<double>("max_sample_dt_s", 2.50);
     max_yaw_var_ = declare_parameter<double>("max_yaw_variance", 3.0);
     min_yaw_var_ = declare_parameter<double>("min_yaw_variance", 7.6e-5);
 
@@ -317,7 +319,10 @@ private:
   void on_fix(const sensor_msgs::msg::NavSatFix& msg)
   {
     using sensor_msgs::msg::NavSatStatus;
-    if (msg.status.status < NavSatStatus::STATUS_GBAS_FIX)
+    // A Float solution still provides a useful COG observation; its
+    // covariance is carried into the yaw variance and fusion_graph applies
+    // its independent RTK-Fixed authority gate.
+    if (msg.status.status < NavSatStatus::STATUS_FIX)
     {
       ++rejected_fix_;
       return;
@@ -325,15 +330,13 @@ private:
 
     const double var_lat = msg.position_covariance[0];
     const double var_lon = msg.position_covariance[4];
-    double pos_acc;
-    if (var_lat <= 0.0 || var_lon <= 0.0)
-    {
-      pos_acc = 10.0;
-    }
-    else
-    {
-      pos_acc = std::sqrt((var_lat + var_lon) * 0.5);
-    }
+    const bool covariance_known =
+        msg.position_covariance_type != sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN &&
+        std::isfinite(var_lat) && std::isfinite(var_lon) && var_lat > 0.0 && var_lon > 0.0;
+    // The LC29H NMEA bridge may report zero covariance even for RTK-quality
+    // fixes.  Use a conservative fallback instead of making COG impossible.
+    const double pos_acc =
+        covariance_known ? std::sqrt((var_lat + var_lon) * 0.5) : 0.02;
     if (pos_acc > max_pos_accuracy_)
     {
       ++rejected_accuracy_;
