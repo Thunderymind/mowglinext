@@ -262,6 +262,7 @@ def generate_launch_description() -> LaunchDescription:
     # fallback AND the coverage_server.robot_width injection (both read it via the
     # _inject_dock_pose_and_speeds closure), even on a fresh checkout with no config.
     cw = 0.40
+    ccx = 0.18
     # LIDAR mount geometry for the costmap_scan_filter ground filter.
     # lidar_height = lidar_z (above base_link); lidar_mount_yaw rotates a
     # beam's index angle into the IMU/base frame before the gravity
@@ -965,6 +966,24 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{"use_sim_time": use_sim_time}],
     )
 
+    # The cutting disc rotates, but its centre is fixed relative to the
+    # chassis.  The hardware does not publish blade_joint values, so the
+    # continuous URDF joint cannot yield a TF through robot_state_publisher.
+    # Publish the physical cutter centre explicitly for map-progress stamping.
+    static_blade_link = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="static_base_link_to_blade_link",
+        output="screen",
+        arguments=[
+            "--x", str(ccx), "--y", "0", "--z", "0",
+            "--roll", "0", "--pitch", "0", "--yaw", "0",
+            "--frame-id", "base_link",
+            "--child-frame-id", "blade_link",
+        ],
+        parameters=[{"use_sim_time": use_sim_time}],
+    )
+
     # fusion_graph_node — GTSAM iSAM2 factor-graph localizer. Always
     # primary (no fallback to ekf_map_node, which was removed alongside
     # the use_fusion_graph flag in this refactor). Works WITHOUT LiDAR
@@ -1196,6 +1215,7 @@ def generate_launch_description() -> LaunchDescription:
             # for both map→odom AND odom→base_footprint; ekf_odom_node
             # was removed 2026-05-18).
             static_gps_link_alias,
+            static_blade_link,
             fusion_graph_launch,
             cog_to_imu,
             mag_yaw_publisher,
