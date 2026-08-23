@@ -412,7 +412,7 @@ def generate_launch_description() -> LaunchDescription:
             {"dock_calib_redock_charge_timeout_s": float(
                 robot_params.get("dock_calib_redock_charge_timeout_s", 30.0))},
             {"dock_calib_cog_min_samples": int(
-                robot_params.get("dock_calib_cog_min_samples", 8))},
+                robot_params.get("dock_calib_cog_min_samples", 3))},
             {"dock_calib_cog_std_max_rad": float(
                 robot_params.get("dock_calib_cog_std_max_rad", 0.0524))},
             {"dock_calib_cog_bearing_match_max_rad": float(
