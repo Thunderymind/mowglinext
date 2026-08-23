@@ -15,6 +15,14 @@ map_server_node:
     map_file_path: ""
     areas_file_path: "/ros2_ws/maps/areas.dat"
     publish_rate: 1.0
+    # The field GNSS receiver publishes at 1 Hz.  Three Fixed samples in a
+    # four-second window are sufficient to average receiver jitter, whereas
+    # the legacy ten-sample requirement can never complete.
+    # /gps/pose_cov inflates Fixed covariance for fusion, so admit the
+    # resulting ~0.28 m value here but continue rejecting Float (~3 m).
+    dock_set_gps_avg_window_s: 4.0
+    dock_set_gps_avg_min_samples: 3
+    dock_set_gps_accuracy_max_m: 0.35
     # Minimum seconds between mowed-overlay (~/mow_progress) republishes. The
     # overlay is re-serialized as a full-extent OccupancyGrid (O(cells), scales
     # with map size), so on a large map publishing it every tick while mowing is
