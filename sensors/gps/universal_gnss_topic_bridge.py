@@ -11,6 +11,7 @@ from mowgli_interfaces.msg import GnssStatus as PublicGnssStatus
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rtcm_msgs.msg import Message as PublicRtcmMessage
+from sensor_msgs.msg import NavSatFix
 from universal_gnss_ros2.msg import GnssStatus as UniversalGnssStatus
 from universal_gnss_ros2.msg import RtcmFrame
 
@@ -163,6 +164,8 @@ class UniversalGnssTopicBridge(Node):
         self.declare_parameter("backend", "universal")
         self.declare_parameter("receiver_family", "auto")
         self.declare_parameter("frame_id", "gps_link")
+        self.declare_parameter("input_fix_topic", "/_gps_internal/universal/fix")
+        self.declare_parameter("output_fix_topic", "/gps/fix")
         self.declare_parameter("input_status_topic", "/_gps_internal/universal/status")
         self.declare_parameter("output_status_topic", "/gps/status")
         self.declare_parameter("input_diagnostics_topic", "/diagnostics")
@@ -176,11 +179,17 @@ class UniversalGnssTopicBridge(Node):
 
         input_status_topic = str(self.get_parameter("input_status_topic").value)
         output_status_topic = str(self.get_parameter("output_status_topic").value)
+        input_fix_topic = str(self.get_parameter("input_fix_topic").value)
+        output_fix_topic = str(self.get_parameter("output_fix_topic").value)
         input_diagnostics_topic = str(self.get_parameter("input_diagnostics_topic").value)
         input_rtcm_topic = str(self.get_parameter("input_rtcm_topic").value)
         output_rtcm_topic = str(self.get_parameter("output_rtcm_topic").value)
 
         self._diagnostic_entries: dict[str, tuple[str, dict[str, str]]] = {}
+        # ReceiverNode republishes cached state from a fast timer.  Retain
+        # only one output per measurement epoch for downstream consumers.
+        self._last_fix_epoch: tuple[int, int] | None = None
+        self._latest_status: UniversalGnssStatus | None = None
 
         reliable_qos = QoSProfile(
             depth=10,
@@ -198,12 +207,19 @@ class UniversalGnssTopicBridge(Node):
             output_status_topic,
             reliable_qos,
         )
+        self._fix_pub = self.create_publisher(NavSatFix, output_fix_topic, reliable_qos)
         self._rtcm_pub = self.create_publisher(
             PublicRtcmMessage,
             output_rtcm_topic,
             rtcm_qos,
         )
 
+        self.create_subscription(
+            NavSatFix,
+            input_fix_topic,
+            self._on_fix,
+            reliable_qos,
+        )
         self.create_subscription(
             UniversalGnssStatus,
             input_status_topic,
@@ -225,12 +241,27 @@ class UniversalGnssTopicBridge(Node):
 
         self.get_logger().info(
             "Bridging Universal GNSS topics: "
+            f"{input_fix_topic} -> {output_fix_topic} (new epochs only), "
             f"{input_status_topic} -> {output_status_topic}, "
             f"{input_diagnostics_topic} -> {output_status_topic} correction_stream/msm_summary, "
             f"{input_rtcm_topic} -> {output_rtcm_topic}"
         )
 
+    def _on_fix(self, msg: NavSatFix) -> None:
+        """Forward a fresh receiver epoch immediately, never a timer duplicate."""
+        stamp = msg.header.stamp
+        if stamp.sec == 0 and stamp.nanosec == 0 and self._latest_status is not None:
+            stamp = self._latest_status.stamp
+            msg.header.stamp = stamp
+        epoch = (stamp.sec, stamp.nanosec)
+        if epoch == (0, 0) or epoch == self._last_fix_epoch:
+            return
+        self._last_fix_epoch = epoch
+        msg.header.frame_id = self._frame_id
+        self._fix_pub.publish(msg)
+
     def _on_status(self, msg: UniversalGnssStatus) -> None:
+        self._latest_status = msg
         public_msg = PublicGnssStatus()
         public_msg.header.stamp = msg.stamp
         public_msg.header.frame_id = self._frame_id
