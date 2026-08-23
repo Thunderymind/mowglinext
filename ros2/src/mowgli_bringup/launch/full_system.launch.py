@@ -376,6 +376,13 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {"use_sim_time": use_sim_time},
+            # A 1 Hz receiver can legitimately deliver a fix just over one
+            # second after its measurement epoch.  Leave enough margin for
+            # that transport age plus normal cadence jitter, otherwise the
+            # monitor falsely flips to DEAD_RECKONING between healthy fixes.
+            # This is deliberately still well below the 5 s mowing safety
+            # timeout configured in mowgli_robot.yaml.
+            {"gps_timeout": 3.0},
         ],
     )
 
