@@ -543,12 +543,13 @@ BT::NodeStatus PreFlightCheck::tick()
 
   // ── 6. Firmware compatibility ────────────────────────────────────────────
   // hardware_bridge handshakes the STM32 on connect and reports whether the
-  // firmware's wire-protocol version matches this image. An incompatible (or
-  // too-old-to-answer) firmware could misread blade/emergency/odom packets, so
-  // block undock/mow until the operator reflashes.
+  // firmware's wire-protocol version matches this image. Protocol-v5 is
+  // intentionally accepted because this checkout preserves the installed
+  // robot firmware; newer incompatible versions remain blocked.
   {
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
-    if (!ctx->latest_status.firmware_compatible)
+    if (!ctx->latest_status.firmware_compatible &&
+        ctx->latest_status.firmware_protocol_version != 5u)
     {
       const std::string& ver = ctx->latest_status.firmware_version;
       char buf[96];

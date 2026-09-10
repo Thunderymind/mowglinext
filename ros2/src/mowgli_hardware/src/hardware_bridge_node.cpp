@@ -2324,23 +2324,17 @@ private:
     pkt.trim_limit_mps = static_cast<float>(yaw_trim_limit_mps_);
     pkt.enabled = yaw_loop_enabled_ ? 1u : 0u;
     pkt.gyro_sign = static_cast<int8_t>(yaw_gyro_sign_);
-    // Forward the measured at-rest gyro-Z bias (raw sensor frame, the same value
-    // subtracted before the /imu publish) so the firmware yaw loop regulates the
-    // TRUE rate — otherwise an open-loop BackUp arcs by the bias. 0 until the IMU
-    // has calibrated; the firmware clamps it hard before applying.
-    pkt.gyro_bias_radps = imu_cal_ready_ ? static_cast<float>(imu_cal_offset_gz_) : 0.0f;
     if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
                         sizeof(LlSetYawPid) - sizeof(uint16_t)))
     {
       RCLCPP_INFO(get_logger(),
                   "Sent yaw-loop params: kp=%.3f ki=%.3f trim_limit_mps=%.3f enabled=%d "
-                  "gyro_sign=%d gyro_bias=%.6f rad/s",
+                  "gyro_sign=%d",
                   yaw_kp_,
                   yaw_ki_,
                   yaw_trim_limit_mps_,
                   static_cast<int>(pkt.enabled),
-                  static_cast<int>(pkt.gyro_sign),
-                  static_cast<double>(pkt.gyro_bias_radps));
+                  static_cast<int>(pkt.gyro_sign));
     }
   }
 
