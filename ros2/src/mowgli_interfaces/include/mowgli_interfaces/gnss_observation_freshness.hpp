@@ -96,8 +96,15 @@ public:
     {
       if (sequence == last_sequence_)
       {
-        return receipt_time_ns == *last_receipt_time_ns_ ? ObservationUpdate::kCachedPublication
-                                                         : ObservationUpdate::kInvalidProvenance;
+        if (receipt_time_ns >= *last_receipt_time_ns_)
+        {
+          // Some receiver sidecars refresh the publication timestamp while
+          // the underlying position observation is unchanged.  The sequence
+          // identity still proves that this is cached data; do not let it
+          // refresh physical-observation liveness.
+          return ObservationUpdate::kCachedPublication;
+        }
+        return ObservationUpdate::kInvalidProvenance;
       }
 
       if (sequence > last_sequence_)
