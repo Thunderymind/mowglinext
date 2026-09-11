@@ -15,6 +15,13 @@
 namespace mowgli_interfaces::gnss_observation_freshness
 {
 
+// GNSS is published by a separate sidecar container.  Its receipt timestamp
+// can lead the consumer's ROS clock by a small scheduling/clock-domain skew.
+// Keep the provenance check strict, but allow only a bounded amount of lead;
+// this avoids treating a live RTK fix as invalid while still rejecting stale
+// or arbitrarily-future evidence.
+constexpr std::int64_t kMaximumFutureSkewNs = 100'000'000;  // 100 ms
+
 enum class ObservationUpdate
 {
   kNewObservation,
@@ -36,9 +43,14 @@ inline bool IsReceiptFresh(const std::int64_t receipt_time_ns,
                            const std::int64_t ros_now_ns,
                            const std::int64_t maximum_age_ns)
 {
-  if (receipt_time_ns <= 0 || maximum_age_ns < 0 || ros_now_ns < receipt_time_ns)
+  if (receipt_time_ns <= 0 || maximum_age_ns < 0 ||
+      receipt_time_ns > ros_now_ns + kMaximumFutureSkewNs)
   {
     return false;
+  }
+  if (receipt_time_ns > ros_now_ns)
+  {
+    return true;
   }
   return ros_now_ns - receipt_time_ns <= maximum_age_ns;
 }
@@ -69,7 +81,7 @@ public:
 
     // Receipt stamps are mandatory for the audited Universal GNSS path. A
     // future stamp is invalid evidence, not a fresh observation.
-    if (receipt_time_ns <= 0 || receipt_time_ns > ros_now_ns)
+    if (receipt_time_ns <= 0 || receipt_time_ns > ros_now_ns + kMaximumFutureSkewNs)
     {
       return ObservationUpdate::kInvalidProvenance;
     }
