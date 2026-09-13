@@ -472,7 +472,7 @@ TEST(LedPatternRender, ChargeCompleteIndicatorIdsTakePriorityOverCount)
 
   LedPatternCfg cfg = MakeCfg();
   cfg.charge_complete_dim_scale = 0.0f;
-  cfg.charge_complete_indicator_count = 4u;      // would light 0,4,8,12 if honoured
+  cfg.charge_complete_indicator_count = 4u;  // would light 0,4,8,12 if honoured
   cfg.charge_complete_indicator_ids = {2u, 9u};  // must win instead, count is ignored
   const auto pixels = RenderFrame(in, cfg);
 
