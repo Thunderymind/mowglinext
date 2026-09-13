@@ -981,7 +981,7 @@ def test_lidar_map_anchor_flag_is_plumbed_end_to_end() -> None:
     Without the launch plumbing an installed override is silently inert, and
     without the template key the GUI cannot reset it (Invariant 15)."""
     nav = _read_text("launch/navigation.launch.py")
-    assert re.search(r'_rp\.get\("use_lidar_map_anchor", True\)', nav), (
+    assert re.search(r'_rp\.get\("use_lidar_map_anchor", False\)', nav), (
         "navigation.launch.py must read use_lidar_map_anchor from the robot config"
     )
     assert re.search(r'"use_lidar_map_anchor":\s*lidar_gated\(use_lidar_map_anchor\)', nav), (
@@ -994,8 +994,9 @@ def test_lidar_map_anchor_flag_is_plumbed_end_to_end() -> None:
     assert re.search(r'DeclareLaunchArgument\(\s*"use_lidar_map_anchor"', fg)
     assert re.search(r'"use_lidar_map_anchor":\s*use_lidar_map_anchor', fg)
     template = _load_yaml("mowgli_robot.yaml")["mowgli"]["ros__parameters"]
-    assert template.get("use_lidar_map_anchor") is True, (
-        "navigation enables scan-to-map by default, gated on LiDAR hardware"
+    assert template.get("use_lidar_map_anchor") is False, (
+        "the LiDAR map anchor ships OFF by default (2026-09-13): experimental, costly on the "
+        "Pi, enabled per robot from Settings > Localization; the launch fallback must agree"
     )
     # Shadow mode rides the same path: config -> navigation.launch.py
     # (LiDAR-gated) -> fusion_graph.launch.py -> node.

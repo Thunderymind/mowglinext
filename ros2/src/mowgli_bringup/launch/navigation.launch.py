@@ -131,7 +131,7 @@ def generate_launch_description() -> LaunchDescription:
     _early_use_magnetometer = "true" if bool(
         _rp.get("use_magnetometer", False)) else "false"
     _early_use_lidar_map_anchor = "true" if bool(
-        _rp.get("use_lidar_map_anchor", True)) else "false"
+        _rp.get("use_lidar_map_anchor", False)) else "false"
     _early_lidar_anchor_shadow_mode = "true" if bool(
         _rp.get("lidar_anchor_shadow_mode", False)) else "false"
     _early_fusion_graph_period = str(
