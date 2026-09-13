@@ -727,6 +727,15 @@ def generate_launch_description() -> LaunchDescription:
                 "led_charge_complete_dim_scale": float(
                     robot_params.get("led_charge_complete_dim_scale", 0.0)
                 ),
+                "led_charge_complete_indicator_count": int(
+                    robot_params.get("led_charge_complete_indicator_count", 0)
+                ),
+                "led_charge_complete_indicator_scale": float(
+                    robot_params.get("led_charge_complete_indicator_scale", 0.15)
+                ),
+                "led_charge_complete_indicator_ids": str(
+                    robot_params.get("led_charge_complete_indicator_ids", "")
+                ),
                 "led_spi_speed_hz": int(
                     robot_params.get("led_spi_speed_hz", 2400000)
                 ),

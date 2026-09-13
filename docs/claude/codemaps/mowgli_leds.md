@@ -87,7 +87,7 @@ Freshness: every source is stale after `led_status_timeout_s` (`collectInputs()`
 None.
 
 ### Parameters
-All 14 declared in the constructor (`led_ring_node.cpp:65-83`), read **once at startup** (no parameter callback). Defaults live in the template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` and are mirrored in `gui/asserts/mower_config.schema.json`; `full_system.launch.py` forwards them with matching fallbacks.
+All 17 declared in the constructor (`led_ring_node.cpp:65-83`), read **once at startup** (no parameter callback). Defaults live in the template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` and are mirrored in `gui/asserts/mower_config.schema.json`; `full_system.launch.py` forwards them with matching fallbacks.
 
 | Param | Default | Node clamp (file:line) | Effect |
 |-------|---------|------------------------|--------|
@@ -105,6 +105,9 @@ All 14 declared in the constructor (`led_ring_node.cpp:65-83`), read **once at s
 | `led_idle_scale` | `0.10` | `[0, 1]` (l.111) | Idle ring dim factor |
 | `led_charge_complete_timeout_s` | `600.0` | `≥ 0` (0 = disabled) | Seconds of steady full-green before dimming (`LedRingNode::updateChargeCompleteTracking`) |
 | `led_charge_complete_dim_scale` | `0.0` | `[0, 1]` | Brightness once the timeout above elapses; 0 = off |
+| `led_charge_complete_indicator_count` | `0` | `≥ 0` (clamped to `led_count` at render) | Pixels, evenly spaced, kept at `led_charge_complete_indicator_scale` instead of dimming; 0 = off. Ignored when `led_charge_complete_indicator_ids` is non-empty |
+| `led_charge_complete_indicator_scale` | `0.15` | `[0, 1]` | Brightness of the indicator pixels above |
+| `led_charge_complete_indicator_ids` | `""` | parsed by `ParseIndicatorIds` (`led_ring_node.cpp`) | Comma-separated exact pixel indices, e.g. `"0,4,8,12"`, taking priority over `led_charge_complete_indicator_count` when non-empty. A string, not a native ROS2 array — an empty YAML list can't be type-inferred (same gotcha as `mowgli_map`'s `area_names`) |
 
 `use_sim_time` is also passed by launch (l.676) but has no effect: animations use `std::chrono::steady_clock` (`monotonicSeconds()` l.185-189) and the tick is a wall timer.
 

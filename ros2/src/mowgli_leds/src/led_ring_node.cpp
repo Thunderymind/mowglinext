@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 
@@ -38,6 +42,41 @@ static_assert(static_cast<std::uint8_t>(HighLevelState::kManualMowing) ==
 /// A ring this long would take 4.6 kB per frame; anything larger is a typo in
 /// the config, not a real strip, and we refuse to allocate for it.
 constexpr std::size_t kMaxLedCount = 512u;
+
+/// Parses a comma-separated list of non-negative pixel indices, e.g.
+/// "0, 4, 8, 12". A malformed or negative token is silently skipped rather
+/// than rejecting the whole list -- a typo in one ID should degrade that
+/// one pixel, not fall back to the count-based spacing for all of them.
+std::vector<std::size_t> ParseIndicatorIds(const std::string& raw)
+{
+  std::vector<std::size_t> ids;
+  std::stringstream stream(raw);
+  std::string token;
+  while (std::getline(stream, token, ','))
+  {
+    const auto first = token.find_first_not_of(" \t");
+    if (first == std::string::npos)
+    {
+      continue;
+    }
+    const auto last = token.find_last_not_of(" \t");
+    token = token.substr(first, last - first + 1);
+    try
+    {
+      std::size_t consumed = 0;
+      const long value = std::stol(token, &consumed);
+      if (value >= 0 && consumed == token.size())
+      {
+        ids.push_back(static_cast<std::size_t>(value));
+      }
+    }
+    catch (const std::exception&)
+    {
+      // Not a number -- skip it, see the function comment.
+    }
+  }
+  return ids;
+}
 
 HighLevelState ToHighLevelState(std::uint8_t raw)
 {
@@ -79,6 +118,17 @@ LedRingNode::LedRingNode(const rclcpp::NodeOptions& options)
       declare_parameter<double>("led_charge_complete_timeout_s", 600.0);
   const double charge_complete_dim_scale =
       declare_parameter<double>("led_charge_complete_dim_scale", 0.0);
+  const int charge_complete_indicator_count =
+      declare_parameter<int>("led_charge_complete_indicator_count", 0);
+  const double charge_complete_indicator_scale =
+      declare_parameter<double>("led_charge_complete_indicator_scale", 0.15);
+  // A string, not a native ROS2 integer array: an empty array default in a
+  // params YAML fails to type-infer and throws at load ("ROS2 cannot type
+  // an empty YAML list", see mowgli_map/config/map_server.yaml for the same
+  // gotcha), and this needs to default to empty. "0,4,8,12" also happens to
+  // be a much friendlier GUI text field than an array editor.
+  const std::string charge_complete_indicator_ids_raw =
+      declare_parameter<std::string>("led_charge_complete_indicator_ids", "");
 
   led_count_ = static_cast<std::size_t>(std::clamp(led_count, 0, static_cast<int>(kMaxLedCount)));
   if (static_cast<int>(led_count_) != led_count)
@@ -117,6 +167,14 @@ LedRingNode::LedRingNode(const rclcpp::NodeOptions& options)
   pattern_cfg_.charge_complete_timeout_s = std::max(charge_complete_timeout, 0.0);
   pattern_cfg_.charge_complete_dim_scale =
       static_cast<float>(std::clamp(charge_complete_dim_scale, 0.0, 1.0));
+  // Only guarded against negative here; PaintEvenIndicators clamps to the
+  // actual led_count_ at render time, so an operator value larger than the
+  // ring is harmless (every pixel just becomes an indicator pixel).
+  pattern_cfg_.charge_complete_indicator_count =
+      static_cast<std::size_t>(std::max(charge_complete_indicator_count, 0));
+  pattern_cfg_.charge_complete_indicator_scale =
+      static_cast<float>(std::clamp(charge_complete_indicator_scale, 0.0, 1.0));
+  pattern_cfg_.charge_complete_indicator_ids = ParseIndicatorIds(charge_complete_indicator_ids_raw);
 
   if (!enabled_ || led_count_ == 0u)
   {
