@@ -517,8 +517,7 @@ TEST(LedPatternRender, ChargeCompleteIndicatorCountBeyondLedCountLightsWholeRing
   cfg.charge_complete_indicator_count = 999u;  // far more than led_count
   const auto pixels = RenderFrame(in, cfg);
 
-  EXPECT_EQ(CountLit(pixels), 16u)
-      << "clamped to led_count, not a crash or an out-of-bounds write";
+  EXPECT_EQ(CountLit(pixels), 16u) << "clamped to led_count, not a crash or an out-of-bounds write";
 }
 
 TEST(LedPatternRender, LowBatteryBlinksTheWholeRingBetweenRedAndOff)
