@@ -364,7 +364,8 @@ inline void PaintComet(std::vector<Rgb>& pixels, std::size_t head_index, const R
 /// otherwise dimmed background -- readable from any angle, not just one
 /// side of the ring. `indicator_count` is clamped to `pixels.size()`;
 /// count 0 or an empty ring is a no-op.
-inline void PaintEvenIndicators(std::vector<Rgb>& pixels, std::size_t indicator_count,
+inline void PaintEvenIndicators(std::vector<Rgb>& pixels,
+                                std::size_t indicator_count,
                                 const Rgb& color)
 {
   const std::size_t count = pixels.size();
@@ -382,7 +383,8 @@ inline void PaintEvenIndicators(std::vector<Rgb>& pixels, std::size_t indicator_
 /// Overwrite the pixels named in `ids` with `color`. Any index outside
 /// [0, pixels.size()) is silently skipped -- e.g. an operator-entered ID
 /// left stale after led_count was lowered.
-inline void PaintIndicatorIds(std::vector<Rgb>& pixels, const std::vector<std::size_t>& ids,
+inline void PaintIndicatorIds(std::vector<Rgb>& pixels,
+                              const std::vector<std::size_t>& ids,
                               const Rgb& color)
 {
   for (const std::size_t idx : ids)
