@@ -120,7 +120,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "node-index",
         description: "settingsSections.localization.description",
         keys: [
-            "use_scan_matching", "use_loop_closure",
+            "use_lidar_map_anchor", "lidar_anchor_shadow_mode",
             "use_magnetometer",
             "enable_mag_cal", "declination_deg", "min_horizontal_uT", "mag_yaw_variance",
         ],
@@ -169,7 +169,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "battery_full_voltage", "battery_empty_voltage", "battery_critical_voltage",
             "battery_full_percent", "battery_low_percent", "battery_critical_percent",
-            "battery_critical_recovery_percent",
+            "battery_critical_recovery_percent", "battery_manual_resume_percent",
         ],
     },
     {
@@ -201,7 +201,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "obstacle_inflation_radius", "max_obstacle_avoidance_distance",
             "obstacle_clearance_margin", "obstacle_detection_range_m",
             "obstacle_wait_timeout_s",
-            "obstacle_margin", "obstacle_slowdown_ratio",
+            "obstacle_margin", "obstacle_slowdown_ratio", "dig_obstacle_enabled",
         ],
     },
     {
@@ -212,6 +212,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "xy_goal_tolerance", "yaw_goal_tolerance", "coverage_xy_tolerance",
             "progress_timeout_sec",
+            "boundary_inner_margin_m", "dock_inner_margin_exempt_radius_m",
         ],
     },
     {
@@ -233,6 +234,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "led_enabled", "led_count", "led_spi_device", "led_spi_speed_hz",
             "led_brightness", "led_idle_scale", "led_refresh_hz",
             "led_low_battery_percent", "led_charge_full_percent",
+            "led_charge_complete_timeout_s", "led_charge_complete_dim_scale",
             "led_status_timeout_s", "led_keepalive_s", "led_device_retry_s",
         ],
     },

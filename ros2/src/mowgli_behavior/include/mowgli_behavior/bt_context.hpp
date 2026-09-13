@@ -112,6 +112,25 @@ struct BTContext
   /// COMMAND_RESET_EMERGENCY=254, …).
   uint8_t current_command{0};
 
+  /// Operator-forced resume from a mid-session charge hold. Set by the
+  /// ~/high_level_control handler when a COMMAND_START arrives while the tree
+  /// is parked in a charge hold (last published state_name CHARGING or
+  /// CRITICAL_BATTERY_CHARGING — see isChargeHoldState()), where
+  /// current_command is ALREADY 1 and a plain START would otherwise be a
+  /// no-op. Consumed (cleared) by IsManualResumeRequested inside both charge
+  /// wait loops of main_tree.xml, which honours it only above
+  /// {battery_manual_resume_pct}. Protected by context_mutex.
+  ///
+  /// Stamped so a request the wait loop never consumed (e.g. Play pressed
+  /// during ManualChargeGuard's CHARGING, whose exit is the operator lifting
+  /// the mower off, not this flag) cannot survive to a LATER low-battery dock
+  /// and cut that charge short: IsManualResumeRequested refuses a request
+  /// older than kManualResumeMaxAgeSec. The loops poll every 5 s, so the
+  /// window is generous for the intended path and tight for the stale one.
+  bool manual_resume_requested{false};
+  std::chrono::steady_clock::time_point manual_resume_requested_time{};
+  static constexpr double kManualResumeMaxAgeSec = 30.0;
+
   /// Set by the ~/start_in_area service to REQUEST mowing a single, specific
   /// area instead of iterating all areas. This is the one-shot *request*:
   /// GetNextUnmowedArea consumes it on the next onStart() and latches the
@@ -200,6 +219,38 @@ struct BTContext
   /// area. Worst case an area gets kMaxStartBlockedAttempts + kMaxAreaAttempts
   /// dispatches before retirement.
   static constexpr uint32_t kMaxStartBlockedAttempts = 3;
+
+  // -----------------------------------------------------------------------
+  // Guard-halted passes (field 2026-09-07 / 2026-09-08)
+  // -----------------------------------------------------------------------
+  /// Set by MarkGuardHalt from a Root guard handler (SensorFaultHandler,
+  /// LocalizationDegradedHandler) while that guard is halting the tree.
+  /// Halting the Root interrupts FollowStrip ("area N interrupted at pose K —
+  /// resume cursor saved"), and the next GetNextUnmowedArea dispatch of that
+  /// area used to charge the re-dispatch to the no-progress budget exactly as
+  /// if the pass had aborted at an obstacle. With an intermittent LiDAR serial
+  /// link IsScanStale halted the Root every few seconds: three scan-stale
+  /// halts in 25 s burnt the five kMaxAreaAttempts, the mow "completed" with
+  /// ZERO swaths and the robot sat on the lawn. LocalizationGuard pauses did
+  /// the same. A transient sensor / localization fault must PAUSE a mow,
+  /// never fail it — the pass never had a chance to make progress.
+  ///
+  /// Carries the guard's reason string ("scan_stale", "localization_degraded")
+  /// for the log line. Consumed (reset) by the next GetNextUnmowedArea
+  /// dispatch: it describes ONE finished pass. Cleared by EndSession.
+  std::optional<std::string> guard_halted_reason;
+  /// Per-area count of dispatches that were EXEMPTED from the no-progress
+  /// retirement counter because the previous pass was interrupted by a guard.
+  /// Cleared by EndSession.
+  std::map<uint32_t, uint32_t> area_guard_halt_count;
+  /// Maximum guard-halted dispatches exempted from area_attempt_count per
+  /// area. Deliberately GENEROUS: a permanently dead sensor is not this cap's
+  /// problem — the guard itself holds the whole tree (blade off, stopped) for
+  /// as long as the fault lasts, so nothing dispatches at all. The cap only
+  /// bounds the FLAPPING case (a fault that clears and re-trips every few
+  /// seconds) so a pathological flap cannot re-dispatch the same area forever;
+  /// past it the normal no-progress budget takes over and the area retires.
+  static constexpr uint32_t kMaxGuardHaltedPasses = 200;
 
   // -----------------------------------------------------------------------
   // Start-pose escape motion (issue #487, follow-up to the above)
@@ -404,7 +455,7 @@ struct BTContext
   /// Operator-configured drive speeds (m/s), sourced from mowgli_robot.yaml
   /// by behavior_tree_node and applied to the live controllers by SetNavMode:
   /// transit_speed → FollowPath.desired_linear_vel (RPP transit), mowing_speed
-  /// → FollowCoveragePath.vx_max (MPPI coverage). Defaults match the shipped
+  /// → FollowCoveragePath.speed_fast (FTC coverage). Defaults match the shipped
   /// template; SetNavMode halves them in "degraded" mode (floored at the host
   /// min-drive clamp).
   double transit_speed{0.25};
@@ -493,6 +544,13 @@ struct BTContext
   /// existed and then died (LiDAR container crash, filter-chain death).
   std::chrono::steady_clock::time_point last_scan_time{};
 
+  /// Nav2 behaviour tree handed to NavigateToPose for COVERAGE transits
+  /// (trees/navigate_to_pose_transit.xml next to the main tree: selects
+  /// transit_goal_checker, final heading ignored). Empty = Nav2 default tree
+  /// (stopped_goal_checker, which opennav_docking still needs). Set once by
+  /// behavior_tree_node from the main tree's directory.
+  std::string transit_tree_xml;
+
   // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end
   // -----------------------------------------------------------------------
@@ -568,7 +626,7 @@ struct BTContext
   /// rings first, then straight serpentine swaths). Populated by
   /// PlanCoverageArea; FollowStrip dispatches ONE segment per
   /// FollowCoveragePath goal (RotationShim pivots in place at each segment
-  /// start, MPPI tracks the straight swath / smooth ring). Replaces the
+  /// start, FTC tracks the straight swath / smooth ring). Replaces the
   /// heading-jump re-segmentation heuristic, which silently failed on smooth
   /// turn arcs (field 2026-06-12: one 3982-pose "swath").
   std::vector<nav_msgs::msg::Path> current_strip_segments;
@@ -576,7 +634,7 @@ struct BTContext
   /// Hole-free continuous SUB-PATHS from the coverage server (issue #333), in
   /// drive order. A forward turn-around connector can't route around a large
   /// interior obstacle, so the continuous path is split where it would cross a
-  /// hole; FollowStrip drives each sub-path with MPPI and bridges the gap
+  /// hole or heading discontinuity; FollowStrip drives each sub-path with FTC and bridges the gap
   /// between consecutive sub-paths with a blade-off, costmap-aware Nav2 transit
   /// (its existing >kSegmentTransitGap behaviour) that routes around the
   /// obstacle. Exactly ONE entry for a hole-free field (== current_strip_path).
@@ -651,6 +709,17 @@ inline void clearSingleAreaMode(BTContext& ctx)
 {
   ctx.single_area_target.reset();
   ctx.target_area_index.reset();
+}
+
+/// True for the HighLevelStatus state_name values published while the tree
+/// is parked in a battery charge hold: BatteryDockAndResume's "CHARGING" and
+/// CriticalBatteryDock's "CRITICAL_BATTERY_CHARGING" (main_tree.xml). A
+/// COMMAND_START received in one of these states is an operator asking to
+/// resume the mow before the pack reaches battery_full_pct — see
+/// BTContext::manual_resume_requested.
+inline bool isChargeHoldState(const std::string& state_name)
+{
+  return state_name == "CHARGING" || state_name == "CRITICAL_BATTERY_CHARGING";
 }
 
 }  // namespace mowgli_behavior

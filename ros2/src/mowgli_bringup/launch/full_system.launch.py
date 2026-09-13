@@ -350,6 +350,14 @@ def generate_launch_description() -> LaunchDescription:
                     robot_params.get("battery_critical_recovery_percent", 30.0)
                 )
             },
+            # Floor for an operator-forced resume out of a mid-session charge
+            # hold (Play pressed while CHARGING / CRITICAL_BATTERY_CHARGING).
+            # Must exceed battery_low_percent (the node clamps it if not).
+            {
+                "battery_manual_resume_percent": float(
+                    robot_params.get("battery_manual_resume_percent", 30.0)
+                )
+            },
         ],
     )
 
@@ -398,6 +406,10 @@ def generate_launch_description() -> LaunchDescription:
                     float(robot_params.get("chassis_width", 0.40)) / 2.0))},
             {"max_obstacle_avoidance_distance":
                 float(robot_params.get("max_obstacle_avoidance_distance", 2.0))},
+            # GUI toggle for session-only dig proposals; detection/recovery
+            # remain owned by hardware_bridge regardless of this map setting.
+            {"dig_obstacle_enabled": bool(
+                robot_params.get("dig_obstacle_enabled", True))},
             # Extra LETHAL margin grown around drawn obstacle polygons in the
             # keepout mask — mirrors coverage_server.obstacle_margin (injected
             # by navigation.launch.py) so the transit planner and the swath
@@ -416,6 +428,16 @@ def generate_launch_description() -> LaunchDescription:
                 robot_params.get("lethal_outside_areas", True))},
             {"enforce_boundary_margin_m": float(
                 robot_params.get("enforce_boundary_margin_m", 0.40))},
+            # Transit boundary clearance: a SOFT mid-cost nudge (never lethal)
+            # in the GLOBAL costmap that biases point-to-point TRANSIT
+            # planning away from the recorded edge when an alternative
+            # exists — coverage tracks the F2C path against the LOCAL
+            # costmap instead and is unaffected (costmap_filters.cpp). See
+            # mowgli_robot.yaml for why this must stay soft, never lethal.
+            {"boundary_inner_margin_m": float(
+                robot_params.get("boundary_inner_margin_m", 0.20))},
+            {"dock_inner_margin_exempt_radius_m": float(
+                robot_params.get("dock_inner_margin_exempt_radius_m", 2.5))},
             # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for
             # both the mark_cells_mowed stamp radius / sliver detection here AND
             # coverage_server.operation_width (injected by navigation.launch.py).
@@ -699,6 +721,12 @@ def generate_launch_description() -> LaunchDescription:
                     robot_params.get("led_charge_full_percent", 99.0)
                 ),
                 "led_idle_scale": float(robot_params.get("led_idle_scale", 0.10)),
+                "led_charge_complete_timeout_s": float(
+                    robot_params.get("led_charge_complete_timeout_s", 600.0)
+                ),
+                "led_charge_complete_dim_scale": float(
+                    robot_params.get("led_charge_complete_dim_scale", 0.0)
+                ),
                 "led_spi_speed_hz": int(
                     robot_params.get("led_spi_speed_hz", 2400000)
                 ),
