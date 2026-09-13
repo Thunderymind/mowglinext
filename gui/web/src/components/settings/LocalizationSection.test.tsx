@@ -46,6 +46,12 @@ describe("LocalizationSection LiDAR map anchor toggles", () => {
         expect(switchFor(/^LiDAR map anchor$/)).not.toBeDisabled();
     });
 
+    it("locks the anchor switch while LiDAR itself is off (launch forces the anchor off)", () => {
+        renderSection({lidar_enabled: false, use_lidar_map_anchor: true, lidar_anchor_shadow_mode: true});
+        expect(switchFor(/^LiDAR map anchor$/)).toBeDisabled();
+        expect(switchFor(/^Anchor shadow mode$/)).not.toBeDisabled();
+    });
+
     it("unlocks the shadow-mode switch once the anchor is on", () => {
         renderSection({lidar_enabled: true, use_lidar_map_anchor: true});
         expect(switchFor(/^Anchor shadow mode$/)).not.toBeDisabled();

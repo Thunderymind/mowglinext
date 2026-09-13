@@ -364,6 +364,10 @@ private:
   // Set true between DisablingKeepout and ReEnablingKeepout — onHalted
   // checks this to fire the safety re-enable.
   bool keepout_disabled_{false};
+  /// Bounded wait for the keepout-disable ack (Cyclone/ARM discovery is not
+  /// a reliable readiness signal, so the ack — not service_is_ready() — decides).
+  static constexpr double kToggleAckTimeoutSec = 5.0;
+  std::chrono::steady_clock::time_point toggle_sent_time_{};
   Phase phase_{Phase::WaitingForService};
 };
 

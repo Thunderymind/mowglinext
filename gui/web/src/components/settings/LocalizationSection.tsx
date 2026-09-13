@@ -35,6 +35,10 @@ const LIDAR_FACTOR_TOGGLES: Toggle[] = [
         title: "settingsLocalization.lidarMapAnchorTitle",
         summary: "settingsLocalization.lidarMapAnchorSummary",
         detail: "settingsLocalization.lidarMapAnchorDetail",
+        // The launch file ANDs this with lidar_enabled (lidar_gated()); lock
+        // the switch the same way so the GUI never shows an anchor "on" that
+        // the robot forces off.
+        dependsOn: "lidar_enabled",
     },
     // Shadow mode only means something with the anchor on: it runs and
     // scores the filter under RTK Fixed without ever applying a factor.

@@ -76,7 +76,7 @@
 | **`src/hooks/` — topic hooks** (thin `useTopic` wrappers unless noted) | | |
 | `useGPS` `usePose` `useStatus` `usePower` `useImu` `useWheelTicks` `useEmergency` `useDockingSensor` | 4 each | topic keys `gps`, `pose`, `status`, `power`, `imu`, `ticks`, `emergency`, `dockingSensor` |
 | `useMowingMap.ts` / `useMowProgress.ts` | 10/12 | `map`; `mowProgress` (client throttle 1000 ms on top of the backend's 500 ms cap) |
-| `useFusionOdom.ts` / `useIcpOdom.ts` / `useWheelOdom.ts` | 31/11/27 | `fusionRaw` (throttle 200 ms), `icpOdom`, `wheelOdom` |
+| `useFusionOdom.ts` / `useWheelOdom.ts` | 31/27 | `fusionRaw` (throttle 200 ms), `wheelOdom` |
 | `useCogHeading.ts` / `useMagYaw.ts` | 15/14 | `cogHeading`, `magYaw` — both `withTimestamp` for staleness display |
 | `useCoverageResumeAvailable.ts` | 12 | `coverageResumeAvailable` (`std_msgs/Bool` → `select` unwraps `.data`) |
 | `useHighLevelStatus.ts` / `useDiagnostics.ts` / `useFusionGraphDiagnostics.ts` / `useGnssStatus.ts` / `useBTLog.ts` / `useDockCalibration.ts` / `useRobotDescription.ts` | 19/73/67/42/66/95/189 | `useWS`-based (not `useTopic`): `highLevelStatus`, `diagnostics` (accumulates by name, `DIAGNOSTIC_STALE_MS = 30_000`), `fusionDiag`, `gnssStatus` (+ `/diagnostics` fallback), `btLog`, `dockCalibrationStatus`, `robotDescription` (URDF → robot silhouette geometry) |
@@ -134,7 +134,7 @@ Wire: client sends `{"op":"subscribe"|"unsubscribe","topic":"<key>"}` as JSON te
 | `gps`, `pose` | `useGPS`, `usePose` | Diagnostics (`useGPS`), `RobotComponentEditor` (`usePose`); MapPage subscribes `pose` inline in `useMapStreams` |
 | `gnssStatus` | `useGnssStatus` | dashboard, Diagnostics, Onboarding |
 | `map`, `mowProgress`, `lidarMap`, `path`, `plan`, `lidar`, `obstacles`, `recordingTrajectory` | `useMowingMap`, `useMowProgress`, rest inline in `useMapStreams` (`mowProgress` + `lidarMap` through `useGridImageStream`; once a `lidarMap` image exists the raw `lidar` points are dropped and their layer unmounted) | MapPage (all seven), SchedulePage (`map`, inline `useWS`), dashboard + `ReadinessStep` (`useMowingMap`), dashboard mini-map (`useMowProgress`) |
-| `fusionRaw`, `wheelOdom` | `useFusionOdom`, `useWheelOdom` | dashboard mini-map pose; Diagnostics. `useIcpOdom` (`icpOdom`) exists but currently has NO consumer |
+| `fusionRaw`, `wheelOdom` | `useFusionOdom`, `useWheelOdom` | dashboard mini-map pose; Diagnostics |
 | `imu`, `cogHeading`, `magYaw`, `ticks`, `dockingSensor` | `useImu`, `useCogHeading`, `useMagYaw`, `useWheelTicks`, `useDockingSensor` | Diagnostics heading-sources + sensors panels; `useDockingSensor` only in `DriveMotorSection` |
 | `diagnostics`, `fusionDiag`, `btLog` | `useDiagnostics`, `useFusionGraphDiagnostics`, `useBTLog` | Diagnostics (raw array, fusion_graph card, BT state graph) |
 | `dockCalibrationStatus`, `robotDescription` | `useDockCalibration`, `useRobotDescription` | DockCalibrationCard; map robot silhouette |

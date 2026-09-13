@@ -76,9 +76,9 @@ The Diagnostics page's *Localization* tab always carries a dedicated **Fusion Gr
 - **LiDAR map anchor** — tile/map state, particle-filter calls, candidate verdicts and applied factor count.
 - **LiDAR compute** — filter time and map-build time, useful for checking CPU use.
 - **Pose σ** — `√((cov_xx + cov_yy)/2)` in centimetres, with the yaw σ in degrees underneath. Colour-coded green / amber / red.
-- **ICP keyframes** and **ICP rejects** — keyframe count with its match rate, and the reject breakdown (RMSE / inliers / sanity / divergence).
-- **Attach rate** — the share of received scans that actually became graph factors — and **hand push** (wheels stationary but the gyro disagrees), with the count of GPS fixes rejected as wrong-fix.
-- **Save graph** / **Clear graph** buttons — call the corresponding `~/save_graph` / `~/clear_graph` services on `fusion_graph_node`. Save persists the graph to `/ros2_ws/maps/fusion_graph.{graph,scans,meta}`; Clear wipes iSAM2 and waits for the next pose seed to re-initialize.
+- **LiDAR anchor** tiles — anchor state, applied factors, hit ratio, effective σ floor and shadow p50/p90 (scan-to-scan ICP and loop closures were removed; the anchor only acts after a full GNSS outage).
+- **Hand push** (wheels stationary but the gyro disagrees), with the count of GPS fixes rejected as wrong-fix.
+- **Save graph** / **Clear graph** buttons — call the corresponding `~/save_graph` / `~/clear_graph` services on `fusion_graph_node`. Save persists the graph to `/ros2_ws/maps/fusion_graph.{graph,meta} plus the `.lidartiles/` directory (was {graph,scans,meta}`; Clear wipes iSAM2 and waits for the next pose seed to re-initialize.
 
 The card tags itself *stale* when the last `/fusion_graph/diagnostics` sample is more than 5 s old.
 

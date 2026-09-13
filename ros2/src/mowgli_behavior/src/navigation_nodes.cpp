@@ -396,8 +396,9 @@ void NavigateInsideBoundary::RequestKeepoutEnable(bool enabled)
   // being halted / destroyed shortly after.
   if (!keepout_toggle_client_)
     return;
-  if (!keepout_toggle_client_->service_is_ready())
-    return;
+  // Do NOT gate on service_is_ready(): on Cyclone/ARM discovery can report the
+  // service as not ready long after it exists (see the parameter-client note
+  // above). A request to an absent service just never gets a reply.
   auto request = std::make_shared<ToggleFilterSrv::Request>();
   request->data = enabled;
   (void)keepout_toggle_client_->async_send_request(request);
@@ -471,11 +472,13 @@ BT::NodeStatus NavigateInsideBoundary::onRunning()
     // accepted but does not toggle the filter.
     if (!keepout_toggle_client_->service_is_ready())
     {
-      RCLCPP_ERROR(ctx->node->get_logger(),
-                   "NavigateInsideBoundary: keepout toggle service unavailable — "
-                   "refusing recovery motion");
-      return BT::NodeStatus::FAILURE;
+      // Discovery-only signal, unreliable on Cyclone/ARM: warn and still send
+      // the request. The ack wait below (kToggleAckTimeoutSec) is what decides.
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "NavigateInsideBoundary: keepout toggle service not discovered yet — "
+                  "sending the disable request anyway and waiting for its ack");
     }
+    toggle_sent_time_ = std::chrono::steady_clock::now();
     auto request = std::make_shared<ToggleFilterSrv::Request>();
     request->data = false;
     // Treat the filter as potentially disabled as soon as the request is in
@@ -498,7 +501,21 @@ BT::NodeStatus NavigateInsideBoundary::onRunning()
   {
     if (toggle_filter_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
-      return BT::NodeStatus::RUNNING;
+      const double waited =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - toggle_sent_time_)
+              .count();
+      if (waited < kToggleAckTimeoutSec)
+      {
+        return BT::NodeStatus::RUNNING;
+      }
+      // No ack: the filter may or may not be disabled. Do not move; ask for
+      // re-enable (harmless if it never was disabled) and fail the recovery.
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "NavigateInsideBoundary: no ack from the keepout toggle service after %.0fs — "
+                   "refusing recovery motion",
+                   waited);
+      pending_nav_result_ = BT::NodeStatus::FAILURE;
+      return BeginReEnableKeepout();
     }
     auto response = toggle_filter_future_.get();
     if (!response || !response->success)
@@ -648,15 +665,18 @@ BT::NodeStatus NavigateInsideBoundary::BeginReEnableKeepout()
     // nothing to re-enable. Return the latched Nav2 outcome directly.
     return pending_nav_result_;
   }
-  if (!keepout_toggle_client_ || !keepout_toggle_client_->service_is_ready())
+  if (!keepout_toggle_client_)
   {
     RCLCPP_WARN(ctx->node->get_logger(),
-                "NavigateInsideBoundary: cannot re-enable keepout — toggle service unavailable; "
+                "NavigateInsideBoundary: cannot re-enable keepout — no toggle client; "
                 "boundary protection requires operator intervention");
     pending_nav_result_ = BT::NodeStatus::FAILURE;
     keepout_disabled_ = false;
     return pending_nav_result_;
   }
+  // service_is_ready() is deliberately not consulted here either: a Nav2 run
+  // that brought the robot back inside must not be reported as FAILURE just
+  // because discovery lags; the request is sent and its reply checked.
   auto request = std::make_shared<ToggleFilterSrv::Request>();
   request->data = true;
   toggle_filter_future_ = keepout_toggle_client_->async_send_request(request).share();

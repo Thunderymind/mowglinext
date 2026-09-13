@@ -1863,6 +1863,12 @@ bool FTCController::reverseEscapeOrWait(const std::string& reason,
     obstacle_waiting_ = false;
     obstacle_wait_start_.reset();
     obstacle_followable_time_ = 0.0;
+    // The post-hold angular slew (obstacle_restart_angular_acceleration) is
+    // only meant for the probation after a hold. Its other reset lives in the
+    // wait branch we just left, so clear it here or it stays armed for the
+    // rest of the sub-path, including PRE_ROTATE pivots.
+    obstacle_recovery_active_ = false;
+    last_recovery_angular_cmd_ = 0.0;
     return true;  // caller returns; computeVelocityCommands emits the reverse.
   }
 

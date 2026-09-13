@@ -312,7 +312,12 @@ mowgli:
     # support/spread/DR validation. Requires lidar_enabled. Persistent tiles
     # cover large gardens; only the local window is loaded and published on
     # /fusion_graph/lidar_map. Sparse scenery contributes no reliable anchor.
-    use_lidar_map_anchor: true
+    # Default OFF (2026-09-13): the anchor never added a factor in four field
+    # sessions under RTK-Fixed/short Float, and its runtime cost (particle
+    # filter + likelihood-field rebuilds inline on fusion_graph's executor,
+    # map learning ungated on pose uncertainty) is still being reviewed.
+    # Turn it on per robot from Settings > Localization once those land.
+    use_lidar_map_anchor: false
     # lidar_anchor_shadow_mode: with the anchor enabled, ALSO run, score and
     # publish the particle filter under RTK-Fixed, never applying a factor —
     # /fusion_graph/lidar_anchor_candidate + diagnostics counters give the

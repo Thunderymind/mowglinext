@@ -193,6 +193,18 @@
           "default": false,
           "description": "Enable LiDAR. Sole source of truth for the ROS2 stack's LiDAR mode (the LIDAR_ENABLED env var is not read). Scan-to-map localization in fusion_graph_node is gated by this setting, so it cannot run without a scanner. Default false: this default MUST match robot_config_util.DEFAULT_LIDAR_ENABLED, because the settings backend prunes any value equal to its schema default -- with a default of true, switching LiDAR ON would be pruned away and the toggle would never persist."
         },
+        "use_lidar_map_anchor": {
+          "type": "boolean",
+          "title": "LiDAR map anchor",
+          "default": false,
+          "description": "Scan-to-map (Beluga) XY anchor factors from a persistent LiDAR occupancy map, applied only after a full GNSS outage. Default false (matches the template): the anchor is experimental and costly on the Pi; requires LiDAR enabled. Restart the ROS2 stack after changing."
+        },
+        "lidar_anchor_shadow_mode": {
+          "type": "boolean",
+          "title": "LiDAR anchor shadow mode",
+          "default": false,
+          "description": "With the anchor enabled, also run and score the particle filter under RTK Fixed without ever applying a factor (calibrates the adaptive sigma floor, costs CPU). Default false (matches the template)."
+        },
         "lidar_x": {
           "type": "number",
           "title": "LiDAR Offset X",
