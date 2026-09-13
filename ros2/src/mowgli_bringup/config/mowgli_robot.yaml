@@ -849,6 +849,11 @@ mowgli:
     led_low_battery_percent: 20.0  # below this, and not charging, the ring blinks red
     led_charge_full_percent: 99.0  # at or above this a charging ring goes steady green
     led_idle_scale: 0.10           # brightness of the dim idle ring, relative to led_brightness
+    led_charge_complete_timeout_s: 600.0  # steady full-green this long (e.g. left on the
+                                   # dock overnight) -> dim to led_charge_complete_dim_scale.
+                                   # 0 disables this and the ring stays full green forever.
+    led_charge_complete_dim_scale: 0.0    # brightness once charge-complete timeout elapses;
+                                   # 0 = off, small value = faint "still charged" glow
     led_spi_speed_hz: 2400000      # 3 SPI bits per WS2812 bit = 1.25 us. Do NOT retune
                                    # without re-reading ws2812_encoder.hpp — the symbol
                                    # table is derived from this exact clock.

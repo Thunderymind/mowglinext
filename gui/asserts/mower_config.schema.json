@@ -819,6 +819,21 @@
           "maximum": 1.0,
           "description": "Brightness of the dim idle ring, relative to the global brightness above."
         },
+        "led_charge_complete_timeout_s": {
+          "type": "number",
+          "title": "Charge Complete Dim Delay",
+          "default": 600.0,
+          "minimum": 0.0,
+          "description": "After the ring has shown steady full-green \"charge complete\" for this many seconds (10 minutes by default -- e.g. left on the dock overnight), dim it to the Charge Complete Brightness below. 0 disables this and the ring stays full green indefinitely. Unplugging, or the level dropping back below the Charge Complete Threshold, restores full brightness immediately."
+        },
+        "led_charge_complete_dim_scale": {
+          "type": "number",
+          "title": "Charge Complete Brightness",
+          "default": 0.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Brightness scale applied once the Charge Complete Dim Delay above has elapsed. 0 (default) turns the ring off; a small non-zero value keeps a faint green glow as an at-a-glance \"still charged\" indicator instead."
+        },
         "led_spi_speed_hz": {
           "type": "integer",
           "title": "SPI Clock",

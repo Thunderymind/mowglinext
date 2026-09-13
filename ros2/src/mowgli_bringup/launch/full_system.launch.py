@@ -711,6 +711,12 @@ def generate_launch_description() -> LaunchDescription:
                     robot_params.get("led_charge_full_percent", 99.0)
                 ),
                 "led_idle_scale": float(robot_params.get("led_idle_scale", 0.10)),
+                "led_charge_complete_timeout_s": float(
+                    robot_params.get("led_charge_complete_timeout_s", 600.0)
+                ),
+                "led_charge_complete_dim_scale": float(
+                    robot_params.get("led_charge_complete_dim_scale", 0.0)
+                ),
                 "led_spi_speed_hz": int(
                     robot_params.get("led_spi_speed_hz", 2400000)
                 ),
