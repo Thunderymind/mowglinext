@@ -820,6 +820,81 @@ void MapServerNode::on_set_docking_point(
 
   if (req->use_gps_position)
   {
+    // (2b) — Yaw ACCURACY cross-check, scoped to this GPS-position-averaging
+    // path specifically. Gate (3) above only proves the fused yaw was
+    // STABLE during capture, never that it was ACCURATE -- and the
+    // /gps/pose_cov samples about to be averaged below are already
+    // lever-arm-corrected (in navsat_to_absolute_pose_node) by rotating the
+    // antenna offset by whatever the fused yaw is AT EACH SAMPLE. A
+    // stable-but-biased fused yaw (e.g. a settled-wrong magnetometer lock)
+    // therefore corrupts the averaged position by
+    // lever_arm_length * sin(yaw_bias) without ever tripping gate (3) --
+    // issue #446's reported ~10 cm lateral dock-position error is
+    // consistent with exactly this (~19 degrees of bias at the default
+    // 0.3 m forward GPS offset). Cross-check against /imu/cog_heading: an
+    // independent, GPS-motion-derived yaw (cog_to_imu_node) that never
+    // depends on magnetometer/gyro lock. Fail closed, matching every other
+    // gate here, when no sufficiently fresh/confident COG sample exists to
+    // check against, or when it disagrees with the fused yaw beyond
+    // dock_set_yaw_bias_max_rad_.
+    {
+      double tf_yaw = 0.0;
+      {
+        std::lock_guard<std::mutex> lk(recent_yaws_mutex_);
+        // Gate (3) above already required recent_yaws_.size() >=
+        // yaw_convergence_min_samples_, so back() is safe here.
+        tf_yaw = recent_yaws_.back().second;
+      }
+      std::optional<double> cog_yaw;
+      double cog_age_s = std::numeric_limits<double>::infinity();
+      double cog_sigma_rad = std::numeric_limits<double>::infinity();
+      {
+        std::lock_guard<std::mutex> lk(last_cog_yaw_mutex_);
+        if (last_cog_yaw_rad_.has_value())
+        {
+          cog_yaw = last_cog_yaw_rad_;
+          cog_age_s = (now() - last_cog_yaw_time_).seconds();
+          cog_sigma_rad = std::sqrt(std::max(last_cog_yaw_variance_rad2_, 0.0));
+        }
+      }
+      if (!cog_yaw.has_value() || cog_age_s > dock_set_cog_max_age_s_ ||
+          cog_sigma_rad > dock_set_cog_max_sigma_rad_)
+      {
+        res->success = false;
+        RCLCPP_WARN(get_logger(),
+                    "set_docking_point rejected: no reliable /imu/cog_heading available "
+                    "to cross-check the calibration yaw (have_sample=%s, age=%.1fs "
+                    "(max %.1fs), σ=%.1f° (max %.1f°)). Drive the robot forward a few "
+                    "metres, then return to the dock and retry — this confirms the "
+                    "heading from independent GPS motion instead of trusting a "
+                    "magnetometer/gyro lock that could be stable but wrong.",
+                    cog_yaw.has_value() ? "true" : "false",
+                    cog_age_s,
+                    dock_set_cog_max_age_s_,
+                    cog_sigma_rad * 180.0 / M_PI,
+                    dock_set_cog_max_sigma_rad_ * 180.0 / M_PI);
+        return;
+      }
+      const double bias_rad =
+          std::abs(std::atan2(std::sin(tf_yaw - *cog_yaw), std::cos(tf_yaw - *cog_yaw)));
+      if (bias_rad > dock_set_yaw_bias_max_rad_)
+      {
+        res->success = false;
+        RCLCPP_WARN(get_logger(),
+                    "set_docking_point rejected: fused yaw disagrees with the independent "
+                    "COG heading by %.1f° (fused %.1f°, COG %.1f°, max %.1f°) — the fused "
+                    "yaw looks stable but is likely biased (e.g. a settled-wrong "
+                    "magnetometer lock), which would corrupt the averaged GPS position via "
+                    "the lever-arm correction. Drive the robot forward a few metres to "
+                    "re-anchor heading from GPS motion, then retry.",
+                    bias_rad * 180.0 / M_PI,
+                    tf_yaw * 180.0 / M_PI,
+                    *cog_yaw * 180.0 / M_PI,
+                    dock_set_yaw_bias_max_rad_ * 180.0 / M_PI);
+        return;
+      }
+    }
+
     double gps_x_mean = 0.0;
     double gps_y_mean = 0.0;
     {

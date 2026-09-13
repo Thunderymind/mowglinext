@@ -303,6 +303,31 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         }
       });
 
+  // Independent, motion-derived yaw cross-check for on_set_docking_point's
+  // gate (2b) -- see last_cog_yaw_rad_ in the header for why this exists
+  // (issue #446: a stable-but-biased fused yaw can pass the yaw-convergence
+  // gate and still corrupt the /gps/pose_cov lever-arm correction averaged
+  // above, producing exactly the reported ~10 cm lateral dock offset).
+  dock_set_cog_max_age_s_ =
+      declare_parameter<double>("dock_set_cog_max_age_s", dock_set_cog_max_age_s_);
+  dock_set_cog_max_sigma_rad_ =
+      declare_parameter<double>("dock_set_cog_max_sigma_rad", dock_set_cog_max_sigma_rad_);
+  dock_set_yaw_bias_max_rad_ =
+      declare_parameter<double>("dock_set_yaw_bias_max_rad", dock_set_yaw_bias_max_rad_);
+  cog_heading_sub_ =
+      create_subscription<sensor_msgs::msg::Imu>("/imu/cog_heading",
+                                                 rclcpp::SensorDataQoS(),
+                                                 [this](sensor_msgs::msg::Imu::ConstSharedPtr msg)
+                                                 {
+                                                   const auto& q = msg->orientation;
+                                                   std::lock_guard<std::mutex> lk(
+                                                       last_cog_yaw_mutex_);
+                                                   last_cog_yaw_rad_ = 2.0 * std::atan2(q.z, q.w);
+                                                   last_cog_yaw_variance_rad2_ =
+                                                       msg->orientation_covariance[8];
+                                                   last_cog_yaw_time_ = now();
+                                                 });
+
   // ── Services ─────────────────────────────────────────────────────────────
   save_map_srv_ = create_service<std_srvs::srv::Trigger>(
       "~/save_map",

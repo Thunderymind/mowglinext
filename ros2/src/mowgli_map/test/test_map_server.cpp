@@ -33,6 +33,7 @@
 #include <mowgli_interfaces/srv/clear_obstacle.hpp>
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
+#include <mowgli_interfaces/srv/set_docking_point.hpp>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test fixture — creates a MapServerNode with a small 10×10 m map
@@ -1583,4 +1584,178 @@ TEST_F(DigProposalTest, LegacyAreasFileWithoutObstacleIdentityStillLoads)
   const auto area = fetch_area(0);
   ASSERT_EQ(area.obstacles.size(), 1U);
   EXPECT_NEAR(area.obstacles[0].points[0].x, -0.5, 1e-3);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dock calibration gate (2b): yaw-ACCURACY cross-check against
+// /imu/cog_heading (issue #446). Gate (3), covered implicitly by
+// arm_gates_one_through_three() below, only proves the fused yaw was STABLE
+// while a GPS-averaged dock position is captured — never that it was
+// ACCURATE. A settled-wrong magnetometer lock passes that gate fine while
+// silently biasing the lever-arm-corrected /gps/pose_cov average. These tests
+// exercise the independent cross-check that catches exactly that case.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class DockCalibrationGateTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 10.0);
+    opts.append_parameter_override("map_size_y", 10.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+
+  void TearDown() override
+  {
+    node_.reset();
+  }
+
+  /// Satisfies gates (1) is_charging, (2) GPS accuracy, and (3) yaw
+  /// convergence, so a test only needs to vary gate (2b)'s COG state.
+  /// `yaw_rad` is the fused yaw the robot has "converged" on. The GPS sample
+  /// pushed to satisfy gate (2) also joins the averaging window a test
+  /// exercising the GPS-averaging path draws from — pass the same
+  /// `gps_x`/`gps_y` used by any further push_gps_pose_cov_for_test() calls
+  /// in that test so the average stays predictable.
+  void arm_gates_one_through_three(double yaw_rad, double gps_x = 1.23, double gps_y = 4.56)
+  {
+    node_->set_charging_status_for_test(true);
+    node_->push_gps_pose_cov_for_test(gps_x, gps_y, 0.01);
+    node_->push_converged_yaw_for_test(yaw_rad, 20);
+  }
+
+  static mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr make_gps_capture_request()
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+    req->use_gps_position = true;
+    req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
+    return req;
+  }
+
+  std::shared_ptr<mowgli_map::MapServerNode> node_;
+};
+
+TEST_F(DockCalibrationGateTest, RejectsWhenNoCogHeadingEverReceived)
+{
+  arm_gates_one_through_three(0.0);
+  // No set_cog_heading_for_test call — last_cog_yaw_rad_ stays unset.
+
+  const auto req = make_gps_capture_request();
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_FALSE(node_->docking_pose_set_for_test());
+}
+
+TEST_F(DockCalibrationGateTest, RejectsWhenCogHeadingIsStale)
+{
+  arm_gates_one_through_three(0.0);
+  node_->set_cog_heading_for_test(0.0, 0.01, /*age_s=*/60.0);  // default max age is 30 s
+
+  const auto req = make_gps_capture_request();
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+}
+
+TEST_F(DockCalibrationGateTest, RejectsWhenCogHeadingIsTooUncertain)
+{
+  arm_gates_one_through_three(0.0);
+  node_->set_cog_heading_for_test(0.0, /*sigma_rad=*/0.5, 0.0);  // default max sigma is 0.15 rad
+
+  const auto req = make_gps_capture_request();
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+}
+
+TEST_F(DockCalibrationGateTest, RejectsWhenFusedYawDisagreesWithCogHeading)
+{
+  // 0.30 rad (~17°) bias — comfortably past the default 0.15 rad threshold,
+  // and in the range issue #446's reported ~10 cm lateral offset is
+  // consistent with at the default 0.3 m forward GPS lever arm.
+  arm_gates_one_through_three(0.30);
+  node_->set_cog_heading_for_test(0.0, 0.01, 0.0);
+
+  const auto req = make_gps_capture_request();
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_FALSE(node_->docking_pose_set_for_test());
+}
+
+TEST_F(DockCalibrationGateTest, AcceptsAcrossTheAngleWrapBoundary)
+{
+  // Fused yaw just under +π, COG heading just over -π — the same heading,
+  // wrapped the other way. A naive (unwrapped) subtraction would see a
+  // ~6.26 rad disagreement and wrongly reject; the true disagreement is
+  // ~0.02 rad and must be accepted.
+  const double just_under_pi = M_PI - 0.01;
+  const double just_over_neg_pi = -M_PI + 0.01;
+  arm_gates_one_through_three(just_under_pi, 1.0, 2.0);
+  node_->set_cog_heading_for_test(just_over_neg_pi, 0.01, 0.0);
+  for (int i = 0; i < 9; ++i)
+  {
+    node_->push_gps_pose_cov_for_test(1.0, 2.0, 0.01);
+  }
+
+  const auto req = make_gps_capture_request();
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_TRUE(res->success);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 1.0, 1e-6);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, 2.0, 1e-6);
+}
+
+TEST_F(DockCalibrationGateTest, AcceptsAndCapturesAveragedGpsWhenYawsAgree)
+{
+  arm_gates_one_through_three(0.2, 3.0, -1.0);
+  node_->set_cog_heading_for_test(0.2, 0.01, 0.0);
+  for (int i = 0; i < 9; ++i)
+  {
+    node_->push_gps_pose_cov_for_test(3.0, -1.0, 0.01);
+  }
+
+  const auto req = make_gps_capture_request();
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_TRUE(res->success);
+  EXPECT_TRUE(node_->docking_pose_set_for_test());
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 3.0, 1e-6);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, -1.0, 1e-6);
+}
+
+TEST_F(DockCalibrationGateTest, ManualPositionSetIsNotSubjectToTheCogGate)
+{
+  // use_gps_position=false is the operator-driven map-drag path — gate (2b)
+  // is scoped to the GPS-averaging path only (area_manager.cpp), so a manual
+  // set must succeed with no COG sample at all.
+  node_->set_charging_status_for_test(true);
+  node_->push_gps_pose_cov_for_test(1.0, 1.0, 0.01);
+  node_->push_converged_yaw_for_test(0.0, 20);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = false;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::REQUEST;
+  req->docking_pose.position.x = 5.0;
+  req->docking_pose.position.y = 6.0;
+  req->docking_pose.orientation.w = 1.0;
+  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
+  node_->set_docking_point_for_test(req, res);
+
+  EXPECT_TRUE(res->success);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 5.0, 1e-6);
 }
