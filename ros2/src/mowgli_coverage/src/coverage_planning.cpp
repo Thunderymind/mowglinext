@@ -968,8 +968,11 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   auto ringCenterlineBoundary = [&](int ring_index)
   {
     std::vector<std::pair<double, double>> out;
-    f2c::types::Cells cells_at =
-        (n_rings > 0) ? hl.generateHeadlands(safe_cells, (ring_index + 0.5) * op_width) : safe_cells;
+    f2c::types::Cells cells_at = safe_cells;
+    if (n_rings > 0)
+    {
+      cells_at = hl.generateHeadlands(safe_cells, (ring_index + 0.5) * op_width);
+    }
     if (cells_at.size() > 0 && cells_at.area() > 1e-6)
     {
       std::size_t largest = 0;

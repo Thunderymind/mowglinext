@@ -1347,7 +1347,8 @@ TEST(CoveragePlanning, ConnectorMaxHeadlandPassesLimitsSwathTurnEnvelopeDepth)
     EXPECT_TRUE(plan.swath_turn_envelope.empty())
         << "limit=" << limit << " should not populate swath_turn_envelope";
     ASSERT_GE(plan.connector_clearance_boundary.size(), 3u);
-    EXPECT_NEAR(depthAt(plan.connector_clearance_boundary), 0.5 * kOpWidth, 0.01) << "limit=" << limit;
+    EXPECT_NEAR(depthAt(plan.connector_clearance_boundary), 0.5 * kOpWidth, 0.01)
+        << "limit=" << limit;
   }
 
   // A limit of 2 (of 3 rings) populates swath_turn_envelope at ring 1's
@@ -1432,8 +1433,16 @@ TEST(CoverageContinuousPath, SwathTurnEnvelopeNeverRelocatesRingZero)
   constexpr int kLimit = 2;  // P=2 of N=3 — the reviewer's reported case
   const auto cell = makeSquare(kSize);
 
-  const auto plan =
-      planBoustrophedon(cell, kOpWidth, 0.5, kRings, kInset, -1.0, kMinSwath, 0, kMinTurnRadius, kLimit);
+  const auto plan = planBoustrophedon(cell,
+                                      kOpWidth,
+                                      0.5,
+                                      kRings,
+                                      kInset,
+                                      -1.0,
+                                      kMinSwath,
+                                      0,
+                                      kMinTurnRadius,
+                                      kLimit);
   // Ring 0 (the outermost pass) is emitted first — see planBoustrophedon's
   // ring-loop comment. On a hole-free square each pass is exactly one loop,
   // but this test only needs ring 0 specifically, so it does not pin the
@@ -1506,8 +1515,16 @@ TEST(CoverageContinuousPath, ShippedGeometryTightSwathLimitFragmentsUTurns)
   constexpr int kLimit = 3;  // apron (3 - 0.5) * 0.16 = 0.40 m < ~0.49 m needed
   const auto cell = makeSquare(kSize);
 
-  const auto plan = planBoustrophedon(
-      cell, kOpWidth, 0.9, kRings, /*chassis_safety_inset=*/0.0, -1.0, kMinSwath, 0, kMinTurnRadius, kLimit);
+  const auto plan = planBoustrophedon(cell,
+                                      kOpWidth,
+                                      0.9,
+                                      kRings,
+                                      /*chassis_safety_inset=*/0.0,
+                                      -1.0,
+                                      kMinSwath,
+                                      0,
+                                      kMinTurnRadius,
+                                      kLimit);
   ASSERT_FALSE(plan.rings.empty());
   ASSERT_FALSE(plan.swaths.empty());
   ASSERT_GE(plan.swath_turn_envelope.size(), 3u) << "limit=3 of 5 should populate an envelope";
@@ -1555,8 +1572,16 @@ TEST(CoverageContinuousPath, ShippedGeometryP4OfFiveKeepsTurnAroundArcs)
   constexpr int kLimit = 4;  // apron (4 - 0.5) * 0.16 = 0.56 m >= ~0.49 m needed
   const auto cell = makeSquare(kSize);
 
-  const auto plan = planBoustrophedon(
-      cell, kOpWidth, 0.9, kRings, /*chassis_safety_inset=*/0.0, -1.0, kMinSwath, 0, kMinTurnRadius, kLimit);
+  const auto plan = planBoustrophedon(cell,
+                                      kOpWidth,
+                                      0.9,
+                                      kRings,
+                                      /*chassis_safety_inset=*/0.0,
+                                      -1.0,
+                                      kMinSwath,
+                                      0,
+                                      kMinTurnRadius,
+                                      kLimit);
   ASSERT_FALSE(plan.rings.empty());
   ASSERT_FALSE(plan.swaths.empty());
   ASSERT_GE(plan.swath_turn_envelope.size(), 3u) << "limit=4 of 5 should populate an envelope";
