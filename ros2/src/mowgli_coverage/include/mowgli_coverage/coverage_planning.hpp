@@ -82,35 +82,50 @@ struct BoustrophedonPlan
   // when no inset was applied (chassis_safety_inset <= 0) — the caller then
   // falls back to the raw boundary. (x, y) pairs, first == last.
   std::vector<std::pair<double, double>> safe_boundary;
-  // Closed outer ring the turn-around CONNECTORS/FILLETS must stay inside — the
-  // outermost headland RING's centerline (== safe_boundary eroded inward by
-  // op_width/2, == the recorded line eroded by chassis_safety_inset). This is
-  // TIGHTER than safe_boundary by op_width/2 and exists to close a spinning-blade
-  // safety gap: allInside() only tests the path CENTERLINE, so bounding it to
-  // safe_boundary let a turn-around arc's centerline reach op_width/2 FURTHER out
-  // than the outermost ring's, pushing the chassis (± robot_width/2) and blade
-  // that much past the operator boundary — and the excursion grew with the turn
-  // radius (buildConnector accepts the largest radius whose centerline still
-  // fits). Bounding connectors to the outermost-ring centerline instead makes a
-  // turn's footprint no worse than the perimeter ring the robot already drives.
-  // Deliberately op_width/2 (NOT robot_width/2): eroding by the chassis
-  // half-width would keep turns robot_width/2 − op_width/2 TIGHTER than the
-  // perimeter ring, forcing every edge turn-around below min_turning_radius →
-  // straight fallback → sub-path fragmentation. Empty when the erosion degenerates
-  // (tiny field) — the caller then falls back to safe_boundary. (x, y), first==last.
+  // Closed outer ring the turn-around CONNECTORS/FILLETS must stay inside —
+  // by default the outermost headland RING's centerline (== safe_boundary
+  // eroded inward by op_width/2, == the recorded line eroded by
+  // chassis_safety_inset). This is TIGHTER than safe_boundary by op_width/2
+  // and exists to close a spinning-blade safety gap: allInside() only tests
+  // the path CENTERLINE, so bounding it to safe_boundary let a turn-around
+  // arc's centerline reach op_width/2 FURTHER out than the outermost ring's,
+  // pushing the chassis (± robot_width/2) and blade that much past the
+  // operator boundary — and the excursion grew with the turn radius
+  // (buildConnector accepts the largest radius whose centerline still fits).
+  // Bounding connectors to the outermost-ring centerline instead makes a
+  // turn's footprint no worse than the perimeter ring the robot already
+  // drives. Deliberately op_width/2 (NOT robot_width/2): eroding by the
+  // chassis half-width would keep turns robot_width/2 − op_width/2 TIGHTER
+  // than the perimeter ring, forcing every edge turn-around below
+  // min_turning_radius → straight fallback → sub-path fragmentation. Empty
+  // when the erosion degenerates (tiny field) — the caller then falls back
+  // to safe_boundary. (x, y), first==last.
   //
-  // The invariant, uniform across both branches: a connector centerline may go
-  // NO FURTHER OUT than the outermost DRIVEN pass. WITH THE RING STAGE DISABLED
-  // (num_headland_passes < 0 → zero rings, issue #429) there is no ring 0 to
-  // erode to — the SWATH ENDS are then the outermost driven geometry and they
-  // lie exactly ON safe_boundary, so this ring is safe_boundary EXACTLY (no
-  // expansion, no erosion). Ends sitting on the ring are accepted by
-  // allInside()'s 1 mm on-edge tolerance, not by moving the polygon outward.
-  // Consequence to expect: with no mowed apron beyond the swath ends, a U-turn
-  // arc usually does NOT fit, so buildConnector falls back to a straight join —
-  // a pivot-through corner (which roundSharpCorners fillets where a
+  // `connector_max_headland_passes` (issue #497) moves this ring FURTHER
+  // INWARD, off ring 0: with N total headland rings and a limit of P < N
+  // passes, the boundary sits on ring (N − P)'s centerline instead of ring
+  // 0's — a P-pass-deep turn envelope measured from the mainland edge
+  // outward, leaving the outermost (N − P) rings' band untouched by any
+  // connector. This is what actually bounds how many headland passes a
+  // turn-around may CROSS (chassis_safety_inset/ring count alone do not — see
+  // planBoustrophedon's doc comment).
+  //
+  // The invariant, uniform across every branch: a connector centerline may go
+  // NO FURTHER OUT than the outermost pass it is PERMITTED to use. WITH THE
+  // RING STAGE DISABLED (num_headland_passes < 0 → zero rings, issue #429)
+  // there is no ring to erode to (and no passes to limit) — the SWATH ENDS
+  // are then the outermost driven geometry and they lie exactly ON
+  // safe_boundary, so this ring is safe_boundary EXACTLY (no expansion, no
+  // erosion). Ends sitting on the ring are accepted by allInside()'s 1 mm
+  // on-edge tolerance, not by moving the polygon outward. Consequence to
+  // expect: with no mowed apron beyond the swath ends, a U-turn arc usually
+  // does NOT fit, so buildConnector falls back to a straight join — a
+  // pivot-through corner (which roundSharpCorners fillets where a
   // min_turning_radius arc fits). That fallback still passes allInside, so
-  // conn_safe stays true and the sub-path does NOT fragment.
+  // conn_safe stays true and the sub-path does NOT fragment. A tight
+  // `connector_max_headland_passes` produces the exact same starved-apron
+  // fallback pattern one ring set further out — that is the intended
+  // trade-off of asking turns to stay off the outer band.
   std::vector<std::pair<double, double>> connector_clearance_boundary;
   // Inset ("grown") interior hole rings the continuous-path connectors and
   // corner fillets must stay OUT of, mirroring how safe_boundary is the ring
@@ -155,6 +170,23 @@ struct BoustrophedonPlan
 //                        Flips which side of the robot faces the boundary — set
 //                        it to keep a side-mounted blade on the cut side
 //                        (issue #335). Swaths/connectors follow the rings.
+//   connector_max_headland_passes (issue #497)
+//                        How many of the n_rings headland passes, counted from
+//                        the mainland edge OUTWARD, a turn-around connector is
+//                        permitted to cross. <= 0 or >= n_rings: UNLIMITED —
+//                        connectors may use the whole apron out to ring 0's
+//                        centerline (the pre-#497 default, unchanged). In
+//                        [1, n_rings): connector_clearance_boundary is moved
+//                        inward to ring (n_rings − value)'s centerline instead,
+//                        leaving the outermost (n_rings − value) rings' band a
+//                        no-turn zone — e.g. 3 rings configured with a limit of
+//                        2 keeps every U-turn off the outermost ring, trading a
+//                        higher straight-connector/split fallback rate (see
+//                        ConnectorStats) for staying further from the recorded
+//                        boundary during a turn. Has no effect with rings
+//                        disabled (n_rings == 0): there is no ring to bound to,
+//                        so connector_clearance_boundary stays safe_boundary
+//                        exactly, same as today.
 //
 // Geometry: safe = inset(field, chassis_safety_inset); rings are n_rings
 // concentric loops spaced op_width inside safe; mainland = inset(safe,
@@ -171,10 +203,12 @@ struct BoustrophedonPlan
 //
 // chassis_safety_inset is taken as-is here: the caller clamps it only at 0.0 (the
 // default rides the outermost ring ON the recorded line, chassis straddling by
-// design). The returned plan also carries connector_clearance_boundary (the
-// outermost-ring centerline) so the turn-around connectors can be bounded to the
-// perimeter ring rather than to safe_boundary — otherwise a turn arc's centerline
-// (and its swept footprint) rides op_width/2 past the rings toward the boundary.
+// design). The returned plan also carries connector_clearance_boundary (by
+// default the outermost-ring centerline, or a tighter ring when
+// connector_max_headland_passes caps it) so the turn-around connectors can be
+// bounded to a perimeter ring rather than to safe_boundary — otherwise a turn
+// arc's centerline (and its swept footprint) rides op_width/2 past the rings
+// toward the boundary.
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
@@ -183,7 +217,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double mow_angle_rad,
                                     double min_swath_length,
                                     int ring_direction = 0,
-                                    double min_turn_radius = 0.20);
+                                    double min_turn_radius = 0.20,
+                                    int connector_max_headland_passes = 0);
 
 // Per-plan accounting of how every segment-to-segment join was resolved by
 // buildConnector's radius-shrink search. Pure visibility — populating it

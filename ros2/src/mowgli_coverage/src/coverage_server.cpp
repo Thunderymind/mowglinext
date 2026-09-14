@@ -93,6 +93,15 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
   // (a deadband diff-drive may track a 0.30 m arc more smoothly than a 0.20 m
   // one); raise toward 0.30 if tight turns induce hesitation. Read live.
   declare_double("connector_turn_radius", 0.20);
+  // How many of the num_headland_passes rings a turn-around connector may
+  // CROSS, counted from the mainland edge outward (issue #497): configuring
+  // more headland passes than this leaves the outermost ones a no-turn zone,
+  // so U-turns stay further from the recorded boundary and clear of objects
+  // sitting just past it. <= 0 (default) or >= num_headland_passes: UNLIMITED
+  // — connectors may use the whole apron out to ring 0's centerline, the
+  // pre-#497 behavior. Has no effect with rings disabled. Read live, like the
+  // other connector geometry knobs, so it is field-tunable without a restart.
+  declare_int("connector_max_headland_passes", 0);
   // Extra buffer (m) grown around drawn map-obstacle polygons (holes) before
   // planning — keeps swaths/connectors off root zones the 2D LiDAR cannot see.
   // Injected at launch from mowgli_robot.yaml.obstacle_margin (GUI: Settings →
@@ -470,6 +479,10 @@ void CoverageServer::planCoverage()
     // fillets inside the planner and the turn-around connectors below. Read
     // live so it stays field-tunable per plan.
     const double min_turning_radius = get_parameter("min_turning_radius").as_double();
+    // How many headland passes a turn-around connector may cross (issue
+    // #497), read live like the other connector geometry knobs.
+    const int connector_max_headland_passes =
+        static_cast<int>(get_parameter("connector_max_headland_passes").as_int());
 
     const auto t_plan0 = now();
     BoustrophedonPlan plan = planBoustrophedon(cell,
@@ -480,7 +493,8 @@ void CoverageServer::planCoverage()
                                                mow_angle_rad,
                                                min_swath_length,
                                                ring_direction,
-                                               min_turning_radius);
+                                               min_turning_radius,
+                                               connector_max_headland_passes);
     const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 
     // Instrumentation (no behaviour change): surface every piece the planner
@@ -585,6 +599,15 @@ void CoverageServer::planCoverage()
     // buildConnector. See the connector_turn_radius declaration for the tuning
     // trade-off.
     const double connector_turn_radius = get_parameter("connector_turn_radius").as_double();
+    if (connector_max_headland_passes > 0 && connector_max_headland_passes < num_headland_passes_)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "PlanCoverage: turn-around connectors limited to %d of %d headland pass(es) "
+                  "(issue #497) — the outermost %d ring(s) are a no-turn zone",
+                  connector_max_headland_passes,
+                  num_headland_passes_,
+                  num_headland_passes_ - connector_max_headland_passes);
+    }
     constexpr double kConnectorStep = 0.03;  // connector densify step (m)
     // Build one or more hole-free, heading-continuous sub-paths. The path breaks
     // at obstacle crossings and at any zero-radius fallback; the BT bridges each

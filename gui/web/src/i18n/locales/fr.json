@@ -1776,6 +1776,10 @@
       "label": "Passes de bordure",
       "description": "Nombre d'anneaux de bordure concentriques tondus avant les bandes en va-et-vient. Une valeur négative (« aucune ») désactive complètement les anneaux de bordure : les bandes deviennent la passe la plus extérieure et leur axe suit exactement la ligne qu'aurait parcourue l'anneau extérieur, la bande non tondue latérale reste donc inchangée (environ 12 cm avec le retrait de sécurité châssis par défaut de 0,20 m). En revanche les EXTRÉMITÉS des bandes atteignent cette limite, soit environ 8 cm plus près de la bordure que n'importe quelle passe d'anneau, et sans tablier tondu les demi-tours en bout de rang deviennent des pivots à angle vif au lieu d'arcs réguliers."
     },
+    "connector_max_headland_passes": {
+      "label": "Limite de tournière pour les virages",
+      "description": "Nombre de passes de bordure qu'un virage peut traverser, en comptant depuis le champ intérieur vers l'extérieur. 0 = illimité (les virages peuvent utiliser toute la bande de bordure, jusqu'à l'anneau le plus extérieur). Réglez une valeur inférieure au nombre de passes de bordure pour garder le(s) anneau(x) le(s) plus extérieur(s) sans virage, afin que les demi-tours restent plus loin de la limite enregistrée et à l'écart des objets proches — au prix de davantage de connecteurs droits ou de coupures sans lame lorsque la bande restante est trop étroite pour un virage en arc. Ne s'applique qu'avec un nombre de passes de bordure imposé (ni auto, ni aucune)."
+    },
     "headland_width": {
       "label": "Largeur de bordure",
       "description": "Largeur totale de la bande de bordure ; les anneaux sont espacés de la largeur d'outil."
@@ -2529,6 +2533,9 @@
     "headlandPassesTooltip": "Anneaux périmétriques concentriques tondus avant le champ intérieur. Aucune = pas d'anneau périmétrique : les bandes en va-et-vient deviennent la passe la plus extérieure, et leur axe suit exactement la ligne qu'aurait parcourue l'anneau extérieur — latéralement, la bande non tondue reste donc la même qu'avec les anneaux (environ 12 cm avec le retrait de sécurité châssis par défaut de 0,20 m), ni plus près du bord ni plus loin. En revanche les EXTRÉMITÉS des bandes atteignent cette limite, soit environ 8 cm plus près de la bordure que n'importe quelle passe d'anneau, et sans tablier tondu les demi-tours en bout de rang deviennent des pivots à angle vif au lieu d'arcs réguliers. À tester sur votre terrain avant de vous y fier.",
     "headlandPassesNone": "Aucune",
     "headlandPassesAuto": "Auto",
+    "connectorMaxHeadlandPasses": "Limite de tournière pour les virages",
+    "connectorMaxHeadlandPassesTooltip": "Nombre d'anneaux de tournière (Passes de tournière) qu'un virage peut traverser, en comptant depuis le champ intérieur vers l'extérieur. Illimité = les virages peuvent utiliser toute la bande de tournière, jusqu'à l'anneau le plus extérieur. Réglez une valeur inférieure aux Passes de tournière (par ex. 2 pour 3 passes configurées) pour garder le(s) anneau(x) le(s) plus extérieur(s) sans virage, afin que les demi-tours restent plus loin de la limite enregistrée et à l'écart des objets proches — au prix de davantage de connecteurs droits ou de coupures sans lame lorsque la bande restante est trop étroite pour un virage en arc. Ne s'applique qu'avec un nombre de Passes de tournière forcé (ni Auto, ni Aucune). Relié à coverage_server.connector_max_headland_passes.",
+    "connectorMaxHeadlandPassesUnlimited": "Illimité",
     "mowDirection": "Sens de tonte du périmètre",
     "mowDirectionTooltip": "Sens de déplacement autour des anneaux de périmètre/tournière. Réglez-le pour qu'une lame déportée sur le côté reste du côté à tondre. Auto conserve le sens naturel du planificateur. Relié à coverage_server.ring_direction.",
     "mowDirectionAuto": "Auto (défaut du planificateur)",

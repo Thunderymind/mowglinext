@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ThemeProvider } from "../../theme/ThemeContext.tsx";
 import { MowingSection } from "./MowingSection.tsx";
 
@@ -45,6 +45,58 @@ describe("MowingSection — headland passes", () => {
         fireEvent.click(auto);
 
         expect(onChange).toHaveBeenCalledWith("num_headland_passes", 0);
+    });
+});
+
+// issue #497: connector_max_headland_passes bounds how many of the headland
+// passes a turn-around may cross. It only makes sense against a FORCED ring
+// count, so its option list must track num_headland_passes and it must be
+// disabled for Auto/None.
+describe("MowingSection — turn-around headland limit (#497)", () => {
+    function renderSection(
+        onChange: (key: string, value: unknown) => void,
+        values: Record<string, unknown>,
+    ) {
+        render(
+            <ThemeProvider>
+                <MowingSection values={values} onChange={onChange} />
+            </ThemeProvider>,
+        );
+    }
+
+    it("defaults to Unlimited when unset", () => {
+        renderSection(vi.fn(), { tool_width: 0.18, headland_width: 0.18, num_headland_passes: 3 });
+        expect(screen.getByTitle("Unlimited")).toBeInTheDocument();
+    });
+
+    it("offers exactly one option per configured headland pass, plus Unlimited", async () => {
+        const onChange = vi.fn();
+        renderSection(onChange, { tool_width: 0.18, headland_width: 0.18, num_headland_passes: 3 });
+
+        // num_headland_passes' OWN select also renders a "3" title on its closed
+        // combobox, so option lookups below are scoped to the opened listbox —
+        // an unscoped getByTitle("3") would match both and throw.
+        fireEvent.mouseDown(screen.getByTitle("Unlimited"));
+        const listbox = await screen.findByRole("listbox");
+        expect(within(listbox).getByTitle("2")).toBeInTheDocument();
+        expect(within(listbox).getByTitle("3")).toBeInTheDocument();
+        expect(within(listbox).queryByTitle("4")).toBeNull();
+
+        fireEvent.click(within(listbox).getByTitle("2"));
+        expect(onChange).toHaveBeenCalledWith("connector_max_headland_passes", 2);
+    });
+
+    it("is disabled when Headland Passes is Auto (0)", () => {
+        renderSection(vi.fn(), { tool_width: 0.18, headland_width: 0.18, num_headland_passes: 0 });
+        // The Select renders as a combobox; disabled ones carry aria-disabled.
+        const combobox = screen.getByTitle("Unlimited").closest(".ant-select-disabled");
+        expect(combobox).not.toBeNull();
+    });
+
+    it("is disabled when Headland Passes is None (negative)", () => {
+        renderSection(vi.fn(), { tool_width: 0.18, headland_width: 0.18, num_headland_passes: -1 });
+        const combobox = screen.getByTitle("Unlimited").closest(".ant-select-disabled");
+        expect(combobox).not.toBeNull();
     });
 });
 

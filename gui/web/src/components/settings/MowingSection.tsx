@@ -198,6 +198,13 @@ export const MowingSection: React.FC<Props> = ({
     const pathSpacing = values.tool_width ?? 0.18;
     const toolWidth = values.tool_width ?? 0.18;
     const headlandWidth = values.headland_width ?? 0.18;
+    // Turn-Around Headland Limit only makes sense against a FORCED ring count
+    // (num_headland_passes > 0) — with AUTO (0) the actual ring count is not
+    // known until a plan runs, and with NONE (negative) there are no rings to
+    // bound turns against at all. Falls back to the same template default the
+    // Headland Passes select uses, so the option list matches what
+    // coverage_server actually plans against on a sparse (untouched) robot.
+    const currentHeadlandPasses = values.num_headland_passes ?? HEADLAND_PASSES_TEMPLATE_DEFAULT;
     // AUTO is modelled as a negative sentinel (-1). The Auto switch toggles
     // between the sentinel and a concrete 0..179° angle; the degrees input is
     // disabled while Auto is on.
@@ -360,6 +367,24 @@ export const MowingSection: React.FC<Props> = ({
                                                           ? t("settingsMowing.headlandPassesAuto")
                                                           : String(value),
                                             }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12}>
+                                    <Form.Item label={fieldLabel("connector_max_headland_passes", t("settingsMowing.connectorMaxHeadlandPasses"))} tooltip={t("settingsMowing.connectorMaxHeadlandPassesTooltip")}>
+                                        <Select
+                                            value={values.connector_max_headland_passes ?? 0}
+                                            onChange={(v) => onChange("connector_max_headland_passes", v)}
+                                            style={{ width: "100%" }}
+                                            disabled={currentHeadlandPasses <= 0}
+                                            virtual={false}
+                                            options={[
+                                                { value: 0, label: t("settingsMowing.connectorMaxHeadlandPassesUnlimited") },
+                                                ...Array.from({ length: Math.max(currentHeadlandPasses, 0) }, (_, i) => i + 1).map((value) => ({
+                                                    value,
+                                                    label: String(value),
+                                                })),
+                                            ]}
                                         />
                                     </Form.Item>
                                 </Col>

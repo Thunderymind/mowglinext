@@ -786,7 +786,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double mow_angle_rad,
                                     double min_swath_length,
                                     int ring_direction,
-                                    double min_turn_radius)
+                                    double min_turn_radius,
+                                    int connector_max_headland_passes)
 {
   BoustrophedonPlan plan;
   // Polygon area the planned-coverage fraction is taken over (the operator's
@@ -962,7 +963,16 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     f2c::types::Cells clearance_cells;
     if (n_rings > 0)
     {
-      clearance_cells = hl.generateHeadlands(safe_cells, 0.5 * op_width);
+      // Ring i's centerline sits (i + 0.5) * op_width inside safe_cells (ring 0
+      // outermost). Default (connector_max_headland_passes <= 0 or >= n_rings):
+      // erode to ring 0's centerline, unchanged from before issue #497. A limit
+      // in [1, n_rings) moves the bound to ring (n_rings - limit)'s centerline —
+      // a `limit`-pass-deep envelope measured from the mainland edge outward, so
+      // a turn-around connector may not swing into the outermost
+      // (n_rings - limit) rings' band at all.
+      const int clamped_limit = std::clamp(connector_max_headland_passes, 0, n_rings);
+      const int clearance_ring_index = (clamped_limit <= 0) ? 0 : (n_rings - clamped_limit);
+      clearance_cells = hl.generateHeadlands(safe_cells, (clearance_ring_index + 0.5) * op_width);
     }
     else
     {

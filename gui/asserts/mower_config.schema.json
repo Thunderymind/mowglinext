@@ -552,6 +552,13 @@
           "minimum": -1,
           "description": "Number of concentric perimeter rings before the inner field. -1 (or any negative) = none — no perimeter rings. The back-and-forth swaths become the outermost pass, and their centreline lands on exactly the line the outermost ring would have driven (chassis_safety_inset inside the recorded boundary), so sideways they leave the same uncut band as the rings — about 12 cm at the default 0.20 m inset. The swath ENDS, however, reach that same band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs. 0 = auto (ceil(headland_width / tool_width)); >0 forces exactly that count."
         },
+        "connector_max_headland_passes": {
+          "type": "integer",
+          "title": "Turn-Around Headland Limit",
+          "default": 0,
+          "minimum": 0,
+          "description": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. 0 = unlimited (turns may use the whole headland apron, out to the outermost ring). Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit."
+        },
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",

@@ -44,6 +44,7 @@ const CATALOG: Record<string, ParamMeta> = {
   blade_load_min_speed_ratio: {label: "paramCatalog.blade_load_min_speed_ratio.label", description: "paramCatalog.blade_load_min_speed_ratio.description", tier: "middle", group: "Coverage"},
   blade_load_telemetry_max_age_s: {label: "paramCatalog.blade_load_telemetry_max_age_s.label", description: "paramCatalog.blade_load_telemetry_max_age_s.description", tier: "expert", group: "Coverage", unit: "s"},
   num_headland_passes: {label: "paramCatalog.num_headland_passes.label", description: "paramCatalog.num_headland_passes.description", tier: "basic", group: "Coverage"},
+  connector_max_headland_passes: {label: "paramCatalog.connector_max_headland_passes.label", description: "paramCatalog.connector_max_headland_passes.description", tier: "middle", group: "Coverage"},
   headland_width: {label: "paramCatalog.headland_width.label", description: "paramCatalog.headland_width.description", tier: "middle", group: "Coverage", unit: "m"},
   swath_overlap: {label: "paramCatalog.swath_overlap.label", description: "paramCatalog.swath_overlap.description", tier: "middle", group: "Coverage", unit: "m"},
   mow_angle_deg: {label: "paramCatalog.mow_angle_deg.label", description: "paramCatalog.mow_angle_deg.description", tier: "basic", group: "Coverage", unit: "°"},

@@ -1308,6 +1308,79 @@ TEST(CoveragePlanning, TurnArcFootprintStaysInsideRecordedBoundary)
       << " poses) — edge turns forced below min_turning_radius into straight-fallback splits";
 }
 
+// issue #497: connector_max_headland_passes moves connector_clearance_boundary
+// OFF ring 0's centerline, onto ring (n_rings - limit)'s, so a turn-around may
+// not cross the outermost (n_rings - limit) rings' band at all. Uses a large
+// square (10 m) so a measurement at the middle of an edge is far from any
+// corner-rounding the erosion introduces, and chassis_safety_inset ==
+// op_width/2 exactly so field_offset == 0 (coverage_planning.cpp) and
+// safe_cells == the raw square with NO inset/expansion — the clean baseline
+// this test's distance arithmetic assumes.
+TEST(CoveragePlanning, ConnectorMaxHeadlandPassesLimitsClearanceRingDepth)
+{
+  constexpr double kOpWidth = 0.2;
+  constexpr double kSize = 10.0;
+  constexpr double kInset = kOpWidth * 0.5;
+  constexpr double kMinSwath = 0.15;
+  constexpr int kRings = 3;
+  const auto cell = makeSquare(kSize);
+
+  auto clearanceDepthAtBottomEdge = [&](int limit)
+  {
+    const auto plan =
+        planBoustrophedon(cell, kOpWidth, 0.5, kRings, kInset, -1.0, kMinSwath, 0, 0.15, limit);
+    EXPECT_GE(plan.connector_clearance_boundary.size(), 3u);
+    // Midpoint of the bottom edge — far from the corners of a 10 m square.
+    return distanceToRing(kSize * 0.5, 0.0, plan.connector_clearance_boundary);
+  };
+
+  // 0 (default) = UNLIMITED: clearance sits on ring 0's centerline, i.e.
+  // op_width/2 inside the square — unchanged from before issue #497.
+  EXPECT_NEAR(clearanceDepthAtBottomEdge(0), 0.5 * kOpWidth, 0.01);
+  // >= n_rings clamps down to the same UNLIMITED behaviour.
+  EXPECT_NEAR(clearanceDepthAtBottomEdge(kRings), 0.5 * kOpWidth, 0.01);
+  EXPECT_NEAR(clearanceDepthAtBottomEdge(kRings + 5), 0.5 * kOpWidth, 0.01);
+  // Negative also means UNLIMITED (clamped up to 0).
+  EXPECT_NEAR(clearanceDepthAtBottomEdge(-1), 0.5 * kOpWidth, 0.01);
+  // A limit of 2 (of 3 rings) moves the clearance boundary to ring 1's
+  // centerline: 1.5 * op_width inside the square, one ring width further in
+  // than the default — the user's reported case (3 passes configured, turns
+  // limited to 2).
+  EXPECT_NEAR(clearanceDepthAtBottomEdge(2), 1.5 * kOpWidth, 0.01);
+  // A limit of 1 moves it to ring 2's (innermost) centerline: 2.5 * op_width.
+  EXPECT_NEAR(clearanceDepthAtBottomEdge(1), 2.5 * kOpWidth, 0.01);
+}
+
+// With the ring stage disabled (num_headland_passes < 0, issue #429) there is
+// no ring to bound connectors to at all, so connector_max_headland_passes must
+// be a complete no-op: connector_clearance_boundary stays safe_boundary
+// exactly, identically to a plan with no limit configured.
+TEST(CoveragePlanning, ConnectorMaxHeadlandPassesHasNoEffectWithRingsDisabled)
+{
+  constexpr double kOpWidth = 0.2;
+  constexpr double kSize = 10.0;
+  constexpr double kMinSwath = 0.15;
+  const auto cell = makeSquare(kSize);
+
+  const auto without_limit =
+      planBoustrophedon(cell, kOpWidth, 0.5, -1, 0.0, -1.0, kMinSwath, 0, 0.15, 0);
+  const auto with_limit =
+      planBoustrophedon(cell, kOpWidth, 0.5, -1, 0.0, -1.0, kMinSwath, 0, 0.15, 1);
+
+  ASSERT_GE(without_limit.connector_clearance_boundary.size(), 3u);
+  ASSERT_EQ(without_limit.connector_clearance_boundary.size(),
+            with_limit.connector_clearance_boundary.size());
+  for (std::size_t i = 0; i < without_limit.connector_clearance_boundary.size(); ++i)
+  {
+    EXPECT_NEAR(without_limit.connector_clearance_boundary[i].first,
+                with_limit.connector_clearance_boundary[i].first,
+                1e-9);
+    EXPECT_NEAR(without_limit.connector_clearance_boundary[i].second,
+                with_limit.connector_clearance_boundary[i].second,
+                1e-9);
+  }
+}
+
 // SAFETY REGRESSION (#388): outermost-ring connector start outside the clearance
 // ring. With the DEFAULT chassis_safety_inset = 0 the outermost headland ring
 // rides ON the recorded line, and F2C rounds the ring (generateHeadlandSwaths)
