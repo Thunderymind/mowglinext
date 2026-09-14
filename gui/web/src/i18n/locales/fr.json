@@ -1351,6 +1351,10 @@
       "label": "Alerte limite",
       "friendly": "Arrêt — hors limites"
     },
+    "DIG_OBSTRUCTION": {
+      "label": "Blocage (creusage)",
+      "friendly": "Arrêt — creuse au même endroit. Dégagez-le, puis Lecture ou Retour base"
+    },
     "UNDOCK_FAILED": {
       "label": "Échec départ",
       "friendly": "Échec du départ — vérifier la base"
