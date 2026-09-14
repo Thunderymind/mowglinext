@@ -25,6 +25,7 @@
 #define MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -242,6 +243,9 @@ struct BoustrophedonPlan
 // the boundary — plus swath_turn_envelope, a tighter ring-bound
 // connector_max_headland_passes caps for mainland swath U-turns only (see the
 // BoustrophedonPlan field docs).
+// Deterministic Auto heading; degenerate clips never define an angle.
+std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths);
+
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
@@ -251,6 +255,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double min_swath_length,
                                     int ring_direction = 0,
                                     double min_turn_radius = 0.20,
+                                    bool perpendicular = false,
                                     int connector_max_headland_passes = 0);
 
 // Per-plan accounting of how every segment-to-segment join was resolved by

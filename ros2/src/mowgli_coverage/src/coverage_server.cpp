@@ -494,6 +494,7 @@ void CoverageServer::planCoverage()
                                                min_swath_length,
                                                ring_direction,
                                                min_turning_radius,
+                                               goal->perpendicular,
                                                connector_max_headland_passes);
     const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 

@@ -3,6 +3,7 @@ import { Alert, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typogr
 import { DashboardOutlined, ScissorOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
+import {CrossHatchSettings} from "./CrossHatchSettings.tsx";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
@@ -447,6 +448,15 @@ export const MowingSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
+                                    <Form.Item label={fieldLabel("mow_cross_hatch", t("settingsMowing.crossHatch"))} tooltip={t("settingsMowing.crossHatchTooltip")}>
+                                        <Switch
+                                            aria-label={t("settingsMowing.crossHatch")}
+                                            checked={values.mow_cross_hatch ?? false}
+                                            onChange={(v) => onChange("mow_cross_hatch", v)}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12}>
                                     <Form.Item label={fieldLabel("mow_angle_deg", t("settingsMowing.mowAngleDeg"))} tooltip={t("settingsMowing.mowAngleDegTooltip")}>
                                         <Space>
                                             <Switch
@@ -480,6 +490,7 @@ export const MowingSection: React.FC<Props> = ({
                         />
                     </Col>
                 </Row>
+                {values.mow_cross_hatch && <CrossHatchSettings angle={values.mow_angle_deg ?? MOW_ANGLE_AUTO}/>}
             </Card>
         </div>
     );

@@ -421,10 +421,14 @@ mowgli:
     blade_load_rpm_min: 1800.0         # rpm at/below which the minimum speed applies
     blade_load_min_speed_ratio: 0.4    # slowest feed as a fraction of mowing_speed
     # mow_angle_deg: swath direction. -1 (or any negative) = AUTO — the coverage
-    # server picks the swath-count-minimising angle (F2C NSwath). 0..179 forces a
+    # server minimises swath count, or uses the longest boundary edge for cells
+    # above 400 m². 0..179 forces a
     # fixed swath angle in degrees. Flows to the BT (behavior_tree_node blackboard)
     # and into the plan_coverage action goal (PlanCoverageArea::buildGoal).
     mow_angle_deg: -1.0
+    # Alternate the resolved AUTO/fixed stripe angle by 90 degrees each coverage
+    # session. Pauses/recharge/restarts retain the phase in coverage_resume.txt.
+    mow_cross_hatch: false
     # NOTE: the former outline_passes / outline_overlap / outline_offset /
     # mow_angle_offset_deg / mow_angle_increment_deg knobs were REMOVED — no ros2
     # node read them (navigation.launch.py forwards only the keys below to
