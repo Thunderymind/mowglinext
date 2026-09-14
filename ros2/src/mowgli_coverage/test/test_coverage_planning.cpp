@@ -1487,7 +1487,7 @@ TEST(CoverageContinuousPath, SwathTurnEnvelopeNeverRelocatesRingZero)
     }
   }
   EXPECT_EQ(unmatched, 0u) << unmatched << "/" << plan.rings[0].size()
-                            << " ring-0 vertices have no nearby driven pose — ring 0 was relocated";
+                           << " ring-0 vertices have no nearby driven pose — ring 0 was relocated";
 }
 
 // HIGH (maintainer review on PR #598, issue #497): "at every value that
