@@ -749,6 +749,18 @@ if(BUILD_TESTING)
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 
+  # ---- test_dig_obstruction_recovery ----
+  # Structural: HOME drops the dig keepouts under the robot (gated on
+  # IsDigEscalated) before its DockRobot; the DIG_OBSTRUCTION hold publishes
+  # state=1 so the firmware hard stop holds the wedged robot.
+  ament_add_gtest(test_dig_obstruction_recovery
+    test/test_dig_obstruction_recovery.cpp
+  )
+
+  target_compile_definitions(test_dig_obstruction_recovery PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+
 endif()
 
 ament_package()

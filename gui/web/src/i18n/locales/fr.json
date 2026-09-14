@@ -1432,6 +1432,10 @@
       "label": "Alerte limite",
       "friendly": "Arrêt — hors limites"
     },
+    "DIG_OBSTRUCTION": {
+      "label": "Blocage (creusage)",
+      "friendly": "Arrêt — creuse au même endroit. Dégagez-le, puis Lecture ou Retour base"
+    },
     "UNDOCK_FAILED": {
       "label": "Échec départ",
       "friendly": "Échec du départ — vérifier la base"
@@ -3186,6 +3190,12 @@
     "chargeCompleteTimeoutTooltip": "Une fois que l'anneau affiche le vert fixe « charge terminée » depuis ce délai (10 minutes par défaut — par ex. laissé sur le socle toute la nuit), il s'atténue jusqu'à la luminosité ci-dessous. 0 désactive cette fonction et l'anneau reste vert fixe indéfiniment. Débrancher, ou repasser sous le seuil de charge terminée, restaure immédiatement la pleine luminosité.",
     "chargeCompleteDim": "Luminosité une fois atténué",
     "chargeCompleteDimTooltip": "Luminosité appliquée une fois le délai ci-dessus écoulé. 0 (par défaut) éteint l'anneau ; une petite valeur garde une lueur verte discrète comme indicateur « toujours chargé ».",
+    "chargeCompleteIndicatorCount": "Pixels indicateurs (charge terminée)",
+    "chargeCompleteIndicatorCountTooltip": "Nombre de pixels, répartis uniformément sur l'anneau, qui restent allumés à la luminosité ci-dessous au lieu de s'atténuer avec le reste une fois le délai écoulé. 0 (par défaut) désactive ceci — tout l'anneau s'atténue uniformément. Ex. 1 garde un seul pixel allumé ; 4 garde quatre pixels espacés de 90°.",
+    "chargeCompleteIndicatorScale": "Luminosité des pixels indicateurs (charge terminée)",
+    "chargeCompleteIndicatorScaleTooltip": "Luminosité des pixels indicateurs ci-dessus, indépendante de la luminosité de charge terminée, afin qu'ils restent visiblement plus lumineux que le fond atténué (ou éteint).",
+    "chargeCompleteIndicatorIds": "ID des pixels indicateurs (charge terminée)",
+    "chargeCompleteIndicatorIdsTooltip": "Indices de pixels séparés par des virgules à utiliser à la place de la répartition automatique du nombre de pixels indicateurs, par ex. « 0,4,8,12 » — choisissez exactement quels pixels restent allumés (numérotés à partir de 0). Laissez vide (par défaut) pour utiliser le champ nombre à la place. Les indices égaux ou supérieurs au nombre de LED sont ignorés.",
     "legend": "Ce que l'anneau vous dit",
     "legendDescription": "La première correspondance gagne — une alarme l'emporte toujours sur une activité. Chaque motif est conçu pour être lisible en plein jour à plusieurs mètres, par la couleur et le mouvement seuls.",
     "modeEmergency": "Arrêt d'urgence",

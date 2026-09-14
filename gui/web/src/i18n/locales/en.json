@@ -1436,6 +1436,10 @@
       "label": "Boundary alert",
       "friendly": "Stopped — out of bounds"
     },
+    "DIG_OBSTRUCTION": {
+      "label": "Dig obstruction",
+      "friendly": "Stopped — kept digging at the same spot. Lift it clear, then Play or Home"
+    },
     "UNDOCK_FAILED": {
       "label": "Start failed",
       "friendly": "Undock failed — check the base"
@@ -3190,6 +3194,12 @@
     "chargeCompleteTimeoutTooltip": "After the ring has shown steady full-green \"charge complete\" for this long (10 minutes by default — e.g. left on the dock overnight), dim it to the brightness below. 0 disables this and the ring stays full green indefinitely. Unplugging, or the level dropping back below the charge-complete threshold, restores full brightness immediately.",
     "chargeCompleteDim": "Charge complete brightness",
     "chargeCompleteDimTooltip": "Brightness once the dim delay above has elapsed. 0 (default) turns the ring off; a small value keeps a faint green glow as an at-a-glance \"still charged\" indicator instead.",
+    "chargeCompleteIndicatorCount": "Charge complete indicator pixels",
+    "chargeCompleteIndicatorCountTooltip": "Number of pixels, spaced evenly around the ring, that stay lit at the brightness below instead of dimming with the rest once the dim delay elapses. 0 (default) disables this — the whole ring dims uniformly. E.g. 1 keeps a single pixel lit; 4 keeps four pixels 90° apart.",
+    "chargeCompleteIndicatorScale": "Charge complete indicator brightness",
+    "chargeCompleteIndicatorScaleTooltip": "Brightness of the indicator pixels above, independent of the charge complete brightness, so they can stay visibly brighter than the dimmed (or fully off) background.",
+    "chargeCompleteIndicatorIds": "Charge complete indicator pixel IDs",
+    "chargeCompleteIndicatorIdsTooltip": "Comma-separated pixel indices to use instead of the indicator-pixel count's auto-even spacing, e.g. \"0,4,8,12\" — pick exactly which pixels stay lit (0-indexed). Leave empty (default) to use the count field instead. Indices at or beyond LED count are ignored.",
     "legend": "What the ring is telling you",
     "legendDescription": "First match wins — an alarm always beats an activity. Every pattern is meant to be readable in daylight from several metres by colour and movement alone.",
     "modeEmergency": "Emergency",

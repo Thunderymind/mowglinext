@@ -243,6 +243,8 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "led_brightness", "led_idle_scale", "led_refresh_hz",
             "led_low_battery_percent", "led_charge_full_percent",
             "led_charge_complete_timeout_s", "led_charge_complete_dim_scale",
+            "led_charge_complete_indicator_count", "led_charge_complete_indicator_scale",
+            "led_charge_complete_indicator_ids",
             "led_status_timeout_s", "led_keepalive_s", "led_device_retry_s",
         ],
     },

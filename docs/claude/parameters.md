@@ -303,6 +303,9 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `led_idle_scale` (L736) | 0.10 | Status LEDs | launch |
 | `led_charge_complete_timeout_s` | 600.0 (0 disables) | Status LEDs | launch |
 | `led_charge_complete_dim_scale` | 0.0 | Status LEDs | launch |
+| `led_charge_complete_indicator_count` | 0 (0 disables) | Status LEDs | launch |
+| `led_charge_complete_indicator_scale` | 0.15 | Status LEDs | launch |
+| `led_charge_complete_indicator_ids` | `""` (string, comma-separated) | Status LEDs | launch |
 | `led_spi_speed_hz` (L737) | 2400000 (3 SPI bits per WS2812 bit — do not retune) | Status LEDs | launch |
 
 ### Read by a launch file but absent from the template
