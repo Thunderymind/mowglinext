@@ -1587,19 +1587,37 @@ TEST_F(DigProposalTest, LegacyAreasFileWithoutObstacleIdentityStillLoads)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Dock calibration gate (2b): yaw-ACCURACY cross-check against
-// /imu/cog_heading (issue #446). Gate (3), covered implicitly by
-// arm_gates_one_through_three() below, only proves the fused yaw was STABLE
-// while a GPS-averaged dock position is captured — never that it was
-// ACCURATE. A settled-wrong magnetometer lock passes that gate fine while
-// silently biasing the lever-arm-corrected /gps/pose_cov average. These tests
-// exercise the independent cross-check that catches exactly that case.
+// Dock calibration GPS-position capture (issue #446). An earlier revision
+// gated this path on cross-checking the fused yaw against /imu/cog_heading
+// and REJECTING on disagreement — but on the dock a fresh COG sample is
+// essentially never available (cog_to_imu_node's stationary latch inflates
+// its variance well past any usable threshold within seconds of the last
+// forward motion), so that gate also rejected the MOTION calibration call
+// that is the only non-circular way to fix a stale yaw (maintainer review on
+// PR #597). This suite covers the replacement: average the RAW (yaw-
+// independent) antenna position, then lever-arm-correct it ONCE with
+// whatever yaw THIS call is about to persist — correct regardless of what
+// the fused yaw was doing while the antenna samples were captured.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class DockCalibrationGateTest : public ::testing::Test
+class DockCalibrationCaptureTest : public ::testing::Test
 {
 protected:
+  // gtest's own SetUp() constructs the node with NO initial dock yaw. Tests
+  // that need a specific one (PRESERVE reusing it, or MOTION's "stale stored
+  // yaw" narrative) call construct_node_with_dock_yaw() explicitly instead —
+  // do NOT call both for the same test, that would build (and leak into the
+  // ROS graph, briefly, under the same node name) two node instances.
   void SetUp() override
+  {
+    construct_node_with_dock_yaw(0.0);
+  }
+
+  // dock_pose_yaw seeds the PERSISTED yaw PRESERVE mode reuses (and, for the
+  // MotionMode test, documents the STALE value MOTION mode must ignore) — see
+  // map_server_node.cpp's dock_x/dock_y/dock_yaw constructor block, which
+  // only initializes docking_pose_ when at least one of the three is nonzero.
+  void construct_node_with_dock_yaw(double initial_dock_yaw_rad)
   {
     rclcpp::NodeOptions opts;
     opts.append_parameter_override("resolution", 0.1);
@@ -1609,6 +1627,8 @@ protected:
     opts.append_parameter_override("tool_width", 0.2);
     opts.append_parameter_override("map_file_path", "");
     opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("dock_pose_yaw", initial_dock_yaw_rad);
+    node_.reset();  // destroy the SetUp()-constructed node before building the replacement
     node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
   }
 
@@ -1618,36 +1638,40 @@ protected:
   }
 
   /// Satisfies gates (1) is_charging, (2) GPS accuracy, and (3) yaw
-  /// convergence, so a test only needs to vary gate (2b)'s COG state.
-  /// `yaw_rad` is the fused yaw the robot has "converged" on. The GPS sample
-  /// pushed to satisfy gate (2) also joins the averaging window a test
-  /// exercising the GPS-averaging path draws from — pass the same
-  /// `gps_x`/`gps_y` used by any further push_gps_pose_cov_for_test() calls
-  /// in that test so the average stays predictable.
-  void arm_gates_one_through_three(double yaw_rad, double gps_x = 1.23, double gps_y = 4.56)
+  /// convergence. Neither value feeds the antenna-averaging/correction path
+  /// any more — push_gps_antenna_for_test() and set_gps_lever_arm_for_test()
+  /// below do that — so a test only needs this to get past the gates.
+  void arm_gates_one_through_three(double converged_yaw_rad = 0.0)
   {
     node_->set_charging_status_for_test(true);
-    node_->push_gps_pose_cov_for_test(gps_x, gps_y, 0.01);
-    node_->push_converged_yaw_for_test(yaw_rad, 20);
+    node_->push_gps_pose_cov_for_test(0.0, 0.0, 0.01);
+    node_->push_converged_yaw_for_test(converged_yaw_rad, 20);
   }
 
-  static mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr make_gps_capture_request()
+  static constexpr size_t kMinAntennaSamples = 10;  // default dock_set_gps_avg_min_samples_
+
+  /// Push `count` (default kMinAntennaSamples) identical raw antenna
+  /// samples so the average is exactly (east, north).
+  void push_antenna_samples(double east, double north, size_t count = kMinAntennaSamples)
   {
-    auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
-    req->use_gps_position = true;
-    req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
-    return req;
+    for (size_t i = 0; i < count; ++i)
+    {
+      node_->push_gps_antenna_for_test(east, north);
+    }
   }
 
   std::shared_ptr<mowgli_map::MapServerNode> node_;
 };
 
-TEST_F(DockCalibrationGateTest, RejectsWhenNoCogHeadingEverReceived)
+TEST_F(DockCalibrationCaptureTest, RejectsWhenTooFewAntennaSamples)
 {
-  arm_gates_one_through_three(0.0);
-  // No set_cog_heading_for_test call — last_cog_yaw_rad_ stays unset.
+  arm_gates_one_through_three();
+  node_->set_gps_lever_arm_for_test(0.30, 0.0);
+  push_antenna_samples(1.0, 2.0, kMinAntennaSamples - 1);
 
-  const auto req = make_gps_capture_request();
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
   auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
   node_->set_docking_point_for_test(req, res);
 
@@ -1655,39 +1679,16 @@ TEST_F(DockCalibrationGateTest, RejectsWhenNoCogHeadingEverReceived)
   EXPECT_FALSE(node_->docking_pose_set_for_test());
 }
 
-TEST_F(DockCalibrationGateTest, RejectsWhenCogHeadingIsStale)
+TEST_F(DockCalibrationCaptureTest, RejectsWhenLeverArmNotYetResolved)
 {
-  arm_gates_one_through_three(0.0);
-  node_->set_cog_heading_for_test(0.0, 0.01, /*age_s=*/60.0);  // default max age is 30 s
+  arm_gates_one_through_three();
+  push_antenna_samples(1.0, 2.0);
+  // No set_gps_lever_arm_for_test() call, and no TF broadcaster is running in
+  // this unit test, so the real base_footprint→gps_link lookup must fail.
 
-  const auto req = make_gps_capture_request();
-  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
-  node_->set_docking_point_for_test(req, res);
-
-  EXPECT_FALSE(res->success);
-}
-
-TEST_F(DockCalibrationGateTest, RejectsWhenCogHeadingIsTooUncertain)
-{
-  arm_gates_one_through_three(0.0);
-  node_->set_cog_heading_for_test(0.0, /*sigma_rad=*/0.5, 0.0);  // default max sigma is 0.15 rad
-
-  const auto req = make_gps_capture_request();
-  auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
-  node_->set_docking_point_for_test(req, res);
-
-  EXPECT_FALSE(res->success);
-}
-
-TEST_F(DockCalibrationGateTest, RejectsWhenFusedYawDisagreesWithCogHeading)
-{
-  // 0.30 rad (~17°) bias — comfortably past the default 0.15 rad threshold,
-  // and in the range issue #446's reported ~10 cm lateral offset is
-  // consistent with at the default 0.3 m forward GPS lever arm.
-  arm_gates_one_through_three(0.30);
-  node_->set_cog_heading_for_test(0.0, 0.01, 0.0);
-
-  const auto req = make_gps_capture_request();
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
   auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
   node_->set_docking_point_for_test(req, res);
 
@@ -1695,54 +1696,97 @@ TEST_F(DockCalibrationGateTest, RejectsWhenFusedYawDisagreesWithCogHeading)
   EXPECT_FALSE(node_->docking_pose_set_for_test());
 }
 
-TEST_F(DockCalibrationGateTest, AcceptsAcrossTheAngleWrapBoundary)
+TEST_F(DockCalibrationCaptureTest, PreserveModeCorrectsAntennaAverageWithExistingDockYaw)
 {
-  // Fused yaw just under +π, COG heading just over -π — the same heading,
-  // wrapped the other way. A naive (unwrapped) subtraction would see a
-  // ~6.26 rad disagreement and wrongly reject; the true disagreement is
-  // ~0.02 rad and must be accepted.
-  const double just_under_pi = M_PI - 0.01;
-  const double just_over_neg_pi = -M_PI + 0.01;
-  arm_gates_one_through_three(just_under_pi, 1.0, 2.0);
-  node_->set_cog_heading_for_test(just_over_neg_pi, 0.01, 0.0);
-  for (int i = 0; i < 9; ++i)
-  {
-    node_->push_gps_pose_cov_for_test(1.0, 2.0, 0.01);
-  }
+  // Existing (persisted) yaw the PRESERVE path will reuse for the
+  // lever-arm correction — docking_pose_ is only initialized from
+  // dock_pose_x/y/yaw at construction, so rebuild the node with it set.
+  const double existing_yaw = 0.15;
+  construct_node_with_dock_yaw(existing_yaw);
+  arm_gates_one_through_three(existing_yaw);
 
-  const auto req = make_gps_capture_request();
+  const double lever_x = 0.30;
+  const double lever_y = 0.0;
+  node_->set_gps_lever_arm_for_test(lever_x, lever_y);
+
+  // Choose a true base position and compute what the antenna would read at
+  // that position with the EXISTING yaw — i.e. antenna = base + R(yaw)*lever.
+  const double true_base_x = 2.0;
+  const double true_base_y = 5.0;
+  const double antenna_east =
+      true_base_x + std::cos(existing_yaw) * lever_x - std::sin(existing_yaw) * lever_y;
+  const double antenna_north =
+      true_base_y + std::sin(existing_yaw) * lever_x + std::cos(existing_yaw) * lever_y;
+  push_antenna_samples(antenna_east, antenna_north);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::PRESERVE;
   auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
   node_->set_docking_point_for_test(req, res);
 
-  EXPECT_TRUE(res->success);
-  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 1.0, 1e-6);
-  EXPECT_NEAR(node_->docking_pose_for_test().position.y, 2.0, 1e-6);
+  ASSERT_TRUE(res->success);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, true_base_x, 1e-6);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, true_base_y, 1e-6);
+  // PRESERVE must not have touched the yaw.
+  EXPECT_NEAR(2.0 * std::atan2(node_->docking_pose_for_test().orientation.z,
+                               node_->docking_pose_for_test().orientation.w),
+              existing_yaw,
+              1e-9);
 }
 
-TEST_F(DockCalibrationGateTest, AcceptsAndCapturesAveragedGpsWhenYawsAgree)
+// The maintainer review's explicit ask: a stored yaw well off the true
+// heading must not corrupt (or block) a MOTION-mode capture, because the
+// fresh req->yaw_rad — not the stale stored value, and not any /imu/cog_heading
+// cross-check — is what the antenna average gets corrected with.
+TEST_F(DockCalibrationCaptureTest, MotionModeCorrectsPositionWithFreshYawDespiteStaleStoredYaw)
 {
-  arm_gates_one_through_three(0.2, 3.0, -1.0);
-  node_->set_cog_heading_for_test(0.2, 0.01, 0.0);
-  for (int i = 0; i < 9; ++i)
-  {
-    node_->push_gps_pose_cov_for_test(3.0, -1.0, 0.01);
-  }
+  const double stale_stored_yaw = 0.01;  // what a bad prior calibration left behind
+  const double fresh_motion_yaw = 0.27;  // ~15° away — the MOTION-measured correction
+  construct_node_with_dock_yaw(stale_stored_yaw);
+  // Gate (3) only needs a CONVERGED fused yaw, which on the dock reads back
+  // as the stale stored value while charging (fusion_graph gauge-resets onto
+  // dock_pose) — it is never consulted for the correction itself any more.
+  arm_gates_one_through_three(stale_stored_yaw);
 
-  const auto req = make_gps_capture_request();
+  const double lever_x = 0.30;
+  const double lever_y = 0.0;
+  node_->set_gps_lever_arm_for_test(lever_x, lever_y);
+
+  // The antenna samples were captured before the fresh MOTION yaw was known,
+  // but they are RAW (yaw-independent) — they carry no trace of
+  // stale_stored_yaw at all. Compute them from the TRUE base position using
+  // the FRESH yaw, since that is what the chassis was actually doing.
+  const double true_base_x = 2.0;
+  const double true_base_y = 5.0;
+  const double antenna_east =
+      true_base_x + std::cos(fresh_motion_yaw) * lever_x - std::sin(fresh_motion_yaw) * lever_y;
+  const double antenna_north =
+      true_base_y + std::sin(fresh_motion_yaw) * lever_x + std::cos(fresh_motion_yaw) * lever_y;
+  push_antenna_samples(antenna_east, antenna_north);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Request>();
+  req->use_gps_position = true;
+  req->yaw_source = mowgli_interfaces::srv::SetDockingPoint::Request::MOTION;
+  req->yaw_rad = fresh_motion_yaw;
   auto res = std::make_shared<mowgli_interfaces::srv::SetDockingPoint::Response>();
   node_->set_docking_point_for_test(req, res);
 
-  EXPECT_TRUE(res->success);
-  EXPECT_TRUE(node_->docking_pose_set_for_test());
-  EXPECT_NEAR(node_->docking_pose_for_test().position.x, 3.0, 1e-6);
-  EXPECT_NEAR(node_->docking_pose_for_test().position.y, -1.0, 1e-6);
+  ASSERT_TRUE(res->success);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.x, true_base_x, 1e-6);
+  EXPECT_NEAR(node_->docking_pose_for_test().position.y, true_base_y, 1e-6);
+  EXPECT_NEAR(2.0 * std::atan2(node_->docking_pose_for_test().orientation.z,
+                               node_->docking_pose_for_test().orientation.w),
+              fresh_motion_yaw,
+              1e-9);
 }
 
-TEST_F(DockCalibrationGateTest, ManualPositionSetIsNotSubjectToTheCogGate)
+TEST_F(DockCalibrationCaptureTest, ManualPositionSetIsUnaffectedByAntennaAveraging)
 {
-  // use_gps_position=false is the operator-driven map-drag path — gate (2b)
-  // is scoped to the GPS-averaging path only (area_manager.cpp), so a manual
-  // set must succeed with no COG sample at all.
+  // use_gps_position=false is the operator-driven map-drag path — the
+  // antenna-averaging/lever-arm correction above is scoped to
+  // use_gps_position=true only, so a manual set must succeed with no
+  // antenna samples and no lever arm at all.
   node_->set_charging_status_for_test(true);
   node_->push_gps_pose_cov_for_test(1.0, 1.0, 0.01);
   node_->push_converged_yaw_for_test(0.0, 20);

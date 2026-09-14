@@ -32,8 +32,10 @@
 
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <sensor_msgs/msg/nav_sat_status.hpp>
 #include <std_msgs/msg/bool.hpp>
 
+#include "mowgli_interfaces/wgs84_projection.hpp"
 #include "mowgli_map/internal_helpers.hpp"
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_core/GridMapMath.hpp>
@@ -287,46 +289,39 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       rclcpp::SensorDataQoS(),
       [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg)
       {
-        const double x = msg->pose.pose.position.x;
-        const double y = msg->pose.pose.position.y;
-        const rclcpp::Time t = now();
         std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
         last_gps_pose_cov_ = std::move(msg);
-        last_gps_pose_cov_time_ = t;
-        // Maintain a rolling window for on_set_docking_point's averaged
-        // dock-pose capture (see recent_gps_xy_ in the header).
-        recent_gps_xy_.emplace_back(t, x, y);
-        while (!recent_gps_xy_.empty() &&
-               (t - std::get<0>(recent_gps_xy_.front())).seconds() > dock_set_gps_avg_window_s_)
-        {
-          recent_gps_xy_.pop_front();
-        }
+        last_gps_pose_cov_time_ = now();
       });
 
-  // Independent, motion-derived yaw cross-check for on_set_docking_point's
-  // gate (2b) -- see last_cog_yaw_rad_ in the header for why this exists
-  // (issue #446: a stable-but-biased fused yaw can pass the yaw-convergence
-  // gate and still corrupt the /gps/pose_cov lever-arm correction averaged
-  // above, producing exactly the reported ~10 cm lateral dock offset).
-  dock_set_cog_max_age_s_ =
-      declare_parameter<double>("dock_set_cog_max_age_s", dock_set_cog_max_age_s_);
-  dock_set_cog_max_sigma_rad_ =
-      declare_parameter<double>("dock_set_cog_max_sigma_rad", dock_set_cog_max_sigma_rad_);
-  dock_set_yaw_bias_max_rad_ =
-      declare_parameter<double>("dock_set_yaw_bias_max_rad", dock_set_yaw_bias_max_rad_);
-  cog_heading_sub_ =
-      create_subscription<sensor_msgs::msg::Imu>("/imu/cog_heading",
-                                                 rclcpp::SensorDataQoS(),
-                                                 [this](sensor_msgs::msg::Imu::ConstSharedPtr msg)
-                                                 {
-                                                   const auto& q = msg->orientation;
-                                                   std::lock_guard<std::mutex> lk(
-                                                       last_cog_yaw_mutex_);
-                                                   last_cog_yaw_rad_ = 2.0 * std::atan2(q.z, q.w);
-                                                   last_cog_yaw_variance_rad2_ =
-                                                       msg->orientation_covariance[8];
-                                                   last_cog_yaw_time_ = now();
-                                                 });
+  // Raw (yaw-independent) GPS antenna positions for on_set_docking_point's
+  // GPS-position-averaging path — see recent_gps_antenna_enu_'s doc comment
+  // in the header for why this replaced averaging /gps/pose_cov's already
+  // lever-arm-corrected position (issue #446). RTK-Fixed only, same
+  // threshold navsat_to_absolute_pose_node's own on_set_datum uses.
+  gps_fix_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+      "/gps/fix",
+      rclcpp::SensorDataQoS(),
+      [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+      {
+        if (msg->status.status < sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX)
+        {
+          return;
+        }
+        double east = 0.0;
+        double north = 0.0;
+        mowgli_interfaces::wgs84::ToEnu(
+            msg->latitude, msg->longitude, datum_lat_, datum_lon_, east, north);
+        const rclcpp::Time t = now();
+        std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+        recent_gps_antenna_enu_.emplace_back(t, east, north);
+        while (!recent_gps_antenna_enu_.empty() &&
+               (t - std::get<0>(recent_gps_antenna_enu_.front())).seconds() >
+                   dock_set_gps_avg_window_s_)
+        {
+          recent_gps_antenna_enu_.pop_front();
+        }
+      });
 
   // ── Services ─────────────────────────────────────────────────────────────
   save_map_srv_ = create_service<std_srvs::srv::Trigger>(

@@ -37,7 +37,7 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -264,10 +264,12 @@ public:
     last_status_time_ = now();
   }
 
-  /// Test-only: satisfy gate (2) with one fresh /gps/pose_cov-shaped sample,
-  /// and feed the same sample into the averaging window used once gate (2b)
-  /// passes. Call repeatedly to build up dock_set_gps_avg_min_samples_
-  /// samples for a test that exercises the averaging path itself.
+  /// Test-only: satisfy gate (2) (freshness/accuracy) with one fresh
+  /// /gps/pose_cov-shaped sample. Since the #446 fix this no longer feeds
+  /// the position-averaging window itself — that now draws from the raw
+  /// antenna samples pushed via push_gps_antenna_for_test() below, which are
+  /// immune to the fused-yaw bias /gps/pose_cov's lever-arm correction can
+  /// carry (see on_set_docking_point's use_gps_position block).
   void push_gps_pose_cov_for_test(double x, double y, double sigma_m)
   {
     auto msg = std::make_shared<geometry_msgs::msg::PoseWithCovarianceStamped>();
@@ -279,7 +281,6 @@ public:
     std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
     last_gps_pose_cov_ = msg;
     last_gps_pose_cov_time_ = t;
-    recent_gps_xy_.emplace_back(t, x, y);
   }
 
   /// Test-only: satisfy gate (3) (yaw convergence) with `count` identical,
@@ -294,17 +295,26 @@ public:
     }
   }
 
-  /// Test-only: set (or clear, with no arguments) the latest /imu/cog_heading
-  /// sample consumed by gate (2b). `age_s` backdates the sample's timestamp
-  /// so age/staleness rejection can be exercised.
-  void set_cog_heading_for_test(std::optional<double> yaw_rad,
-                                double sigma_rad = 0.0,
-                                double age_s = 0.0)
+  /// Test-only: push one raw (yaw-independent) antenna ENU sample into the
+  /// window on_set_docking_point's use_gps_position path averages — bypasses
+  /// the real /gps/fix subscription + RTK-status gate + wgs84 projection, the
+  /// same way push_gps_pose_cov_for_test() bypasses /gps/pose_cov. Call
+  /// repeatedly to build up dock_set_gps_avg_min_samples_ samples.
+  void push_gps_antenna_for_test(double east, double north)
   {
-    std::lock_guard<std::mutex> lk(last_cog_yaw_mutex_);
-    last_cog_yaw_rad_ = yaw_rad;
-    last_cog_yaw_variance_rad2_ = sigma_rad * sigma_rad;
-    last_cog_yaw_time_ = now() - rclcpp::Duration::from_seconds(age_s);
+    std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+    recent_gps_antenna_enu_.emplace_back(now(), east, north);
+  }
+
+  /// Test-only: inject a known GPS lever arm (base_footprint→gps_link, body
+  /// frame) so on_set_docking_point's antenna re-projection has something to
+  /// apply without a live TF tree — mirrors how the real node resolves it
+  /// from URDF-published TF (see lever_arm_known_ below).
+  void set_gps_lever_arm_for_test(double lever_arm_x, double lever_arm_y)
+  {
+    lever_arm_known_ = true;
+    lever_arm_x_ = lever_arm_x;
+    lever_arm_y_ = lever_arm_y;
   }
 
   /// Test-only: build the keepout mask and return a copy. Exercises
@@ -908,47 +918,54 @@ private:
   rclcpp::Time last_gps_pose_cov_time_{0, 0, RCL_ROS_TIME};
   mutable std::mutex last_gps_pose_cov_mutex_;
 
-  /// Rolling window of recent /gps/pose_cov (x, y) map-frame positions, used
-  /// by on_set_docking_point to AVERAGE the docked position. The dock pose
-  /// MUST be captured from the independent GPS-vs-datum projection, NOT the
-  /// fused /odometry/filtered_map: when the robot is charging, fusion_graph
-  /// gauge-resets the fused pose onto the *existing* dock_pose, so capturing
-  /// the fused pose just re-stores the old (possibly wrong) value — a
-  /// calibration that can never correct itself. /gps/pose_cov is the raw
-  /// lever-arm-corrected GPS position and is free of that circularity.
-  /// Averaging over a few seconds beats the ~1-3 cm single-sample RTK jitter
-  /// (the systematic dock_pose error we are fixing was ~5 cm, so an unaveraged
-  /// sample would trade one error for another).
-  std::deque<std::tuple<rclcpp::Time, double, double>> recent_gps_xy_;
+  /// Rolling window of recent RAW (yaw-independent) GPS antenna positions —
+  /// /gps/fix projected straight through wgs84_projection.hpp, RTK-Fixed
+  /// samples only — used by on_set_docking_point to AVERAGE the antenna
+  /// position, then lever-arm-correct it ONCE with whatever yaw this call is
+  /// about to persist (see the use_gps_position block). The dock pose MUST
+  /// be captured independently of the fused /odometry/filtered_map: while
+  /// charging, fusion_graph gauge-resets the fused pose onto the *existing*
+  /// dock_pose, so capturing it would just re-store the old (possibly wrong)
+  /// value — a calibration that can never correct itself.
+  ///
+  /// This averages the RAW antenna position rather than /gps/pose_cov's
+  /// lever-arm-corrected one on purpose (issue #446): /gps/pose_cov applies
+  /// the correction with whatever the FUSED yaw is AT EACH SAMPLE, so a
+  /// stable-but-biased fused yaw (e.g. a settled-wrong magnetometer lock)
+  /// silently corrupted the averaged position by
+  /// lever_arm_length * sin(yaw_bias) with no way to detect it after the
+  /// fact — issue #446's reported ~10 cm lateral dock-position error is
+  /// consistent with exactly this (~19 degrees of bias at the default 0.3 m
+  /// forward GPS offset). Averaging the yaw-independent raw antenna position
+  /// and correcting with the call's OWN final yaw (which for yaw_source ==
+  /// MOTION is a fresh, independently-measured heading, not the possibly-
+  /// stale one used to correct earlier /gps/pose_cov samples) makes the
+  /// result correct regardless of what the fused yaw happened to be during
+  /// capture — an earlier revision instead cross-checked the fused yaw
+  /// against /imu/cog_heading and REJECTED on disagreement, but on the dock
+  /// a fresh COG sample is essentially never available (cog_to_imu_node's
+  /// stationary latch inflates σ well past any usable threshold within
+  /// seconds of the last forward motion), so that gate rejected the MOTION
+  /// call that is the only non-circular way to fix a stale yaw. Do not
+  /// reintroduce it.
+  std::deque<std::tuple<rclcpp::Time, double, double>> recent_gps_antenna_enu_;
+  mutable std::mutex recent_gps_antenna_mutex_;
   double dock_set_gps_avg_window_s_{3.0};
   size_t dock_set_gps_avg_min_samples_{10};
 
-  /// Latest /imu/cog_heading sample: an independent, GPS-motion-derived yaw
-  /// (from cog_to_imu_node) that does NOT depend on magnetometer/gyro lock.
-  /// Used by on_set_docking_point's gate (2b) as a cross-check before
-  /// trusting the /gps/pose_cov average: the yaw-convergence gate (3) only
-  /// proves the fused yaw was STABLE during capture, never that it was
-  /// ACCURATE, and /gps/pose_cov's own lever-arm correction (computed in
-  /// navsat_to_absolute_pose_node) rotates by whatever that fused yaw
-  /// currently is. A stable-but-biased fused yaw (e.g. a settled-wrong
-  /// magnetometer lock) therefore corrupts the averaged position by
-  /// lever_arm_length * sin(yaw_bias) without ever tripping gate (3) --
-  /// issue #446's reported ~10 cm lateral dock-position error is consistent
-  /// with exactly this (~19 degrees of bias at the default 0.3 m forward
-  /// GPS offset). Empty optional = no sample received yet.
-  std::optional<double> last_cog_yaw_rad_;
-  double last_cog_yaw_variance_rad2_{0.0};
-  rclcpp::Time last_cog_yaw_time_{0, 0, RCL_ROS_TIME};
-  mutable std::mutex last_cog_yaw_mutex_;
+  /// GPS lever arm (base_footprint→gps_link, body frame), resolved lazily
+  /// from TF the same way navsat_to_absolute_pose_node resolves its own copy
+  /// — this node runs as a separate process and cannot read that one's
+  /// cached value. Retried on each use_gps_position capture until available;
+  /// see the resolve call in on_set_docking_point.
+  bool lever_arm_known_{false};
+  double lever_arm_x_{0.0};
+  double lever_arm_y_{0.0};
 
   /// Thresholds for the on_set_docking_point gates beyond yaw convergence.
   double dock_set_gps_accuracy_max_m_{0.04};  ///< 4 cm
   double dock_set_gps_max_age_s_{2.0};
   double dock_set_status_max_age_s_{3.0};
-  /// Gate (2b) thresholds (see last_cog_yaw_rad_ above).
-  double dock_set_cog_max_age_s_{30.0};
-  double dock_set_cog_max_sigma_rad_{0.15};  ///< ~8.6°: the COG sample itself must be this tight
-  double dock_set_yaw_bias_max_rad_{0.15};  ///< ~8.6°: max allowed |fused yaw - COG yaw|
 
   /// Three coupled dock polygons in map frame, all derived from
   /// docking_pose_ + dock_body/corridor parameters. Built once at startup.
@@ -1001,7 +1018,7 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::ObstacleArray>::SharedPtr obstacle_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gps_pose_cov_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr cog_heading_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr gps_fix_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::DigEvent>::SharedPtr dig_event_sub_;
 
   /// Latest Nav2 costmap (global by default — same frame as map_), guarded

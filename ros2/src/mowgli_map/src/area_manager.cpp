@@ -820,122 +820,111 @@ void MapServerNode::on_set_docking_point(
 
   if (req->use_gps_position)
   {
-    // (2b) — Yaw ACCURACY cross-check, scoped to this GPS-position-averaging
-    // path specifically. Gate (3) above only proves the fused yaw was
-    // STABLE during capture, never that it was ACCURATE -- and the
-    // /gps/pose_cov samples about to be averaged below are already
-    // lever-arm-corrected (in navsat_to_absolute_pose_node) by rotating the
-    // antenna offset by whatever the fused yaw is AT EACH SAMPLE. A
-    // stable-but-biased fused yaw (e.g. a settled-wrong magnetometer lock)
-    // therefore corrupts the averaged position by
-    // lever_arm_length * sin(yaw_bias) without ever tripping gate (3) --
-    // issue #446's reported ~10 cm lateral dock-position error is
-    // consistent with exactly this (~19 degrees of bias at the default
-    // 0.3 m forward GPS offset). Cross-check against /imu/cog_heading: an
-    // independent, GPS-motion-derived yaw (cog_to_imu_node) that never
-    // depends on magnetometer/gyro lock. Fail closed, matching every other
-    // gate here, when no sufficiently fresh/confident COG sample exists to
-    // check against, or when it disagrees with the fused yaw beyond
-    // dock_set_yaw_bias_max_rad_.
+    // Capture the dock POSITION from the averaged RAW (yaw-independent) GPS
+    // antenna position, then lever-arm-correct it ONCE using docking_pose_'s
+    // yaw — the switch above has already set that to whatever THIS call is
+    // about to persist (PRESERVE: the existing dock_pose_yaw; REQUEST: the
+    // manually-specified yaw; MOTION: req->yaw_rad, a fresh independently-
+    // measured heading). See recent_gps_antenna_enu_'s doc comment in the
+    // header for why this averages the raw antenna position rather than
+    // /gps/pose_cov's already lever-arm-corrected one (issue #446): that
+    // correction is applied with whatever the FUSED yaw is at each sample,
+    // so a stable-but-biased fused yaw (e.g. a settled-wrong magnetometer
+    // lock) silently biased the averaged position with nothing to catch it
+    // after the fact. Correcting once with THIS call's own final yaw makes
+    // the result correct regardless of what the fused yaw was doing during
+    // capture — in particular, MOTION mode's fresh req->yaw_rad fixes a
+    // stale stored yaw even though every /gps/fix sample in the window was
+    // received before that fresh yaw was known.
+    double antenna_east_mean = 0.0;
+    double antenna_north_mean = 0.0;
+    size_t antenna_sample_count = 0;
     {
-      double tf_yaw = 0.0;
-      {
-        std::lock_guard<std::mutex> lk(recent_yaws_mutex_);
-        // Gate (3) above already required recent_yaws_.size() >=
-        // yaw_convergence_min_samples_, so back() is safe here.
-        tf_yaw = recent_yaws_.back().second;
-      }
-      std::optional<double> cog_yaw;
-      double cog_age_s = std::numeric_limits<double>::infinity();
-      double cog_sigma_rad = std::numeric_limits<double>::infinity();
-      {
-        std::lock_guard<std::mutex> lk(last_cog_yaw_mutex_);
-        if (last_cog_yaw_rad_.has_value())
-        {
-          cog_yaw = last_cog_yaw_rad_;
-          cog_age_s = (now() - last_cog_yaw_time_).seconds();
-          cog_sigma_rad = std::sqrt(std::max(last_cog_yaw_variance_rad2_, 0.0));
-        }
-      }
-      if (!cog_yaw.has_value() || cog_age_s > dock_set_cog_max_age_s_ ||
-          cog_sigma_rad > dock_set_cog_max_sigma_rad_)
+      std::lock_guard<std::mutex> lk(recent_gps_antenna_mutex_);
+      if (recent_gps_antenna_enu_.size() < dock_set_gps_avg_min_samples_)
       {
         res->success = false;
         RCLCPP_WARN(get_logger(),
-                    "set_docking_point rejected: no reliable /imu/cog_heading available "
-                    "to cross-check the calibration yaw (have_sample=%s, age=%.1fs "
-                    "(max %.1fs), σ=%.1f° (max %.1f°)). Drive the robot forward a few "
-                    "metres, then return to the dock and retry — this confirms the "
-                    "heading from independent GPS motion instead of trusting a "
-                    "magnetometer/gyro lock that could be stable but wrong.",
-                    cog_yaw.has_value() ? "true" : "false",
-                    cog_age_s,
-                    dock_set_cog_max_age_s_,
-                    cog_sigma_rad * 180.0 / M_PI,
-                    dock_set_cog_max_sigma_rad_ * 180.0 / M_PI);
-        return;
-      }
-      const double bias_rad =
-          std::abs(std::atan2(std::sin(tf_yaw - *cog_yaw), std::cos(tf_yaw - *cog_yaw)));
-      if (bias_rad > dock_set_yaw_bias_max_rad_)
-      {
-        res->success = false;
-        RCLCPP_WARN(get_logger(),
-                    "set_docking_point rejected: fused yaw disagrees with the independent "
-                    "COG heading by %.1f° (fused %.1f°, COG %.1f°, max %.1f°) — the fused "
-                    "yaw looks stable but is likely biased (e.g. a settled-wrong "
-                    "magnetometer lock), which would corrupt the averaged GPS position via "
-                    "the lever-arm correction. Drive the robot forward a few metres to "
-                    "re-anchor heading from GPS motion, then retry.",
-                    bias_rad * 180.0 / M_PI,
-                    tf_yaw * 180.0 / M_PI,
-                    *cog_yaw * 180.0 / M_PI,
-                    dock_set_yaw_bias_max_rad_ * 180.0 / M_PI);
-        return;
-      }
-    }
-
-    double gps_x_mean = 0.0;
-    double gps_y_mean = 0.0;
-    {
-      std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
-      if (recent_gps_xy_.size() < dock_set_gps_avg_min_samples_)
-      {
-        res->success = false;
-        RCLCPP_WARN(get_logger(),
-                    "set_docking_point rejected: only %zu GPS samples in the last "
-                    "%.1f s (need >= %zu) to average the dock position. Wait for "
-                    "more /gps/pose_cov updates.",
-                    recent_gps_xy_.size(),
+                    "set_docking_point rejected: only %zu RTK-Fixed /gps/fix sample(s) in "
+                    "the last %.1f s (need >= %zu) to average the dock antenna position. "
+                    "Wait for more GPS updates.",
+                    recent_gps_antenna_enu_.size(),
                     dock_set_gps_avg_window_s_,
                     dock_set_gps_avg_min_samples_);
         return;
       }
-      for (const auto& [t, x, y] : recent_gps_xy_)
+      for (const auto& [t, east, north] : recent_gps_antenna_enu_)
       {
         (void)t;
-        gps_x_mean += x;
-        gps_y_mean += y;
+        antenna_east_mean += east;
+        antenna_north_mean += north;
       }
-      const double n = static_cast<double>(recent_gps_xy_.size());
-      gps_x_mean /= n;
-      gps_y_mean /= n;
+      antenna_sample_count = recent_gps_antenna_enu_.size();
+      const double n = static_cast<double>(antenna_sample_count);
+      antenna_east_mean /= n;
+      antenna_north_mean /= n;
     }
-    docking_pose_.position.x = gps_x_mean;
-    docking_pose_.position.y = gps_y_mean;
+
+    // Resolve the GPS lever arm from TF — mirrors
+    // navsat_to_absolute_pose_node's own resolution, which this node cannot
+    // reach into (separate process). Retried on every capture until
+    // URDF/TF is up. Fail closed rather than silently treat an unresolved
+    // lever arm as (0, 0): that would apply NO correction at all and
+    // quietly re-introduce the yaw-bias error this capture path exists to
+    // avoid, only now unconditionally instead of only when the fused yaw
+    // happened to be wrong.
+    if (!lever_arm_known_)
+    {
+      try
+      {
+        auto tf = tf_buffer_->lookupTransform("base_footprint", "gps_link", tf2::TimePointZero);
+        lever_arm_x_ = tf.transform.translation.x;
+        lever_arm_y_ = tf.transform.translation.y;
+        lever_arm_known_ = true;
+      }
+      catch (const tf2::TransformException& ex)
+      {
+        res->success = false;
+        RCLCPP_WARN(get_logger(),
+                    "set_docking_point rejected: GPS lever arm not yet resolved from TF "
+                    "(base_footprint→gps_link: %s). Wait for robot_state_publisher to "
+                    "come up and retry.",
+                    ex.what());
+        return;
+      }
+    }
+
+    // antenna_enu = base_enu + R(yaw)·lever_arm_body
+    //   -> base_enu = antenna_enu - R(yaw)·lever_arm_body
+    // Same formula navsat_to_absolute_pose_node applies per-sample with the
+    // LIVE fused yaw; here it is applied once with the FINAL yaw this call
+    // persists.
+    const double final_yaw =
+        2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w);
+    const double cos_yaw = std::cos(final_yaw);
+    const double sin_yaw = std::sin(final_yaw);
+    const double base_x = antenna_east_mean - (cos_yaw * lever_arm_x_ - sin_yaw * lever_arm_y_);
+    const double base_y = antenna_north_mean - (sin_yaw * lever_arm_x_ + cos_yaw * lever_arm_y_);
+
+    docking_pose_.position.x = base_x;
+    docking_pose_.position.y = base_y;
     docking_pose_.position.z = 0.0;
     RCLCPP_INFO(get_logger(),
-                "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
-                "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m. "
-                "Orientation source: %s.",
-                gps_x_mean,
-                gps_y_mean,
-                recent_gps_xy_.size(),
+                "Docking point captured: raw antenna GPS averaged to (%.3f, %.3f) over "
+                "%zu sample(s), lever-arm-corrected with yaw=%.3f rad (source: %s) to "
+                "base position (%.3f, %.3f); request fused position was (%.3f, %.3f) — "
+                "Δ=(%.3f, %.3f) m.",
+                antenna_east_mean,
+                antenna_north_mean,
+                antenna_sample_count,
+                final_yaw,
+                yaw_src_desc,
+                base_x,
+                base_y,
                 req->docking_pose.position.x,
                 req->docking_pose.position.y,
-                req->docking_pose.position.x - gps_x_mean,
-                req->docking_pose.position.y - gps_y_mean,
-                yaw_src_desc);
+                req->docking_pose.position.x - base_x,
+                req->docking_pose.position.y - base_y);
   }
   else
   {
