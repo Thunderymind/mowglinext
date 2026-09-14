@@ -25,10 +25,15 @@ const HEADLAND_PASSES_NONE = -1;
 const HEADLAND_PASSES_AUTO = 0;
 const HEADLAND_PASSES_MAX = 5;
 // The installed mowgli_robot.yaml is SPARSE (Invariant 15), so an untouched
-// robot sends no num_headland_passes at all. Fall back to the TEMPLATE default
-// (ros2/src/mowgli_bringup/config/mowgli_robot.yaml) — the value coverage_server
+// robot sends no num_headland_passes at all. Fall back to the schema/template
+// default (mower_config.schema.json, mirroring
+// ros2/src/mowgli_bringup/config/mowgli_robot.yaml) — the value coverage_server
 // actually runs — not to AUTO, which would show a ring count nobody is using.
-const HEADLAND_PASSES_TEMPLATE_DEFAULT = 2;
+// Used only before `defaults` has loaded (or if the key is ever absent from
+// it); once loaded, `defaults.num_headland_passes` is the source of truth so
+// this can never drift from the schema again (maintainer review on PR #598:
+// this literal had gone stale at 2 while the schema/template moved to 5).
+const HEADLAND_PASSES_FALLBACK_DEFAULT = 5;
 const HEADLAND_PASS_OPTIONS = [
     HEADLAND_PASSES_NONE,
     HEADLAND_PASSES_AUTO,
@@ -54,6 +59,11 @@ type Props = {
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
+    // Schema/template defaults (useSettingsManager's `defaults`), keyed by
+    // yaml key — the same map hasDefault/isOverridden/onReset already read.
+    // Used ONLY to derive HEADLAND_PASSES_FALLBACK_DEFAULT's replacement from
+    // the schema instead of a literal that can drift from it.
+    defaults?: Record<string, any>;
 };
 
 /** Mini SVG preview showing the strip pattern. Spacing == tool_width (F2C
@@ -181,6 +191,7 @@ export const MowingSection: React.FC<Props> = ({
     isOverridden,
     hasDefault,
     onReset,
+    defaults,
 }) => {
     const { t } = useTranslation();
     const fieldLabel = (key: string, label: React.ReactNode) => (
@@ -201,10 +212,13 @@ export const MowingSection: React.FC<Props> = ({
     // Turn-Around Headland Limit only makes sense against a FORCED ring count
     // (num_headland_passes > 0) — with AUTO (0) the actual ring count is not
     // known until a plan runs, and with NONE (negative) there are no rings to
-    // bound turns against at all. Falls back to the same template default the
-    // Headland Passes select uses, so the option list matches what
-    // coverage_server actually plans against on a sparse (untouched) robot.
-    const currentHeadlandPasses = values.num_headland_passes ?? HEADLAND_PASSES_TEMPLATE_DEFAULT;
+    // bound turns against at all. Falls back to the schema default (via
+    // `defaults`, so this can never drift from mower_config.schema.json /
+    // the ROS2 template the way the old hardcoded literal did), so the option
+    // list matches what coverage_server actually plans against on a sparse
+    // (untouched) robot.
+    const currentHeadlandPasses =
+        values.num_headland_passes ?? defaults?.num_headland_passes ?? HEADLAND_PASSES_FALLBACK_DEFAULT;
     // AUTO is modelled as a negative sentinel (-1). The Auto switch toggles
     // between the sentinel and a concrete 0..179° angle; the degrees input is
     // disabled while Auto is on.
@@ -355,7 +369,7 @@ export const MowingSection: React.FC<Props> = ({
                                 <Col xs={12}>
                                     <Form.Item label={fieldLabel("num_headland_passes", t("settingsMowing.headlandPasses"))} tooltip={t("settingsMowing.headlandPassesTooltip")}>
                                         <Select
-                                            value={values.num_headland_passes ?? HEADLAND_PASSES_TEMPLATE_DEFAULT}
+                                            value={currentHeadlandPasses}
                                             onChange={(v) => onChange("num_headland_passes", v)}
                                             style={{ width: "100%" }}
                                             options={HEADLAND_PASS_OPTIONS.map((value) => ({

@@ -48,6 +48,45 @@ describe("MowingSection — headland passes", () => {
     });
 });
 
+// Maintainer review on PR #598: the sparse-robot fallback for
+// num_headland_passes must be DERIVED from the schema default (via the
+// `defaults` prop, sourced from mower_config.schema.json) rather than a
+// hardcoded literal — the old literal (2) had gone stale against the
+// schema/template default (5) without either Select noticing.
+describe("MowingSection — headland passes sparse-robot fallback (PR #598 review)", () => {
+    it("falls back to the schema default, not a hardcoded literal, when unset", () => {
+        render(
+            <ThemeProvider>
+                <MowingSection
+                    values={{ tool_width: 0.18, headland_width: 0.18 }}
+                    onChange={vi.fn()}
+                    defaults={{ num_headland_passes: 5 }}
+                />
+            </ThemeProvider>,
+        );
+
+        // Both the Headland Passes select itself and the Turn-Around Headland
+        // Limit's option-count logic key off the same derived value.
+        expect(screen.getByTitle("5")).toBeInTheDocument();
+    });
+
+    it("still falls back sanely when defaults has not loaded yet", () => {
+        render(
+            <ThemeProvider>
+                <MowingSection
+                    values={{ tool_width: 0.18, headland_width: 0.18 }}
+                    onChange={vi.fn()}
+                />
+            </ThemeProvider>,
+        );
+
+        // No `defaults` prop at all (e.g. still loading) must not crash, and
+        // the last-resort constant (kept in lockstep with the schema, 5)
+        // still renders rather than "undefined".
+        expect(screen.getByTitle("5")).toBeInTheDocument();
+    });
+});
+
 // issue #497: connector_max_headland_passes bounds how many of the headland
 // passes a turn-around may cross. It only makes sense against a FORCED ring
 // count, so its option list must track num_headland_passes and it must be

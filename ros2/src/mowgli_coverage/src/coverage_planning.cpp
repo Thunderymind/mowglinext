@@ -840,6 +840,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
           : ((num_headland_passes_override > 0)
                  ? num_headland_passes_override
                  : std::max(1, static_cast<int>(std::ceil(headland_width / op_width - 1e-9))));
+  plan.n_headland_passes = n_rings;
   if (n_rings == 0)
   {
     plan.diagnostics.notes.push_back(
@@ -959,45 +960,57 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // connector centerline may go no further out than the OUTERMOST DRIVEN PASS.
   // On-edge swath ends are handled by allInside()'s kOnEdgeTolM tolerance, NOT
   // by expanding this ring outward — see the constant.
+  //
+  // Ring i's centerline sits (i + 0.5) * op_width inside safe_cells (ring 0
+  // outermost, n_rings == 0 → safe_cells itself regardless of `ring_index`).
+  // Shared by both boundaries below so they can only ever disagree in WHICH
+  // ring they erode to, never in HOW.
+  auto ringCenterlineBoundary = [&](int ring_index)
   {
-    f2c::types::Cells clearance_cells;
-    if (n_rings > 0)
-    {
-      // Ring i's centerline sits (i + 0.5) * op_width inside safe_cells (ring 0
-      // outermost). Default (connector_max_headland_passes <= 0 or >= n_rings):
-      // erode to ring 0's centerline, unchanged from before issue #497. A limit
-      // in [1, n_rings) moves the bound to ring (n_rings - limit)'s centerline —
-      // a `limit`-pass-deep envelope measured from the mainland edge outward, so
-      // a turn-around connector may not swing into the outermost
-      // (n_rings - limit) rings' band at all.
-      const int clamped_limit = std::clamp(connector_max_headland_passes, 0, n_rings);
-      const int clearance_ring_index = (clamped_limit <= 0) ? 0 : (n_rings - clamped_limit);
-      clearance_cells = hl.generateHeadlands(safe_cells, (clearance_ring_index + 0.5) * op_width);
-    }
-    else
-    {
-      clearance_cells = safe_cells;
-    }
-    if (clearance_cells.size() > 0 && clearance_cells.area() > 1e-6)
+    std::vector<std::pair<double, double>> out;
+    f2c::types::Cells cells_at =
+        (n_rings > 0) ? hl.generateHeadlands(safe_cells, (ring_index + 0.5) * op_width) : safe_cells;
+    if (cells_at.size() > 0 && cells_at.area() > 1e-6)
     {
       std::size_t largest = 0;
       double largest_area = -1.0;
-      for (std::size_t i = 0; i < clearance_cells.size(); ++i)
+      for (std::size_t i = 0; i < cells_at.size(); ++i)
       {
-        const double a = clearance_cells.getGeometry(i).area();
+        const double a = cells_at.getGeometry(i).area();
         if (a > largest_area)
         {
           largest_area = a;
           largest = i;
         }
       }
-      const auto clr_ring = clearance_cells.getGeometry(largest).getGeometry(0);  // exterior
-      plan.connector_clearance_boundary.reserve(clr_ring.size());
-      for (std::size_t i = 0; i < clr_ring.size(); ++i)
+      const auto ring = cells_at.getGeometry(largest).getGeometry(0);  // exterior
+      out.reserve(ring.size());
+      for (std::size_t i = 0; i < ring.size(); ++i)
       {
-        const auto p = clr_ring.getGeometry(i);
-        plan.connector_clearance_boundary.emplace_back(p.getX(), p.getY());
+        const auto p = ring.getGeometry(i);
+        out.emplace_back(p.getX(), p.getY());
       }
+    }
+    return out;
+  };
+
+  // ALWAYS ring 0 (or safe_cells with no rings) — never moved by
+  // connector_max_headland_passes. See the field doc: this is what the #388
+  // clamp, the server's verify, and every ring-involving join stay bound to.
+  plan.connector_clearance_boundary = ringCenterlineBoundary(0);
+
+  // swath_turn_envelope (issue #497): populated ONLY when the limit actually
+  // restricts something — a limit of 0/negative (unlimited) or >= n_rings is a
+  // no-op, and with no rings there is no deeper ring to bound to either. Left
+  // empty in every other case so the caller (buildContinuousSubPaths) falls
+  // back to connector_clearance_boundary for every join, identical to
+  // pre-#497 behaviour.
+  if (n_rings > 0)
+  {
+    const int clamped_limit = std::clamp(connector_max_headland_passes, 0, n_rings);
+    if (clamped_limit > 0 && clamped_limit < n_rings)
+    {
+      plan.swath_turn_envelope = ringCenterlineBoundary(n_rings - clamped_limit);
     }
   }
 
@@ -1376,7 +1389,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     double turn_radius,
     double min_turn_radius,
     double step,
-    ConnectorStats* stats)
+    ConnectorStats* stats,
+    const std::vector<std::pair<double, double>>& swath_turn_boundary)
 {
   // Flatten the plan into ordered drivable segments (densified polylines),
   // rings first (outermost → inner) then the swaths.
@@ -1501,6 +1515,13 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
     segs.push_back(std::move(loop));
   }
+
+  // Every seg from this index on is a mainland swath (issue #497): a join
+  // whose PREVIOUS segment index is >= this is a swath-to-swath row-end
+  // U-turn, the only kind swath_turn_boundary is allowed to tighten. Ring-to-
+  // ring joins and the ring-to-first-swath transition (previous index below
+  // this) always stay on `boundary` — see the join loop below.
+  const std::size_t first_swath_seg_idx = segs.size();
 
   // Nearest-endpoint chaining of the swath pieces. BoustrophedonOrder's
   // serpentine interleaves the pieces of a sweep line that a concave bite (or a
@@ -1628,12 +1649,22 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // both segment headings. An in-bounds fallback with a heading discontinuity
       // is geometrically safe but not drivable as one forward path; split it so
       // FollowStrip performs a blade-off reorientation before the next segment.
+      //
+      // issue #497: a join between two MAINLAND SWATHS (both segs[i-1] and
+      // segs[i] at/after first_swath_seg_idx) is bound by swath_turn_boundary
+      // when the caller supplied one — every other join (ring-to-ring, the
+      // ring-to-first-swath transition) stays on the wider `boundary` so a
+      // limited turn envelope can never push a headland ring's own connector
+      // off ring 0.
+      const bool is_swath_join = (i - 1) >= first_swath_seg_idx;
+      const std::vector<std::pair<double, double>>& conn_boundary =
+          (is_swath_join && swath_turn_boundary.size() >= 3) ? swath_turn_boundary : boundary;
       bool conn_safe = false;
       {
         bool fallback = false;
         auto conn = buildConnector(
-            start, goal, boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
-        conn_safe = !conn.empty() && (!fallback || (allInside(conn, boundary) &&
+            start, goal, conn_boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
+        conn_safe = !conn.empty() && (!fallback || (allInside(conn, conn_boundary) &&
                                                     clearOfHoles(conn, plan.safe_holes) &&
                                                     straightFallbackIsContinuous(start, goal)));
         // Pure accounting of how this join resolved (issue #499) — see
