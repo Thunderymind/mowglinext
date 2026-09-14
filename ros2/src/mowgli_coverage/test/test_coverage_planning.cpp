@@ -1434,16 +1434,8 @@ TEST(CoverageContinuousPath, SwathTurnEnvelopeNeverRelocatesRingZero)
   constexpr int kLimit = 2;  // P=2 of N=3 — the reviewer's reported case
   const auto cell = makeSquare(kSize);
 
-  const auto plan = planBoustrophedon(cell,
-                                      kOpWidth,
-                                      0.5,
-                                      kRings,
-                                      kInset,
-                                      -1.0,
-                                      kMinSwath,
-                                      0,
-                                      kMinTurnRadius,
-                                      kLimit);
+  const auto plan = planBoustrophedon(
+      cell, kOpWidth, 0.5, kRings, kInset, -1.0, kMinSwath, 0, kMinTurnRadius, kLimit);
   // Ring 0 (the outermost pass) is emitted first — see planBoustrophedon's
   // ring-loop comment. On a hole-free square each pass is exactly one loop,
   // but this test only needs ring 0 specifically, so it does not pin the
