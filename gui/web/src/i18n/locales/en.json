@@ -1355,6 +1355,10 @@
       "label": "Boundary alert",
       "friendly": "Stopped — out of bounds"
     },
+    "DIG_OBSTRUCTION": {
+      "label": "Dig obstruction",
+      "friendly": "Stopped — kept digging at the same spot. Lift it clear, then Play or Home"
+    },
     "UNDOCK_FAILED": {
       "label": "Start failed",
       "friendly": "Undock failed — check the base"

@@ -246,3 +246,4 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 ## Generated & vendored — do not hand-edit
 - Nothing generated inside `ros2/src/mowgli_behavior/`. Message/service/action types come from `ros2/src/mowgli_interfaces` (`HighLevelStatus.msg`, `HighLevelControl.srv`, `StartInArea.srv`, `PlanCoverage.action`, …); after editing those, regenerate GUI bindings per `docs/claude/commands.md`.
 - BehaviorTree.CPP v4 and Nav2 (`nav2_msgs`, `bt_navigator` stock nodes used by `navigate_to_pose.xml`) are system packages, not vendored here.
+- **DIG_OBSTRUCTION exit:** `utility_nodes.hpp` `DiscardNearbyDigKeepouts` (Trigger client on `helper_node`, bounded `kAckTimeoutSec` 3 s wait, always SUCCESS) sits in `HomeSequence` under `ForceSuccess(Sequence(IsDigEscalated, DiscardNearbyDigKeepouts))` before `DockRobot`; pinned by `test/test_dig_obstruction_recovery.cpp` (structural, like `test_dock_motion_gate`).
