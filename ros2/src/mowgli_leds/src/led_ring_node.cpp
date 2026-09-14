@@ -6,12 +6,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "mowgli_interfaces/gnss_status_utils.hpp"
+#include "mowgli_leds/indicator_ids.hpp"
 
 namespace mowgli_leds
 {
@@ -42,41 +41,6 @@ static_assert(static_cast<std::uint8_t>(HighLevelState::kManualMowing) ==
 /// A ring this long would take 4.6 kB per frame; anything larger is a typo in
 /// the config, not a real strip, and we refuse to allocate for it.
 constexpr std::size_t kMaxLedCount = 512u;
-
-/// Parses a comma-separated list of non-negative pixel indices, e.g.
-/// "0, 4, 8, 12". A malformed or negative token is silently skipped rather
-/// than rejecting the whole list -- a typo in one ID should degrade that
-/// one pixel, not fall back to the count-based spacing for all of them.
-std::vector<std::size_t> ParseIndicatorIds(const std::string& raw)
-{
-  std::vector<std::size_t> ids;
-  std::stringstream stream(raw);
-  std::string token;
-  while (std::getline(stream, token, ','))
-  {
-    const auto first = token.find_first_not_of(" \t");
-    if (first == std::string::npos)
-    {
-      continue;
-    }
-    const auto last = token.find_last_not_of(" \t");
-    token = token.substr(first, last - first + 1);
-    try
-    {
-      std::size_t consumed = 0;
-      const long value = std::stol(token, &consumed);
-      if (value >= 0 && consumed == token.size())
-      {
-        ids.push_back(static_cast<std::size_t>(value));
-      }
-    }
-    catch (const std::exception&)
-    {
-      // Not a number -- skip it, see the function comment.
-    }
-  }
-  return ids;
-}
 
 HighLevelState ToHighLevelState(std::uint8_t raw)
 {
@@ -175,6 +139,28 @@ LedRingNode::LedRingNode(const rclcpp::NodeOptions& options)
   pattern_cfg_.charge_complete_indicator_scale =
       static_cast<float>(std::clamp(charge_complete_indicator_scale, 0.0, 1.0));
   pattern_cfg_.charge_complete_indicator_ids = ParseIndicatorIds(charge_complete_indicator_ids_raw);
+  // An ID past the end of the strip is dropped at render time; say so once at
+  // startup, because if EVERY ID is stale the ring simply goes fully dim and
+  // the count-based spacing is NOT used (explicit IDs take priority).
+  {
+    std::string stale;
+    for (const auto id : pattern_cfg_.charge_complete_indicator_ids)
+    {
+      if (id >= led_count_)
+      {
+        stale += (stale.empty() ? "" : ", ") + std::to_string(id);
+      }
+    }
+    if (!stale.empty())
+    {
+      RCLCPP_WARN(
+          get_logger(),
+          "led_charge_complete_indicator_ids: pixel(s) %s are outside the %zu-pixel ring and "
+          "will never light",
+          stale.c_str(),
+          led_count_);
+    }
+  }
 
   if (!enabled_ || led_count_ == 0u)
   {

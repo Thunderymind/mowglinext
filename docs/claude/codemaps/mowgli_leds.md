@@ -50,6 +50,8 @@
 | `ros2/src/mowgli_leds/src/spi_device.cpp` | 135 | Only hardware-touching code: `open`/`ioctl`(mode 0, 8 bpw, MSB, speed)/`write`; `#ifdef __linux__` |
 | `ros2/src/mowgli_leds/src/led_ring_main.cpp` | 18 | `main()`: `rclcpp::spin(LedRingNode)` |
 | `ros2/src/mowgli_leds/test/test_led_pattern.cpp` | ~510 | 36 gtests: mode priority, arc arithmetic, animation helpers, rendered frames per mode |
+| `ros2/src/mowgli_leds/include/mowgli_leds/indicator_ids.hpp` | ~50 | Header-only `ParseIndicatorIds()` for `led_charge_complete_indicator_ids` (comma list, malformed tokens skipped one by one) |
+| `ros2/src/mowgli_leds/test/test_indicator_ids.cpp` | ~45 | 3 gtests: whitespace/order, blank input, malformed/negative/overflow tokens dropped individually |
 | `ros2/src/mowgli_leds/test/test_ws2812_encoder.cpp` | 181 | 13 gtests: symbol expansion, MSB-first, GRB order, frame size, reset gap, clock, brightness |
 | **Integration points outside the package** | | |
 | `ros2/src/mowgli_bringup/launch/full_system.launch.py` | 742 | Launches `led_ring_node` (l.668-706) under `IfCondition(led_enabled)`; passes every `led_*` from merged config |
@@ -143,6 +145,7 @@ Lint: `ament_lint_auto` with copyright/cpplint/uncrustify suppressed (`CMakeList
 | Test | Registered in | Pins |
 |------|---------------|------|
 | `ros2/src/mowgli_leds/test/test_led_pattern.cpp` (36 cases) | `CMakeLists.txt:103-108` `ament_add_gtest(test_led_pattern)` | Mode priority (emergency > charging > stale > low-battery > activity; stale emergency ignored), `FilledCount` end rules, `Breathe`/`BlinkOn`/`RotationIndex` bounds + negative time, exact rendered frames per mode, zero-length ring, charge-complete dim timeout (below timeout stays full green, at/after timeout dims, non-zero dim scale, timeout=0 disables) |
+| `ros2/src/mowgli_leds/test/test_indicator_ids.cpp` (3 cases) | `CMakeLists.txt` `ament_add_gtest(test_indicator_ids)` | `ParseIndicatorIds`: whitespace + order kept, empty/blank/commas-only → no IDs, negative / alpha / trailing-garbage / float / hex / overflow tokens skipped individually with valid neighbours kept |
 | `ros2/src/mowgli_leds/test/test_ws2812_encoder.cpp` (13 cases) | `CMakeLists.txt:96-101` `ament_add_gtest(test_ws2812_encoder)` | `0→0b100`, `1→0b110`, MSB-first, every symbol starts high/ends low, GRB order, 9 bytes/pixel + reset gap, gap ≥ 280 µs of zeros, 3 bits @ 2.4 MHz = 1.25 µs, brightness linear/clamped/NaN-safe, empty buffer still emits the gap |
 | `gui/pkg/api/settings_leds_test.go` | `cd gui && go test ./pkg/api/...` | `led_enabled` schema default `false` + `sparsifyFlat` round-trip; every `led_*` schema default == template value and no extra `led_*` in schema; `3 / led_spi_speed_hz == 1.25 µs` |
 | `gui/web/src/components/settings/LedsSection.test.tsx` (14 cases) | `cd gui/web && yarn test` | Absent key renders OFF, controls hidden until enabled, ON writes `true` / OFF writes `false`, overlay + `ls /dev/spidev*` hint, 3.3 V warning, hardware + appearance field sets, count/device edits, legend lists every mode, two reds differ by motion, reset-to-default, no-defaults render |

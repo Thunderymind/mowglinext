@@ -136,10 +136,11 @@ describe("LedsSection", () => {
         }
     });
 
-    // Positional: Hardware (led_count, led_spi_speed_hz) then Appearance
-    // (led_brightness, led_idle_scale, led_refresh_hz) render before Behavior,
-    // so the charge-complete fields land at fixed indices 10/11 regardless of
-    // what gets appended after them in the Behavior card.
+    // Positional: Hardware (led_count, led_spi_speed_hz), Appearance
+    // (led_brightness, led_idle_scale, led_refresh_hz) and the Behavior card's
+    // first five numeric fields render before the charge-complete pair, so it
+    // lands at fixed indices 10/11 (indicator count/scale at 12/13) regardless
+    // of what gets appended after them.
     it("edits the charge-complete dim delay and brightness", async () => {
         const onChange = vi.fn();
         renderSection(enabledValues, { onChange });
