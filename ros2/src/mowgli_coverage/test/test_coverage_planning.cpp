@@ -1329,7 +1329,8 @@ TEST(CoveragePlanning, ConnectorMaxHeadlandPassesLimitsSwathTurnEnvelopeDepth)
   constexpr int kRings = 3;
   const auto cell = makeSquare(kSize);
 
-  auto planAt = [&](int limit) {
+  auto planAt = [&](int limit)
+  {
     return planBoustrophedon(cell, kOpWidth, 0.5, kRings, kInset, -1.0, kMinSwath, 0, 0.15, limit);
   };
   // Midpoint of the bottom edge — far from the corners of a 10 m square.

@@ -614,8 +614,7 @@ void CoverageServer::planCoverage()
     // == 0) the limit still applies against the DERIVED ring count, and the
     // old `< num_headland_passes_` comparison never fired there, silently
     // hiding the no-turn-zone from the log in the AUTO case.
-    if (connector_max_headland_passes > 0 &&
-        connector_max_headland_passes < plan.n_headland_passes)
+    if (connector_max_headland_passes > 0 && connector_max_headland_passes < plan.n_headland_passes)
     {
       RCLCPP_INFO(get_logger(),
                   "PlanCoverage: turn-around connectors limited to %d of %d headland pass(es) "
