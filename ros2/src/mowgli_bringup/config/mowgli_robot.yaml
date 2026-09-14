@@ -915,6 +915,17 @@ mowgli:
                                    # 0 disables this and the ring stays full green forever.
     led_charge_complete_dim_scale: 0.0    # brightness once charge-complete timeout elapses;
                                    # 0 = off, small value = faint "still charged" glow
+    led_charge_complete_indicator_count: 0    # pixels (evenly spaced) that stay at
+                                   # led_charge_complete_indicator_scale instead of dimming
+                                   # with the rest, once the timeout above elapses. 0 = off,
+                                   # whole ring dims uniformly (the original #550 behaviour).
+    led_charge_complete_indicator_scale: 0.15 # brightness of those indicator pixels
+    # Explicit pixel indices to use instead of the auto-spaced count above,
+    # e.g. "0,4,8,12" -- lets an operator pick exactly which pixels stay lit.
+    # Empty (default) uses led_charge_complete_indicator_count instead. Not
+    # a native list: an empty YAML list can't be type-inferred and fails at
+    # load, so this is a comma-separated string, parsed by led_ring_node.
+    led_charge_complete_indicator_ids: ""
     led_spi_speed_hz: 2400000      # 3 SPI bits per WS2812 bit = 1.25 us. Do NOT retune
                                    # without re-reading ws2812_encoder.hpp — the symbol
                                    # table is derived from this exact clock.

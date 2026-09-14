@@ -92,7 +92,7 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_gtest REQUIRED)
 
-  # Both suites cover pure, header-only logic: no rclcpp, no spidev, no clock.
+  # All three suites cover pure, header-only logic: no rclcpp, no spidev, no clock.
   ament_add_gtest(test_ws2812_encoder
     test/test_ws2812_encoder.cpp
   )
@@ -104,6 +104,13 @@ if(BUILD_TESTING)
     test/test_led_pattern.cpp
   )
   target_include_directories(test_led_pattern
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_indicator_ids
+    test/test_indicator_ids.cpp
+  )
+  target_include_directories(test_indicator_ids
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 endif()
