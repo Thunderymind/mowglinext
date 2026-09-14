@@ -3246,6 +3246,25 @@
     "modeIdle": "Idle",
     "modeIdleDescription": "Whole ring dim white, not moving. Powered and awake, doing nothing."
   },
+  "settingsMqtt": {
+    "bridge": "MQTT bridge",
+    "bridgeDescription": "Publish status, battery and mow state to an MQTT broker (e.g. for a Home Assistant integration) and accept start/pause/dock commands back. Read-only monitoring, except for the command topic — the same channel the GUI's own buttons use.",
+    "securityTitle": "No authentication on the wire by default",
+    "securityDescription": "The bundled broker allows anonymous connections and the command topic accepts any high-level command — treat this like any other control surface on your local network, not something to expose to the internet.",
+    "broker": "Broker",
+    "host": "Host",
+    "hostTooltip": "Hostname or IP of the MQTT broker. \"localhost\" reaches the bundled broker too — point this at your own server's broker instead if you have one.",
+    "port": "Port",
+    "useSsl": "TLS",
+    "useSslTooltip": "Connect over TLS, verified against the system CA store. If the broker's certificate isn't trusted system-wide, the bridge refuses to connect rather than fall back to plaintext.",
+    "username": "Username",
+    "usernameTooltip": "Leave empty for a broker with anonymous access (the bundled default).",
+    "password": "Password",
+    "topicPrefix": "Topic prefix",
+    "topicPrefixTooltip": "All topics are published as \"<prefix>/<name>\".",
+    "topicsTitle": "Topics",
+    "topicsDescription": "Full JSON schema and command codes are documented in docs/MQTT_CONTROL.md."
+  },
   "settingsSections": {
     "updates": {"label": "Updates", "description": "Installed versions, update sources and recovery"},
     "appearance": {
@@ -3311,6 +3330,10 @@
     "leds": {
       "label": "Status LEDs",
       "description": "WS2812 status ring: what it shows and how bright"
+    },
+    "mqtt": {
+      "label": "MQTT / Home Assistant",
+      "description": "Bridge status and commands to an MQTT broker"
     },
     "advanced": {
       "label": "Advanced",

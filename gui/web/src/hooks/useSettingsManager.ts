@@ -35,6 +35,7 @@ export type SettingsSection =
     | "navigation"
     | "rain"
     | "leds"
+    | "mqtt"
     | "irrisense"
     | "advanced";
 
@@ -247,6 +248,19 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "led_charge_complete_indicator_count", "led_charge_complete_indicator_scale",
             "led_charge_complete_indicator_ids",
             "led_status_timeout_s", "led_keepalive_s", "led_device_retry_s",
+        ],
+    },
+    {
+        id: "mqtt",
+        label: "settingsSections.mqtt.label",
+        icon: "wifi",
+        description: "settingsSections.mqtt.description",
+        keys: [
+            // Every mqtt_* key is claimed here so none of them leaks into
+            // AdvancedSection's free-form editor — same rationale as "leds"
+            // above (a raw broker password with no context).
+            "mqtt_enabled", "mqtt_host", "mqtt_port", "mqtt_username",
+            "mqtt_password", "mqtt_topic_prefix", "mqtt_use_ssl",
         ],
     },
     {
