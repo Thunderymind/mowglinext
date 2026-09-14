@@ -404,6 +404,17 @@ def generate_launch_description() -> LaunchDescription:
     # a side-mounted blade on the cut side. Injected into coverage_server's
     # ring_direction param below.
     mow_direction = 0
+    # connector_max_headland_passes (issue #497): how many of the
+    # num_headland_passes rings a turn-around connector may CROSS, counted
+    # from the mainland edge outward. <= 0 (default) or >= num_headland_passes
+    # = UNLIMITED — connectors may use the whole headland apron out to the
+    # outermost ring, unchanged from before #497. A value in
+    # [1, num_headland_passes) keeps the outermost (num_headland_passes -
+    # value) ring(s) a no-turn zone, so U-turns stay further from the
+    # recorded boundary at the cost of more straight/split connector
+    # fallbacks. Injected into coverage_server.connector_max_headland_passes;
+    # operator-tunable via mowgli_robot.yaml.
+    connector_max_headland_passes = 0
     # swath_overlap: how much narrower F2C's swath spacing is than the physical
     # cut width. F2C's operation_width (Robot::setCovWidth) = tool_width −
     # swath_overlap, so adjacent swaths OVERLAP by this much. tool_width itself
@@ -575,6 +586,8 @@ def generate_launch_description() -> LaunchDescription:
         num_headland_passes = int(rt_rp.get(
             "num_headland_passes", num_headland_passes))
         mow_direction = int(rt_rp.get("mow_direction", mow_direction))
+        connector_max_headland_passes = int(rt_rp.get(
+            "connector_max_headland_passes", connector_max_headland_passes))
         swath_overlap = float(rt_rp.get("swath_overlap", swath_overlap))
         wheel_track = float(rt_rp.get("wheel_track", wheel_track))
         turn_speed_ratio = float(rt_rp.get("turn_speed_ratio", turn_speed_ratio))
@@ -968,6 +981,11 @@ def generate_launch_description() -> LaunchDescription:
         cov_params["num_headland_passes"] = num_headland_passes
         # Perimeter/headland travel winding (blade-side, issue #335).
         cov_params["ring_direction"] = mow_direction
+        # How many headland passes a turn-around connector may cross (issue
+        # #497). Passed through as configured — coverage_server clamps it to
+        # [0, num_headland_passes] itself, same as every other live-read
+        # connector geometry knob.
+        cov_params["connector_max_headland_passes"] = connector_max_headland_passes
         cov_params["chassis_safety_inset"] = chassis_safety_inset
         # Extra buffer grown around drawn map-obstacle polygons (holes) before
         # swath planning — keeps the robot off root zones the 2D LiDAR cannot

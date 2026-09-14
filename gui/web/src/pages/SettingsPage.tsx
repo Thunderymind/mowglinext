@@ -52,6 +52,7 @@ export const SettingsPage = () => {
     const {
         sections,
         values,
+        defaults,
         loading,
         saving,
         isDirty,
@@ -176,6 +177,7 @@ export const SettingsPage = () => {
                         isOverridden={isOverridden}
                         hasDefault={hasDefault}
                         onReset={resetToDefault}
+                        defaults={defaults}
                     />
                 );
             case "docking":

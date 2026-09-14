@@ -1796,6 +1796,10 @@
       "label": "Headland passes",
       "description": "Number of concentric border rings mowed before the back-and-forth swaths. A negative value ('none') disables the perimeter rings entirely: the swaths become the outermost pass and their centreline lands on exactly the line the outermost ring would have driven, so sideways the uncut band is unchanged (about 12 cm at the default 0.20 m chassis safety inset). The swath ENDS do reach that band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs."
     },
+    "connector_max_headland_passes": {
+      "label": "Turn-around headland limit",
+      "description": "How many of the headland passes a turn-around may cross, counted from the inner field outward. 0 = unlimited (turns may use the whole headland apron, out to the outermost ring). Set it below the headland pass count to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit. Only applies with a forced (non-auto, non-none) headland pass count."
+    },
     "headland_width": {
       "label": "Headland width",
       "description": "Total border band width; rings are spaced by the tool width."
@@ -2549,6 +2553,9 @@
     "headlandPassesTooltip": "Concentric perimeter rings mowed before the inner field. None = no perimeter rings: the back-and-forth swaths become the outermost pass, and their centreline lands on exactly the line the outermost ring would have driven, so sideways they leave the same uncut band as the rings (about 12 cm at the default 0.20 m chassis safety inset) — no closer to the edge, no further. The swath ENDS do reach that band though, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs. Field-test this on your lawn before relying on it.",
     "headlandPassesNone": "None",
     "headlandPassesAuto": "Auto",
+    "connectorMaxHeadlandPasses": "Turn-Around Headland Limit",
+    "connectorMaxHeadlandPassesTooltip": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. Unlimited = turns may use the whole headland apron, out to the outermost ring. Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit. Only applies with a forced (non-Auto, non-None) Headland Passes count. Wired to coverage_server.connector_max_headland_passes.",
+    "connectorMaxHeadlandPassesUnlimited": "Unlimited",
     "mowDirection": "Perimeter Direction",
     "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction.",
     "mowDirectionAuto": "Auto (planner default)",

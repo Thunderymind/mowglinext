@@ -486,6 +486,21 @@ mowgli:
     # side-mounted blade stays on the cut side. navigation.launch.py injects this
     # into coverage_server.ring_direction; swaths/connectors follow the rings.
     mow_direction: 0
+    # connector_max_headland_passes (issue #497): how many of the
+    # num_headland_passes headland rings a turn-around connector may CROSS,
+    # counted from the mainland edge OUTWARD. 0 (default) = UNLIMITED —
+    # connectors may swing all the way out to the outermost ring's
+    # centerline, unchanged from before this setting existed. Set it below
+    # num_headland_passes (e.g. 2 with 3 passes configured) to keep the
+    # outermost ring(s) a no-turn zone, so U-turns stay further from the
+    # recorded boundary and clear of objects sitting just past it — at the
+    # cost of more straight/blade-off connector fallbacks where the
+    # remaining apron is too narrow for a turn-around arc to fit (see
+    # coverage_server's "PlanCoverage connectors" log line). Has no effect
+    # with num_headland_passes < 0 (rings disabled). Injected into
+    # coverage_server.connector_max_headland_passes; read LIVE
+    # (ros2-param-set-tunable).
+    connector_max_headland_passes: 0
     # chassis_safety_inset: how far INSIDE the recorded boundary the OUTERMOST
     # headland ring's centerline sits. 0.0 (default) = the ring rides ON the
     # recorded line — the perimeter the operator drove — so the blade mows to the

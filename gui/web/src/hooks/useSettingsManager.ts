@@ -155,6 +155,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "blade_load_rpm_min", "blade_load_min_speed_ratio",
             "headland_width", "num_headland_passes", "swath_overlap",
             "chassis_safety_inset", "min_turning_radius", "mow_direction", "mow_cross_hatch",
+            "connector_max_headland_passes",
         ],
     },
     {
