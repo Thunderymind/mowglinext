@@ -373,7 +373,7 @@ mowgli:
     # next ROS2 container restart.
     mowing_enabled: true
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
-    transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP desired_linear_vel)
+    transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP max_linear_vel)
     # turn_speed_ratio: the coverage controller's speed THROUGH a bend, as a
     # fraction of mowing_speed. Injected at launch as
     # FollowCoveragePath.speed_slow = clamp(mowing_speed * turn_speed_ratio,

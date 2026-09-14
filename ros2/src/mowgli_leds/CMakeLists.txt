@@ -9,7 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -40,9 +40,9 @@ target_include_directories(mowgli_leds_core
     $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(mowgli_leds_core
-  rclcpp
-  mowgli_interfaces
+target_link_libraries(mowgli_leds_core
+  ${rclcpp_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -57,9 +57,9 @@ target_link_libraries(led_ring_node
   mowgli_leds_core
 )
 
-ament_target_dependencies(led_ring_node
-  rclcpp
-  mowgli_interfaces
+target_link_libraries(led_ring_node
+  ${rclcpp_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------

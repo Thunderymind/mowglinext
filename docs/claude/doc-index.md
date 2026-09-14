@@ -73,6 +73,10 @@ tree at f21729e9; regenerate when files are added or removed rather than hand-pa
 
 ## Contributor docs (current)
 
+Migration update (2026-09-14): [ROS2_LYRICAL_MIGRATION.md](../ROS2_LYRICAL_MIGRATION.md)
+is current for the Lyrical APIs, source dependency pins, build targets and acceptance
+procedure. It supersedes Kilted-specific build details in the September 3 codemaps.
+
 | Doc | Audience | What it is |
 |-----|----------|-----------|
 | [`README.md`](../../README.md) | contributor | Project front page: what it does, quick start, monorepo table, doc links, license. |

@@ -237,7 +237,7 @@ def generate_launch_description() -> LaunchDescription:
             {"idle_nav2_suspend":
                 bool(robot_params.get("idle_nav2_suspend", False))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
-            # them on the live controllers (FollowPath.desired_linear_vel for
+            # them on the live controllers (FollowPath.primary_controller.max_linear_vel for
             # the RPP transit controller, FollowCoveragePath.speed_fast for the
             # FTC coverage controller) per nav mode. Without these the BT used
             # hardcoded 0.5/0.25 and the configured speeds never took effect.

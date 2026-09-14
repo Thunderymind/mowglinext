@@ -139,6 +139,27 @@ public:
     return context_;
   }
 
+  /// Call only after the executor has stopped and joined its callbacks.
+  void releaseResources()
+  {
+    // Halt while BTContext still owns a valid node (halt handlers use it for
+    // cancellation and resume persistence). ROS may already be shut down.
+    try
+    {
+      tree_.haltTree();
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_WARN(get_logger(), "Tree halt during shutdown: %s", ex.what());
+    }
+    logger_.reset();
+    tree_ = BT::Tree{};
+    blackboard_.reset();
+    // Break node -> context -> node before main returns. Otherwise the TF
+    // listener and DDS participant survive into shared-library finalization.
+    context_->node.reset();
+  }
+
 private:
   // ------------------------------------------------------------------
   // ROS2 infrastructure
@@ -982,7 +1003,7 @@ private:
     blackboard_->set("idle_nav2_suspend", idle_nav2_suspend);
 
     // Transit / mowing speeds, sourced from mowgli_robot.yaml and applied to
-    // the live controllers by SetNavMode (FollowPath.desired_linear_vel for the
+    // the live controllers by SetNavMode (FollowPath.primary_controller.max_linear_vel for the
     // RPP transit controller, FollowCoveragePath.speed_fast for FTC coverage).
     // Stored on the shared BTContext so SetNavMode's tick is a pure read.
     // Previously SetNavMode hardcoded 0.5 (precise) / 0.25 (degraded), which
@@ -1296,11 +1317,15 @@ int main(int argc, char** argv)
   // the future, so GetCoverageStatus / GetNextStrip / etc. all time out
   // — symptom: `GetNextUnmowedArea: all areas complete` immediately on
   // start because the service future is never ready.
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(node);
-  executor.add_node(node->context()->helper_node);
-  executor.spin();
+  {
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.add_node(node->context()->helper_node);
+    executor.spin();
+  }
 
+  node->releaseResources();
+  node.reset();
   rclcpp::shutdown();
   return 0;
 }
