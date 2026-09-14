@@ -1138,21 +1138,17 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
     return;
   }
 
-  // Square keepout centred on the dig, side = dig_obstacle_size_ (defaults to
-  // one chassis length, see kDefaultDigKeepoutSizeM).
-  const double half = std::max(dig_obstacle_size_, kMinDigKeepoutSizeM) * 0.5;
-  geometry_msgs::msg::Polygon poly;
-  const double corners[4][2] = {{x - half, y - half},
-                                {x + half, y - half},
-                                {x + half, y + half},
-                                {x - half, y + half}};
-  for (const auto& c : corners)
-  {
-    geometry_msgs::msg::Point32 p;
-    p.x = static_cast<float>(c[0]);
-    p.y = static_cast<float>(c[1]);
-    poly.points.push_back(p);
-  }
+  // Keepout dig_obstacle_size_ wide (one chassis length by default, see
+  // kDefaultDigKeepoutSizeM), biased AHEAD of the robot's heading: the hole is
+  // under the wheels and the bridge has just reversed the robot ~0.2-0.3 m out
+  // of it, so the keepout must not reach back over the spot the robot now
+  // stands on or every transit from there is START_OCCUPIED
+  // (kDigKeepoutBehindM, net of the mask's obstacle_margin band). The heading is the last one
+  // latched by on_odom; a dig with no heading yet falls back to the centred square.
+  const bool have_heading = have_robot_heading_;
+  const double yaw = last_robot_yaw_;
+  const geometry_msgs::msg::Polygon poly =
+      dig_keepout_polygon(x, y, yaw, have_heading, dig_obstacle_size_, obstacle_margin_m_);
 
   // The name IS the proposal's evidence: it is what the operator reads in the
   // GUI when deciding whether this inferred dig deserves a permanent hole in
@@ -1180,10 +1176,11 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
   }
 
   RCLCPP_WARN(get_logger(),
-              "Dig keepout (%.2f m square) proposed for area %zu at (%.2f, %.2f); coverage "
+              "Dig keepout (%.2f m wide, %s) proposed for area %zu at (%.2f, %.2f); coverage "
               "will route around it for this session. It is NOT saved to the map - accept "
               "it in the GUI to make it permanent.",
-              2.0 * half,
+              std::max(dig_obstacle_size_, kMinDigKeepoutSizeM),
+              have_heading ? "ahead of the heading" : "centred square, no heading yet",
               *area_index,
               x,
               y);
@@ -1280,6 +1277,81 @@ void MapServerNode::on_discard_obstacle(
   // also why a discarded proposal cannot come back after a restart.
   res->success = true;
   res->message = "pending obstacle " + std::to_string(req->obstacle_id) + " discarded";
+  RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
+}
+
+namespace
+{
+/// How far outside a pending dig polygon the robot centre may sit and still
+/// count as "trapped by it": one chassis length, which also covers the
+/// inflation the global costmap wraps around the lethal band (floor 0.58 m).
+constexpr double kDigDiscardClearanceM = 0.60;
+}  // namespace
+
+std::size_t MapServerNode::discard_dig_keepouts_near_robot()
+{
+  if (!have_robot_heading_)
+  {
+    RCLCPP_WARN(get_logger(),
+                "discard_dig_keepouts_near_robot: no robot pose latched yet - nothing dropped.");
+    return 0;
+  }
+  const double rx = last_robot_x_;
+  const double ry = last_robot_y_;
+  geometry_msgs::msg::Point32 robot;
+  robot.x = static_cast<float>(rx);
+  robot.y = static_cast<float>(ry);
+  std::size_t dropped = 0;
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    for (auto& area : areas_)
+    {
+      for (auto it = area.obstacles.begin(); it != area.obstacles.end();)
+      {
+        const bool is_pending_dig =
+            it->pending && it->source == mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG;
+        const bool touches_robot =
+            is_pending_dig &&
+            (point_in_polygon(robot, it->polygon) ||
+             point_to_polygon_distance(rx, ry, it->polygon) <= kDigDiscardClearanceM);
+        if (!touches_robot)
+        {
+          ++it;
+          continue;
+        }
+        RCLCPP_WARN(get_logger(),
+                    "Dropping pending dig keepout %u ('%s') - it sits under the robot at "
+                    "(%.2f, %.2f) and would refuse the way out.",
+                    it->id,
+                    it->name.c_str(),
+                    rx,
+                    ry);
+        erase_obstacle_polygon_locked(it->polygon);
+        it = area.obstacles.erase(it);
+        masks_dirty_ = true;
+        ++dropped;
+      }
+    }
+  }
+  if (dropped == 0)
+  {
+    return 0;
+  }
+  // Same re-stamp + replan nudge as a single discard.
+  apply_area_classifications();
+  std_msgs::msg::Bool replan_msg;
+  replan_msg.data = true;
+  replan_needed_pub_->publish(replan_msg);
+  return dropped;
+}
+
+void MapServerNode::on_discard_dig_keepouts_near_robot(
+    const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
+    std_srvs::srv::Trigger::Response::SharedPtr res)
+{
+  const std::size_t dropped = discard_dig_keepouts_near_robot();
+  res->success = true;
+  res->message = std::to_string(dropped) + " pending dig keepout(s) under the robot discarded";
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
 }
 

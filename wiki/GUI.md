@@ -1,5 +1,36 @@
 # GUI
 
+## Installed versions
+
+Open **Settings → Updates** to inspect the software currently installed on the mower.
+The same page is linked from the Home health check, the bottom of the desktop rail,
+and **More → Versions & updates** on mobile.
+
+The page reports the robot, GUI and sensor container image references, source
+revisions, image IDs and repository digests. Each component is built independently;
+different source revisions do not by themselves indicate an incompatible stack.
+Metadata is read from the image used by the container, even if its tag has since moved.
+
+Mainboard firmware version and protocol compatibility come from live hardware status.
+Compatibility means the firmware speaks the robot software's protocol, not that it
+is the newest release. Cached, disconnected and stale readings are distinguished.
+The configured mower model is a setting; a hardware board revision is not reported.
+
+GUI server and browser build identities help detect a browser left open across a
+deployment. **Refresh browser** loads the served web build when their identities differ.
+Unidentified local builds are shown as unknown. **Copy version details** provides an
+inventory for troubleshooting without exporting robot settings or credentials.
+
+The page is read-only. **Refresh versions** refreshes the local inventory.
+**Check now** compares image metadata with Stable releases or Development builds;
+the comparison selector does not change the installed channel. Each installed
+first-party image is compared with its `dev` tag or the latest
+published Stable release tag, using immutable digests. Results show matching,
+different, unavailable or unsupported images. Missing platforms and network
+failures never produce a blanket up-to-date result.
+
+See [update-check behavior](../docs/UPDATE_CHECKS.md) for tag selection and limits.
+
 MowgliNext web interface -- React frontend + Go backend for mower monitoring and control.
 
 ## Access
@@ -59,8 +90,8 @@ On mobile, the dashboard stacks vertically: compact hero card, live mini-map, 2x
 The map-frame localizer is **not** selectable: `fusion_graph_node` (GTSAM iSAM2) is the sole, unconditional localizer and owns both `map→odom` and `odom→base_footprint`. The section opens with a note saying so, then gathers the flags that tune what the graph fuses:
 
 - **LiDAR for obstacle avoidance** — a read-only status card: whether `lidar_enabled` is on and what the LiDAR driver's latest `/diagnostics` entry says. The toggle itself lives in *Sensors → lidar_enabled*.
-- **LiDAR scan matching** (`use_scan_matching`) — adds ICP between-factors from `/scan` to the graph.
-- **Loop closure** (`use_loop_closure`) — searches past scans for revisits and adds loop-closure factors.
+- **LiDAR map anchor** (`use_lidar_map_anchor`) — persistent RTK-built tiles and validated XY-only fallback after a complete GNSS outage.
+- **LiDAR anchor shadow mode** (`lidar_anchor_shadow_mode`) — calibration telemetry under RTK-Fixed without adding factors.
 - **Magnetometer yaw** (`use_magnetometer`) — fuses tilt-compensated magnetometer yaw as a unary factor. Off by default — enable only after running mag calibration with motors-off.
 - **Magnetometer calibration & tuning** — `enable_mag_cal` (collect calibration samples) plus `declination_deg`, `min_horizontal_uT` and `mag_yaw_variance`.
 
@@ -73,12 +104,12 @@ The dock pose (`dock_pose_x`, `dock_pose_y`, `dock_pose_yaw`) lives in `mowgli_r
 The Diagnostics page's *Localization* tab always carries a dedicated **Fusion Graph (iSAM2)** card — `fusion_graph_node` is the only map-frame localizer, so there is nothing to gate it on. It shows:
 
 - **Nodes in graph** — `total_nodes` from `/fusion_graph/diagnostics`, with the count of nodes that have a stored scan attached.
-- **Loop closures** — successful loop-closure factors added since boot.
-- **ICP success rate** — `scan_matches_ok / (ok + fail)` over the session.
+- **LiDAR map anchor** — tile/map state, particle-filter calls, candidate verdicts and applied factor count.
+- **LiDAR compute** — filter time and map-build time, useful for checking CPU use.
 - **Pose σ** — `√((cov_xx + cov_yy)/2)` in centimetres, with the yaw σ in degrees underneath. Colour-coded green / amber / red.
-- **ICP keyframes** and **ICP rejects** — keyframe count with its match rate, and the reject breakdown (RMSE / inliers / sanity / divergence).
-- **Attach rate** — the share of received scans that actually became graph factors — and **hand push** (wheels stationary but the gyro disagrees), with the count of GPS fixes rejected as wrong-fix.
-- **Save graph** / **Clear graph** buttons — call the corresponding `~/save_graph` / `~/clear_graph` services on `fusion_graph_node`. Save persists the graph to `/ros2_ws/maps/fusion_graph.{graph,scans,meta}`; Clear wipes iSAM2 and waits for the next pose seed to re-initialize.
+- **LiDAR anchor** tiles — anchor state, applied factors, hit ratio, effective σ floor and shadow p50/p90 (scan-to-scan ICP and loop closures were removed; the anchor only acts after a full GNSS outage).
+- **Hand push** (wheels stationary but the gyro disagrees), with the count of GPS fixes rejected as wrong-fix.
+- **Save graph** / **Clear graph** buttons — call the corresponding `~/save_graph` / `~/clear_graph` services on `fusion_graph_node`. Save persists the graph to `/ros2_ws/maps/fusion_graph.{graph,meta} plus the `.lidartiles/` directory (was {graph,scans,meta}`; Clear wipes iSAM2 and waits for the next pose seed to re-initialize.
 
 The card tags itself *stale* when the last `/fusion_graph/diagnostics` sample is more than 5 s old.
 

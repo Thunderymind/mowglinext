@@ -47,6 +47,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
+#include "mowgli_interfaces/update_maintenance.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "nav2_msgs/msg/collision_monitor_state.hpp"
@@ -61,6 +62,11 @@ using namespace std::chrono_literals;
 
 namespace mowgli_behavior
 {
+
+/// Margin (battery %) that battery_manual_resume_percent is clamped ABOVE
+/// battery_low_percent when an installed config inverts the two: resuming at
+/// or below the dock threshold re-docks on the next NeedsDocking tick.
+constexpr double kManualResumeMinMarginPct = 5.0;
 
 // ---------------------------------------------------------------------------
 // BehaviorTreeNode
@@ -132,6 +138,27 @@ public:
   std::shared_ptr<BTContext> context() const
   {
     return context_;
+  }
+
+  /// Call only after the executor has stopped and joined its callbacks.
+  void releaseResources()
+  {
+    // Halt while BTContext still owns a valid node (halt handlers use it for
+    // cancellation and resume persistence). ROS may already be shut down.
+    try
+    {
+      tree_.haltTree();
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_WARN(get_logger(), "Tree halt during shutdown: %s", ex.what());
+    }
+    logger_.reset();
+    tree_ = BT::Tree{};
+    blackboard_.reset();
+    // Break node -> context -> node before main returns. Otherwise the TF
+    // listener and DDS participant survive into shared-library finalization.
+    context_->node.reset();
   }
 
 private:
@@ -327,7 +354,7 @@ private:
     // full_system.launch.py; the values below are only the compile-time
     // fallbacks for a node launched without them.
     StartBlockedEscapeCfg escape_cfg;
-    escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", true);
+    escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", false);
     escape_cfg.speed = declare_parameter<double>("start_blocked_escape_speed", 0.10);
     escape_cfg.distance = declare_parameter<double>("start_blocked_escape_distance", 0.40);
     escape_cfg.timeout_s = declare_parameter<double>("start_blocked_escape_timeout_s", 6.0);
@@ -593,6 +620,12 @@ private:
                HighLevelControl::Response::SharedPtr resp)
         {
           RCLCPP_INFO(get_logger(), "HighLevelControl: received command=%u", req->command);
+          if (mowgli_interfaces::updateMaintenanceActive() &&
+              req->command != HighLevelControl::Request::COMMAND_STOP)
+          {
+            resp->success = false;
+            return;
+          }
           // COMMAND_S2 (4, "mow next area" — the GUI's onMowNextArea button) has
           // no dedicated MainLogic branch: in this architecture mowing always
           // resumes from the next UN-mowed area (GetNextUnmowedArea), so "mow
@@ -609,6 +642,24 @@ private:
           }
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
+            // Play pressed while parked in a charge hold (CHARGING /
+            // CRITICAL_BATTERY_CHARGING): current_command is already 1 there,
+            // so the assignment below is a no-op and the tree would keep
+            // waiting for battery_full_pct. Flag an operator-forced resume
+            // instead; IsManualResumeRequested in the wait loops consumes it,
+            // honouring it only above {battery_manual_resume_pct}. Decided on
+            // the last PUBLISHED state_name, not on the charger bit, so a START
+            // from IDLE_DOCKED (a fresh session) is untouched.
+            if (cmd == HighLevelControl::Request::COMMAND_START &&
+                isChargeHoldState(context_->last_high_level_status.state_name))
+            {
+              context_->manual_resume_requested = true;
+              context_->manual_resume_requested_time = std::chrono::steady_clock::now();
+              RCLCPP_INFO(get_logger(),
+                          "HighLevelControl: manual resume requested while charging "
+                          "(battery %.1f %%)",
+                          static_cast<double>(context_->battery_percent));
+            }
             context_->current_command = cmd;
             // A plain COMMAND_START means "mow the lawn", so it must cancel any
             // single-area clip still latched from an earlier ~/start_in_area run.
@@ -642,6 +693,11 @@ private:
         [this](const StartInArea::Request::SharedPtr req, StartInArea::Response::SharedPtr resp)
         {
           RCLCPP_INFO(get_logger(), "StartInArea: received area=%u", req->area);
+          if (mowgli_interfaces::updateMaintenanceActive())
+          {
+            resp->success = false;
+            return;
+          }
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->target_area_index = static_cast<int>(req->area);
@@ -898,6 +954,25 @@ private:
 
     RCLCPP_INFO(get_logger(), "Loading behavior tree from: %s", tree_file.c_str());
 
+    // Coverage transits use a sibling tree with the transit goal checker
+    // (field 2026-09-12: a 0.40 m transit spun 164 s on a ±0.10 rad yaw goal).
+    {
+      const auto transit_xml =
+          std::filesystem::path(tree_file).parent_path() / "navigate_to_pose_transit.xml";
+      if (std::filesystem::exists(transit_xml))
+      {
+        context_->transit_tree_xml = transit_xml.string();
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "navigate_to_pose_transit.xml not found next to %s — coverage transits "
+                    "fall back to the default tree (stopped_goal_checker, final heading "
+                    "required)",
+                    tree_file.c_str());
+      }
+    }
+
     // Build blackboard and store shared context
     blackboard_ = BT::Blackboard::create();
     blackboard_->set("context", context_);
@@ -930,7 +1005,7 @@ private:
     blackboard_->set("idle_nav2_suspend", idle_nav2_suspend);
 
     // Transit / mowing speeds, sourced from mowgli_robot.yaml and applied to
-    // the live controllers by SetNavMode (FollowPath.desired_linear_vel for the
+    // the live controllers by SetNavMode (FollowPath.primary_controller.max_linear_vel for the
     // RPP transit controller, FollowCoveragePath.speed_fast for FTC coverage).
     // Stored on the shared BTContext so SetNavMode's tick is a pure read.
     // Previously SetNavMode hardcoded 0.5 (precise) / 0.25 (degraded), which
@@ -997,12 +1072,30 @@ private:
                   battery_critical_pct,
                   battery_critical_recovery_pct);
     }
+    // Floor for an operator-forced resume out of a charge hold (Play pressed
+    // while CHARGING / CRITICAL_BATTERY_CHARGING — IsManualResumeRequested).
+    // It must sit above battery_low_percent: resuming at or below the dock
+    // threshold makes NeedsDocking fire on the very next tick, so the robot
+    // would undock, drive off, and turn straight back within minutes. Clamp
+    // rather than reject so a mis-set installed value degrades to a sane band.
+    double battery_manual_resume_pct =
+        declare_parameter<double>("battery_manual_resume_percent", 30.0);
+    if (battery_manual_resume_pct <= battery_low_pct)
+    {
+      battery_manual_resume_pct = battery_low_pct + kManualResumeMinMarginPct;
+      RCLCPP_WARN(get_logger(),
+                  "battery_manual_resume_percent must exceed battery_low_percent "
+                  "(%.1f); clamped to %.1f",
+                  battery_low_pct,
+                  battery_manual_resume_pct);
+    }
     blackboard_->set("battery_low_pct", static_cast<float>(battery_low_pct));
     blackboard_->set("battery_critical_pct", static_cast<float>(battery_critical_pct));
     blackboard_->set("battery_full_pct", static_cast<float>(battery_full_pct));
     blackboard_->set("battery_critical_voltage", static_cast<float>(battery_critical_voltage));
     blackboard_->set("battery_critical_recovery_pct",
                      static_cast<float>(battery_critical_recovery_pct));
+    blackboard_->set("battery_manual_resume_pct", static_cast<float>(battery_manual_resume_pct));
 
     // Swath (mow) angle — operator-tunable in mowgli_robot.yaml and surfaced
     // on the GUI Mowing settings. < 0 = AUTO (coverage server picks the
@@ -1066,6 +1159,10 @@ private:
     coverage_orientation_service_->processPending();
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
+      if (mowgli_interfaces::updateMaintenanceActive())
+      {
+        context_->current_command = 8;  // COMMAND_STOP: hold position, never auto-resume.
+      }
       updateLocalizationHealthLocked();
     }
 
@@ -1088,6 +1185,8 @@ private:
       context_->coverage_start_blocked = false;
       context_->start_blocked_area.reset();
       context_->area_start_blocked_count.clear();
+      context_->guard_halted_reason.reset();
+      context_->area_guard_halt_count.clear();
       // Disarm the #487 escape motion too — see EndSession for why.
       context_->start_blocked_escape_armed = false;
       if (clearCoverageResumeState(*context_))
@@ -1232,11 +1331,15 @@ int main(int argc, char** argv)
   // the future, so GetCoverageStatus / GetNextStrip / etc. all time out
   // — symptom: `GetNextUnmowedArea: all areas complete` immediately on
   // start because the service future is never ready.
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(node);
-  executor.add_node(node->context()->helper_node);
-  executor.spin();
+  {
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.add_node(node->context()->helper_node);
+    executor.spin();
+  }
 
+  node->releaseResources();
+  node.reset();
   rclcpp::shutdown();
   return 0;
 }

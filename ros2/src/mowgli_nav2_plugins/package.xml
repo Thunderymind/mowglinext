@@ -18,6 +18,7 @@
   <depend>nav2_core</depend>
   <depend>nav2_costmap_2d</depend>
   <depend>nav2_util</depend>
+  <depend>nav2_ros_common</depend>
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>pluginlib</depend>
@@ -27,6 +28,7 @@
   <depend>tf2_eigen</depend>
   <depend>visualization_msgs</depend>
   <depend>eigen3_cmake_module</depend>
+  <depend>mowgli_interfaces</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

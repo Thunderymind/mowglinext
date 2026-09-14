@@ -6,6 +6,11 @@
 
 ## Where to look
 
+Managed installer and updater share `install/compose/stack.json` via the Go `installer-stack` command. Releases ship a checksummed Compose bundle; installed releases survive older-checkout installer reruns. See `docs/UPDATES.md` for selection, ownership and migration constraints.
+
+Coordinated updates: `install/deployment.json` owns the publication build list and per-image compatibility contracts and verified service projection. Installed Compose fragments declare `garden.mowgli.update.*` labels; absent optional services stay absent. See `docs/UPDATES.md` for dependency, health and supported persistence contracts.
+
+
 | Task | Start here |
 |------|------------|
 | Trace an install end-to-end (15 steps) | `install/mowglinext.sh` `main()` L88–199 (each `progress_run*` names the lib function) |
@@ -252,7 +257,7 @@ CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-
 - `LIDAR_ENABLED` in `.env` only decides whether the **container** is composed. Flipping it does NOT change the ROS stack's LiDAR mode — that is `mowgli_robot.yaml:lidar_enabled` (`docker-compose.base.yml` L13–17; guarded by `ros2/src/mowgli_bringup/test/test_robot_config_util.py` L436–453).
 - `write_compose_merged` uses `config --no-interpolate` so `${MOWGLI_ROS2_IMAGE}` stays a literal in the generated file; the Bash fallback (`compose.sh` L169–206) is a naive section-concatenator — never hand-edit `docker/docker-compose.yaml`, regenerate it.
 - `write_config` NEVER overwrites an existing `docker/config/mowgli/mowgli_robot.yaml`; it line-splices ~25 keys (`config.sh` L1400–1440). Changing the seed alone does nothing on an upgraded robot.
-- `write_config` L1425–1427 forces `use_scan_matching` and `use_loop_closure` to match `lidar_enabled` on every re-run — an operator who turned one off in the GUI gets it turned back on by the next installer pass.
+- `write_config` removes retired ICP, loop-closure and dense-map keys from upgraded sparse configs; these entries are migration cleanup and are not runtime settings.
 - Empty `GNSS_*` env values in `docker-compose.gps.yml` L45–57 are deliberate ("not set"): `start_gps.sh` resolves YAML first, env second, built-in default last. Adding a compose default silently masks the operator's YAML choice.
 - The NTRIP `centipede/centipede` fallback only applies when the caster is `crtk.net` — in BOTH `env.sh` L178–181 and `start_gps.sh` L177–215. Keep them in sync.
 - TF-Luna and VESC prompts exist but are hard-gated off (`config.sh` L354–378); their compose fragments still carry `ghcr.io/...` placeholders. `install/tests/test_optional_features.sh` pins this.
@@ -268,3 +273,5 @@ CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-
 - `install/.preset` / `install/.preset.consumed` — optional hardware preset dropped next to the installer; read and renamed to `.consumed` by `lib/state.sh` (`mark_preset_consumed` L160). Nothing in this repo writes it — `docs/install.sh` passes web-composer choices as CLI flags instead.
 - `ros2/src/external/universal-gnss` — git submodule, pinned to the mowglinext fork; the gps image copies its packages, never patch them in place.
 - LiDAR driver sources (`Myzhar/ldrobot-lidar-ros2`, `Slamtec/rplidar_ros`, `ldrobotSensorTeam/ldlidar_stl_ros2`) are cloned inside the Dockerfiles; the `sed` patches there are the only supported way to modify them.
+
+External release components: `gui/cmd/publish-deployment/definition.go` reads built/external entries in `install/deployment.json`. The workflow builds only built entries; publisher resolves external Docker Hub/GHCR index digests and both platforms. Deployment schema 3 and journal schema 5 preserve external provenance; existing storage, health, installer-selection and core-image guards still apply. See `docs/UPDATES.md`, External images in standard deployments.

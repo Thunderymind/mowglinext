@@ -11,9 +11,9 @@
 #include <thread>
 
 #include <geometry_msgs/msg/quaternion.hpp>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/LinearMath/Transform.h>
-#include <tf2/exceptions.h>
+#include <tf2/LinearMath/Quaternion.hpp>
+#include <tf2/LinearMath/Transform.hpp>
+#include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "fusion_graph/anchor_slew.hpp"
@@ -127,27 +127,6 @@ void FusionGraphNode::PublishLocalOdom()
   odom.twist.covariance[0] = 0.02;  // vx — wheel-odom velocity noise
   odom.twist.covariance[35] = 4e-4;  // wz — gyro rate noise (σ ≈ 0.02 rad/s)
   pub_local_odom_->publish(odom);
-}
-
-void FusionGraphNode::PublishIcpOdom()
-{
-  // LiDAR-only (scan-match integrated) pose for GUI comparison against the
-  // fused/GPS estimate. Seeded from the graph pose at the first accepted match
-  // (see OnTimer), so it starts aligned with the graph and then drifts — the
-  // drift IS the signal. Map frame so the GUI overlays it on the same canvas.
-  if (!icp_pose_seeded_ || !pub_icp_odom_)
-  {
-    return;
-  }
-  nav_msgs::msg::Odometry odom;
-  odom.header.stamp = this->now();
-  odom.header.frame_id = map_frame_;
-  odom.child_frame_id = base_frame_;
-  odom.pose.pose.position.x = icp_pose_.x();
-  odom.pose.pose.position.y = icp_pose_.y();
-  odom.pose.pose.position.z = 0.0;
-  odom.pose.pose.orientation = QuatFromYaw(icp_pose_.theta());
-  pub_icp_odom_->publish(odom);
 }
 
 void FusionGraphNode::PublishOutputs(const TickOutput& out)

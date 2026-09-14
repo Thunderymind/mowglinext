@@ -22,9 +22,9 @@
 #include <string>
 #include <vector>
 
-#include "tf2/exceptions.h"
+#include "tf2/exceptions.hpp"
 #include "tf2/time.hpp"
-#include "tf2_ros/buffer.h"
+#include "tf2_ros/buffer.hpp"
 
 namespace mowgli_behavior
 {
@@ -182,6 +182,61 @@ BT::NodeStatus IsBatteryAbove::tick()
   }
 
   return ctx->battery_percent >= threshold ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// IsManualResumeRequested
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsManualResumeRequested::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+
+  if (!ctx->manual_resume_requested)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Every path below consumes the request: it is a one-shot operator action,
+  // and a refused or stale token must not linger into a later charge hold.
+  ctx->manual_resume_requested = false;
+
+  const double age_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                       ctx->manual_resume_requested_time)
+                             .count();
+  if (age_sec > BTContext::kManualResumeMaxAgeSec)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "IsManualResumeRequested: dropping a %.0f s old resume request "
+                "(older than %.0f s) — it was not made in this charge hold",
+                age_sec,
+                BTContext::kManualResumeMaxAgeSec);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  float min_battery_pct = 30.0f;
+  if (auto res = getInput<float>("min_battery_pct"))
+  {
+    min_battery_pct = res.value();
+  }
+
+  const float battery = ctx->battery_percent;
+  if (battery < min_battery_pct)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "manual resume refused: battery %.1f %% < %.1f %%",
+                battery,
+                min_battery_pct);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "IsManualResumeRequested: operator resume honoured at battery %.1f %% "
+              "(floor %.1f %%) — leaving the charge hold",
+              battery,
+              min_battery_pct);
+  return BT::NodeStatus::SUCCESS;
 }
 
 // ---------------------------------------------------------------------------

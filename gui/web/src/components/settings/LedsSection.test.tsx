@@ -39,6 +39,11 @@ describe("LedsSection", () => {
         led_refresh_hz: 20,
         led_low_battery_percent: 20,
         led_charge_full_percent: 99,
+        led_charge_complete_timeout_s: 600,
+        led_charge_complete_dim_scale: 0,
+        led_charge_complete_indicator_count: 0,
+        led_charge_complete_indicator_scale: 0.15,
+        led_charge_complete_indicator_ids: "",
         led_status_timeout_s: 5,
         led_keepalive_s: 2,
         led_device_retry_s: 30,
@@ -118,12 +123,69 @@ describe("LedsSection", () => {
             "Refresh rate",
             "Low battery threshold",
             "Charge complete",
+            "Charge complete dim delay",
+            "Charge complete brightness",
+            "Charge complete indicator pixels",
+            "Charge complete indicator brightness",
+            "Charge complete indicator pixel IDs",
             "Status timeout",
             "Keepalive",
             "Device retry",
         ]) {
             expect(screen.getByText(label)).toBeInTheDocument();
         }
+    });
+
+    // Positional: Hardware (led_count, led_spi_speed_hz), Appearance
+    // (led_brightness, led_idle_scale, led_refresh_hz) and the Behavior card's
+    // first five numeric fields render before the charge-complete pair, so it
+    // lands at fixed indices 10/11 (indicator count/scale at 12/13) regardless
+    // of what gets appended after them.
+    it("edits the charge-complete dim delay and brightness", async () => {
+        const onChange = vi.fn();
+        renderSection(enabledValues, { onChange });
+
+        const spinbuttons = screen.getAllByRole("spinbutton");
+        const timeoutInput = spinbuttons[10];
+        const dimInput = spinbuttons[11];
+
+        await userEvent.clear(timeoutInput);
+        await userEvent.type(timeoutInput, "300");
+        expect(onChange).toHaveBeenCalledWith("led_charge_complete_timeout_s", 300);
+
+        await userEvent.clear(dimInput);
+        await userEvent.type(dimInput, "0.2");
+        expect(onChange).toHaveBeenCalledWith("led_charge_complete_dim_scale", 0.2);
+    });
+
+    it("edits the charge-complete indicator pixel count and brightness", async () => {
+        const onChange = vi.fn();
+        renderSection(enabledValues, { onChange });
+
+        const spinbuttons = screen.getAllByRole("spinbutton");
+        const countInput = spinbuttons[12];
+        const scaleInput = spinbuttons[13];
+
+        await userEvent.clear(countInput);
+        await userEvent.type(countInput, "4");
+        expect(onChange).toHaveBeenCalledWith("led_charge_complete_indicator_count", 4);
+
+        await userEvent.clear(scaleInput);
+        await userEvent.type(scaleInput, "0.3");
+        expect(onChange).toHaveBeenCalledWith("led_charge_complete_indicator_scale", 0.3);
+    });
+
+    it("edits the charge-complete indicator pixel IDs as free text", async () => {
+        const onChange = vi.fn();
+        renderSection(
+            { ...enabledValues, led_charge_complete_indicator_ids: "0,4,8,12" },
+            { onChange },
+        );
+
+        const idsInput = screen.getByDisplayValue("0,4,8,12");
+        await userEvent.type(idsInput, "6");
+
+        expect(onChange).toHaveBeenCalledWith("led_charge_complete_indicator_ids", "0,4,8,126");
     });
 
     it("edits the LED count, which is a placeholder rather than a measurement", async () => {

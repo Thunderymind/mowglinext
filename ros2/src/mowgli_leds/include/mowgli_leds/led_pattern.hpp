@@ -21,7 +21,23 @@
 //                     it is the only SOLID red and the only static full ring.
 //   2. CHARGING       green arc proportional to battery, breathing ~3 s.
 //                     Steady (non-breathing) full green once battery is at
-//                     charge_full_percent -- "done, you can take it".
+//                     charge_full_percent -- "done, you can take it". If that
+//                     steady state persists for charge_complete_timeout_s (a
+//                     robot left on the dock overnight), the ring dims to
+//                     charge_complete_dim_scale instead -- 0 by default, i.e.
+//                     off -- so a fully charged robot does not shine a bright
+//                     green light indefinitely. Optionally, a handful of
+//                     pixels stay lit at charge_complete_indicator_scale
+//                     instead of dimming with the rest, so an operator can
+//                     still tell at a glance the robot is powered and
+//                     charged: either charge_complete_indicator_count of
+//                     them, evenly spaced around the ring, or the exact
+//                     pixels named in charge_complete_indicator_ids (which
+//                     takes priority when non-empty). Both empty/0 (default)
+//                     disables this and the whole ring dims uniformly. Any
+//                     change (unplugged, level drops below
+//                     charge_full_percent) resets the timer and the ring
+//                     goes back to full brightness immediately.
 //                     Ranked above STALE so a robot charging on the dock with
 //                     the behavior tree down still reads as charging: the
 //                     charge state comes from the hardware bridge's Power
@@ -117,6 +133,12 @@ struct LedInputs
   bool emergency = false;
   /// GNSS currently reports an RTK-Fixed solution.
   bool rtk_fixed = false;
+  /// Seconds the ring has continuously shown the steady "charge complete"
+  /// frame (is_charging && battery_valid && battery_percent >=
+  /// charge_full_percent). Zero whenever that condition does not hold. The
+  /// node resets this the instant the condition breaks, so it never survives
+  /// an unplug or a level dropping back below charge_full_percent.
+  double charge_complete_elapsed_s = 0.0;
   /// Monotonic seconds, the only time base the animations use.
   double now_s = 0.0;
 };
@@ -130,6 +152,35 @@ struct LedPatternCfg
   float charge_full_percent = 99.0f;
   /// Scale applied to the idle ring, on top of the global led_brightness.
   float idle_scale = 0.10f;
+  /// After the ring has shown steady full-green "charge complete" for this
+  /// many seconds, dim it to charge_complete_dim_scale. 0 disables the
+  /// feature (the ring stays full green indefinitely, the original
+  /// behaviour).
+  double charge_complete_timeout_s = 600.0;
+  /// Brightness scale applied once charge_complete_timeout_s has elapsed.
+  /// 0 (the default) turns the ring off; a small non-zero value keeps a faint
+  /// green glow as an at-a-glance "still on and charged" indicator.
+  float charge_complete_dim_scale = 0.0f;
+  /// Number of pixels, evenly spaced around the ring, kept at
+  /// charge_complete_indicator_scale instead of charge_complete_dim_scale
+  /// once charge_complete_timeout_s has elapsed -- e.g. 1 keeps a single
+  /// pixel lit, 4 keeps four pixels spaced 90 degrees apart. Clamped to
+  /// [0, led_count] at render time. 0 (the default) disables this: the
+  /// whole ring dims uniformly to charge_complete_dim_scale, exactly as if
+  /// this parameter did not exist. Ignored when charge_complete_indicator_
+  /// ids below is non-empty.
+  std::size_t charge_complete_indicator_count = 0u;
+  /// Explicit pixel indices kept lit instead of the even spacing above --
+  /// lets an operator pick exactly which pixels stay on (e.g. the one
+  /// facing the house) rather than an auto-computed spacing. Empty (the
+  /// default) falls back to charge_complete_indicator_count. Indices
+  /// outside [0, led_count) are silently ignored at render time (a stale
+  /// entry left over after led_count was lowered must not crash or wrap).
+  std::vector<std::size_t> charge_complete_indicator_ids;
+  /// Brightness of the indicator pixels above, relative to led_brightness.
+  /// Independent of charge_complete_dim_scale so the indicator pixels can
+  /// stay visibly brighter than the dimmed (or fully off) background.
+  float charge_complete_indicator_scale = 0.15f;
 };
 
 namespace colors
@@ -307,6 +358,44 @@ inline void PaintComet(std::vector<Rgb>& pixels, std::size_t head_index, const R
   }
 }
 
+/// Overwrite `indicator_count` pixels, spaced as evenly as integer indices
+/// allow around the ring (index i*count/indicator_count), with `color`.
+/// Used to keep a handful of "still on" indicator pixels lit against an
+/// otherwise dimmed background -- readable from any angle, not just one
+/// side of the ring. `indicator_count` is clamped to `pixels.size()`;
+/// count 0 or an empty ring is a no-op.
+inline void PaintEvenIndicators(std::vector<Rgb>& pixels,
+                                std::size_t indicator_count,
+                                const Rgb& color)
+{
+  const std::size_t count = pixels.size();
+  if (count == 0u)
+  {
+    return;
+  }
+  indicator_count = std::min(indicator_count, count);
+  for (std::size_t i = 0; i < indicator_count; ++i)
+  {
+    pixels[(i * count) / indicator_count] = color;
+  }
+}
+
+/// Overwrite the pixels named in `ids` with `color`. Any index outside
+/// [0, pixels.size()) is silently skipped -- e.g. an operator-entered ID
+/// left stale after led_count was lowered.
+inline void PaintIndicatorIds(std::vector<Rgb>& pixels,
+                              const std::vector<std::size_t>& ids,
+                              const Rgb& color)
+{
+  for (const std::size_t idx : ids)
+  {
+    if (idx < pixels.size())
+    {
+      pixels[idx] = color;
+    }
+  }
+}
+
 }  // namespace detail
 
 /// Render the frame the ring should currently show.
@@ -338,7 +427,23 @@ inline std::vector<Rgb> RenderFrame(const LedInputs& in, const LedPatternCfg& cf
       }
       if (in.battery_percent >= cfg.charge_full_percent)
       {
-        std::fill(pixels.begin(), pixels.end(), colors::kGreen);
+        const bool gone_dim = cfg.charge_complete_timeout_s > 0.0 &&
+                              in.charge_complete_elapsed_s >= cfg.charge_complete_timeout_s;
+        if (!gone_dim)
+        {
+          std::fill(pixels.begin(), pixels.end(), colors::kGreen);
+          break;
+        }
+        std::fill(pixels.begin(), pixels.end(), Dim(colors::kGreen, cfg.charge_complete_dim_scale));
+        const Rgb indicator = Dim(colors::kGreen, cfg.charge_complete_indicator_scale);
+        if (!cfg.charge_complete_indicator_ids.empty())
+        {
+          detail::PaintIndicatorIds(pixels, cfg.charge_complete_indicator_ids, indicator);
+        }
+        else
+        {
+          detail::PaintEvenIndicators(pixels, cfg.charge_complete_indicator_count, indicator);
+        }
         break;
       }
       const Rgb body = Dim(colors::kGreen, Breathe(in.now_s, 3.0, 0.25f, 1.0f));

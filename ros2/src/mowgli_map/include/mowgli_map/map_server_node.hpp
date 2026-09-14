@@ -38,9 +38,9 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <tf2/exceptions.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
+#include <tf2/exceptions.hpp>
+#include <tf2_ros/buffer.hpp>
+#include <tf2_ros/transform_listener.hpp>
 
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
@@ -184,6 +184,28 @@ public:
   void on_dig_event_for_test(mowgli_interfaces::msg::DigEvent::ConstSharedPtr msg)
   {
     on_dig_event(std::move(msg));
+  }
+  /// Test-only: stand in for on_odom's TF-derived pose latch (tests have no
+  /// TF tree), so the footprint-relative dig discard can be exercised.
+  void set_robot_pose_for_test(double x, double y, double yaw)
+  {
+    last_robot_x_ = x;
+    last_robot_y_ = y;
+    last_robot_yaw_ = yaw;
+    have_robot_heading_ = true;
+  }
+  /// Test-only: run the DIG_OBSTRUCTION exit helper directly.
+  [[nodiscard]] std::size_t discard_dig_keepouts_near_robot_for_test()
+  {
+    return discard_dig_keepouts_near_robot();
+  }
+
+  /// Test-only: stand in for on_odom's TF-derived heading latch (tests have no
+  /// TF tree), so the dig keepout orientation can be asserted.
+  void set_robot_heading_for_test(double yaw)
+  {
+    last_robot_yaw_ = yaw;
+    have_robot_heading_ = true;
   }
 
   /// Test-only: forward to the private mowing_area_containing.
@@ -361,6 +383,18 @@ private:
   /// Reject a pending proposal (currently: wheel-slip dig keepouts) by its
   /// MapObstacleInfo.id. Removes it from the live mask; nothing was ever
   /// persisted, so it cannot come back after a restart either.
+  /// DIG_OBSTRUCTION exit (~/discard_dig_keepouts_near_robot, std_srvs/Trigger):
+  /// drop every PENDING dig proposal whose polygon contains, or lies within
+  /// kDigDiscardClearanceM of, the robot's latest map-frame position. Three
+  /// same-spot latches leave up to three 0.60 m keepouts stamped around the
+  /// robot, so the HOME dock transit's plan starts in a lethal cell
+  /// (START_OCCUPIED) and never moves; the tree calls this before planning
+  /// home. Accepted (persisted) keepouts and proposals farther away are kept.
+  void on_discard_dig_keepouts_near_robot(const std_srvs::srv::Trigger::Request::SharedPtr req,
+                                          std_srvs::srv::Trigger::Response::SharedPtr res);
+  /// @return how many pending dig proposals were dropped (0 = nothing touched).
+  std::size_t discard_dig_keepouts_near_robot();
+
   void on_discard_obstacle(const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,
                            mowgli_interfaces::srv::ClearObstacle::Response::SharedPtr res);
 
@@ -602,13 +636,46 @@ private:
   /// jitter doesn't immediately cross the boundary again.
   double boundary_recovery_offset_m_{0.8};
 
-  /// Cells inside a mowing area but within this distance of the polygon edge
-  /// are marked LETHAL in the keepout mask, so the Smac planner keeps the
-  /// transit/coverage path that much away from the real boundary. This gives
-  /// the FTC controller room to track without overshooting past the edge.
-  /// Default 0.3 m — pairs with inflation_radius 0.4 m for a total soft-wall
-  /// of ~0.7 m inside the polygon.
+  /// Cells inside a mowing/navigation area but within this distance of the
+  /// polygon edge get a SOFT mid-cost penalty in the keepout mask (the same
+  /// kSoftPenaltyMaskCost the outside-slack band uses, costmap_filters.cpp)
+  /// — NEVER lethal. This nudges the global planner (Smac, used for
+  /// point-to-point TRANSIT) to prefer a route that stays that far inside
+  /// the recorded edge when one exists, without ever refusing to start,
+  /// end, or pass through the band. Coverage/mowing itself is unaffected —
+  /// FTC tracks the F2C path against the LOCAL costmap, which never carries
+  /// this mask. Read declare_parameters(), not this initialiser — the
+  /// actual default lives in the declare_parameter<double> call plus the
+  /// template (mowgli_robot.yaml.boundary_inner_margin_m), per the usual
+  /// gotcha.
+  ///
+  /// This was a LETHAL band in an earlier version of this change and was
+  /// reworked to mid-cost after review: lethal here collides with
+  /// chassis_safety_inset (both default to 0.20 m — the outermost coverage
+  /// ring is planned exactly chassis_safety_inset inside the line, so a
+  /// lethal band there plus inflation_radius would swallow the ring itself
+  /// and reopen the START_OCCUPIED skip cascade, issue #487) and would also
+  /// wall off any area-to-area seam narrower than 2x the inflated margin.
+  /// A lethal version of this was ALSO tried even earlier and reverted
+  /// (2026-04-23, commit 7f4b43d5) because dock poses commonly sit close to
+  /// the polygon edge and a few cm of GNSS drift landed the robot's OWN
+  /// position in a lethal cell the planner could not route out of — the
+  /// mid-cost design means that failure mode cannot recur even without the
+  /// dock exemption below, since a soft-cost start/goal pose never fails
+  /// "Start occupied".
   double boundary_inner_margin_m_{0.3};
+
+  /// Cells within this distance of docking_pose_ are exempt from the
+  /// boundary_inner_margin_m_ penalty above, regardless of direction — kept
+  /// even though the mid-cost design no longer strictly needs it for
+  /// safety, so the dock approach carries no bias at all rather than merely
+  /// "never blocked". Unlike dock_corridor_polygon_ (which only carves out
+  /// the corridor BEHIND the dock body), this also covers the
+  /// staging/approach side the robot actually occupies right after
+  /// undocking, where GNSS is often still settling. 0 disables the
+  /// exemption. Only applied while has_dock_exclusion_ is true (a dock pose
+  /// has been set).
+  double dock_inner_margin_exempt_radius_m_{2.5};
 
   /// Extra LETHAL margin grown around drawn obstacle polygons in the keepout
   /// mask (mowgli_robot.yaml.obstacle_margin, GUI: Settings → Obstacles).
@@ -701,6 +768,11 @@ private:
   /// Most recent map-frame robot position (latched in on_odom).
   double last_robot_x_{0.0};
   double last_robot_y_{0.0};
+  /// Most recent map-frame robot heading (latched in on_odom); orients the
+  /// dig keepout ahead of the robot (dig_keepout_polygon). False until the
+  /// first TF lookup succeeds, in which case the dig falls back to a square.
+  double last_robot_yaw_{0.0};
+  bool have_robot_heading_{false};
 
   /// Pre-defined areas (mowing zones + navigation corridors).
   /// Any cell inside ANY area polygon is free in the keepout mask;
@@ -879,6 +951,7 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::GetRecoveryPoint>::SharedPtr get_recovery_point_srv_;
   rclcpp::Service<mowgli_interfaces::srv::PromoteObstacle>::SharedPtr promote_obstacle_srv_;
   rclcpp::Service<mowgli_interfaces::srv::ClearObstacle>::SharedPtr discard_obstacle_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr discard_dig_keepouts_near_robot_srv_;
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

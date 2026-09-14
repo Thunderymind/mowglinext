@@ -5,6 +5,11 @@
 > authoritative and which is a historical record. Excludes `ros2/src/opennav_coverage/**` and
 > `ros2/src/external/**` (vendored submodules) and `node_modules/`.
 
+## Update-system documents added after index generation
+
+- [Software updates and recovery](../UPDATES.md) — **current**, operator/contributor: host updater, installer, publication and platform contract.
+- [Update-system design snapshot](../UPDATE_SYSTEM_PLAN.md) — **historical**, contributor: original design intent; use UPDATES.md for implemented behavior.
+
 ## How to read this index
 
 - **status** — `current` (trust it), `historical` (a dated record of *what was decided/found then*),
@@ -47,7 +52,7 @@ tree at f21729e9; regenerate when files are added or removed rather than hand-pa
 
 | Codemap | Read it when… |
 |---------|---------------|
-| [`fusion_graph.md`](codemaps/fusion_graph.md) | GTSAM iSAM2 localizer: factors, gates, keyframe map, graph persistence, diagnostics. |
+| [`fusion_graph.md`](codemaps/fusion_graph.md) | GTSAM iSAM2 localizer: factors, gates, LiDAR map anchor, graph persistence, diagnostics. |
 | [`mowgli_behavior.md`](codemaps/mowgli_behavior.md) | BehaviorTree.CPP v4 mission executor, guards, mow/home/record/manual/stop branches, coverage-resume state. |
 | [`mowgli_coverage.md`](codemaps/mowgli_coverage.md) | Fields2Cover v3 planner: rings, swaths, connectors, hole-free sub-paths, `plan_coverage` action. |
 | [`mowgli_map.md`](codemaps/mowgli_map.md) | Area polygons, `areas.dat` + datum stamp, keepout mask, `mow_progress`, promoted obstacles, dock pose. |
@@ -67,6 +72,10 @@ tree at f21729e9; regenerate when files are added or removed rather than hand-pa
 | [`ci_repo_tooling.md`](codemaps/ci_repo_tooling.md) | GitHub Actions, drift gates, GHCR pipelines, wiki/Pages publishers, repo metadata. |
 
 ## Contributor docs (current)
+
+Migration update (2026-09-14): [ROS2_LYRICAL_MIGRATION.md](../ROS2_LYRICAL_MIGRATION.md)
+is current for the Lyrical APIs, source dependency pins, build targets and acceptance
+procedure. It supersedes Kilted-specific build details in the September 3 codemaps.
 
 | Doc | Audience | What it is |
 |-----|----------|-----------|
@@ -129,8 +138,8 @@ tree at f21729e9; regenerate when files are added or removed rather than hand-pa
 |-----|--------------|-----------------------|---------------|
 | [`docs/HANDOFF_FUSION_GRAPH.md`](../HANDOFF_FUSION_GRAPH.md) | 2026-07-03 | Self-declared historical (FR banner): the FusionCore→iSAM2 migration record, kept for git archaeology. CLAUDE.md says the same. | [`wiki/Architecture.md`](../../wiki/Architecture.md) § fusion_graph + [`codemaps/fusion_graph.md`](codemaps/fusion_graph.md) |
 | [`SESSION-2026-04-18.md`](../../SESSION-2026-04-18.md) | 2026-04-18 | Dated field-debug log from the `feat/slam-toolbox-tuned` / `gps_slam_corrector` era. Every component it names (slam_toolbox, the Umeyama corrector) has since been removed. | [`codemaps/fusion_graph.md`](codemaps/fusion_graph.md), CLAUDE.md Invariant 1 |
-| [`docker/logs/mow_sessions/fusion_graph_float_review_2026-06-11.md`](../../docker/logs/mow_sessions/fusion_graph_float_review_2026-06-11.md) | 2026-06-28 | Dated multi-agent review of RTK-Float behaviour, verified against 2026-06 code. Its central blocker ("keyframe/scan-matching disabled in deployed config") no longer holds — `use_keyframe_map: true`, `kf_min_inliers: 16` in `fusion_graph.yaml`. | [`codemaps/fusion_graph.md`](codemaps/fusion_graph.md) |
-| [`docker/logs/mow_sessions/fusion_graph_keyframe_blueprint_2026-06-11.md`](../../docker/logs/mow_sessions/fusion_graph_keyframe_blueprint_2026-06-11.md) | 2026-06-28 | Implementation blueprint for the RTK-anchored keyframe layer — **shipped** (`use_keyframe_map`, `ScanToKeyframe` path live). Its "Phase 2: migrate to IncrementalFixedLagSmoother" is unverified/likely still open. | [`codemaps/fusion_graph.md`](codemaps/fusion_graph.md) |
+| [`docker/logs/mow_sessions/fusion_graph_float_review_2026-06-11.md`](../../docker/logs/mow_sessions/fusion_graph_float_review_2026-06-11.md) | 2026-06-28 | (historical — keyframe anchor removed 2026-09-07, replaced by the Beluga map anchor) Dated multi-agent review of RTK-Float behaviour, verified against 2026-06 code. The scan-to-keyframe path it discusses no longer exists; RTK Float remains GNSS-owned and `use_lidar_map_anchor` is reserved for complete GNSS outages (`fusion_graph_node_lidar_anchor.cpp`). | [`codemaps/fusion_graph.md`](codemaps/fusion_graph.md) |
+| [`docker/logs/mow_sessions/fusion_graph_keyframe_blueprint_2026-06-11.md`](../../docker/logs/mow_sessions/fusion_graph_keyframe_blueprint_2026-06-11.md) | 2026-06-28 | (historical — keyframe anchor removed 2026-09-07, replaced by the Beluga map anchor) Implementation blueprint for the RTK-anchored keyframe layer; it shipped, then was deleted in favour of `use_lidar_map_anchor`. Its "Phase 2: migrate to IncrementalFixedLagSmoother" is unverified/likely still open. | [`codemaps/fusion_graph.md`](codemaps/fusion_graph.md) |
 | [`OBSTACLE_WEDGE_RECOVERY_SPEC.md`](../../OBSTACLE_WEDGE_RECOVERY_SPEC.md) | 2026-07-22 | Spec for a since-shipped effort: Part A's cul-de-sac guard (`obstacle_deviation.hpp` `hasClearExit`) and Part B's "stalled BESIDE an obstacle" gate (`detour_resume.hpp`) both exist, and `obstacle_reverse_enabled: true` in `nav2_params_base.yaml:544`. Its "Deployed state on the robot NOW" section is stale. `use_footprint_clearance` is still `false`, so the Part A footprint item remains open. | [`codemaps/mowgli_nav2_plugins.md`](codemaps/mowgli_nav2_plugins.md), [`codemaps/mowgli_behavior.md`](codemaps/mowgli_behavior.md) |
 | [`SAFETY_REVIEW_2026-07-23.md`](../../SAFETY_REVIEW_2026-07-23.md) | 2026-07-23 | Dated 3-agent safety review against `dev@76a6862c`. Its whole **P0** block shipped (`FootprintApproach` + `PolygonStopNarrow`, `odom_rebase_dist_m: 6.0`, `kf_match_max_divergence_xy_m: 0.10`). P1–P3 shipped only in part — **unverified item by item**. | CLAUDE.md invariants + the nav2/fusion_graph codemaps |
 | [`docs/RESEARCH_obstacle_coverage.md`](../RESEARCH_obstacle_coverage.md) | 2026-05-30 | Self-declared "research only — nothing implemented" decision doc. The stack since shipped detour-and-continue (`detour_resume.hpp`), a partial take on its recommended option (b); the full re-query-remaining-region loop is **unverified**. | [`codemaps/mowgli_coverage.md`](codemaps/mowgli_coverage.md), [`codemaps/mowgli_behavior.md`](codemaps/mowgli_behavior.md) |

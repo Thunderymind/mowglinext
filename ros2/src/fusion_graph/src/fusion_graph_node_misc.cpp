@@ -11,9 +11,9 @@
 #include <thread>
 
 #include <geometry_msgs/msg/quaternion.hpp>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/LinearMath/Transform.h>
-#include <tf2/exceptions.h>
+#include <tf2/LinearMath/Quaternion.hpp>
+#include <tf2/LinearMath/Transform.hpp>
+#include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "fusion_graph/fusion_graph_node.hpp"
@@ -111,6 +111,7 @@ void FusionGraphNode::SeedFromDockPose()
     dr_x_ = 0.0;
     dr_y_ = 0.0;
     dr_yaw_ = 0.0;
+    ResetLidarTiming();
     t_map_odom_anchor_valid_ = false;
   }
   // Latch the RTK-Fixed override one-shot so it doesn't fire later if

@@ -5,7 +5,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -30,8 +30,12 @@ find_package(mowgli_interfaces  REQUIRED)
 find_package(Eigen3             REQUIRED)
 
 # GTSAM ships its own CMake config; require >= 4.2 (Pose2 + ISAM2 stable
-# API). On Kilted the Docker image builds GTSAM from source.
+# API). Docker and CI retain the pinned 4.3a1 source install.
 find_package(GTSAM CONFIG REQUIRED)
+
+# LiDAR map anchor: Beluga particle filter (header-only MCL toolkit; the
+# beluga_ros wrapper brings the Amcl engine and the OccupancyGrid adapter).
+find_package(beluga_ros REQUIRED)
 
 # ---------------------------------------------------------------------------
 # Library: fusion_graph_core (factors + graph manager, header-light)
@@ -43,8 +47,7 @@ add_library(fusion_graph_core
   src/graph_manager_node.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
-  src/graph_manager_keyframe.cpp
-  src/scan_matcher.cpp
+  src/lidar_submap_store.cpp
 )
 
 target_include_directories(fusion_graph_core PUBLIC
@@ -60,20 +63,20 @@ target_link_libraries(fusion_graph_core PUBLIC
   Eigen3::Eigen
 )
 
-ament_target_dependencies(fusion_graph_core PUBLIC
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  sensor_msgs
-  std_msgs
-  std_srvs
-  diagnostic_msgs
-  visualization_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  tf2_eigen
-  mowgli_interfaces
+target_link_libraries(fusion_graph_core PUBLIC
+  ${rclcpp_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${std_msgs_TARGETS}
+  ${std_srvs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
+  ${tf2_TARGETS}
+  ${tf2_ros_TARGETS}
+  ${tf2_geometry_msgs_TARGETS}
+  ${tf2_eigen_TARGETS}
+  ${mowgli_interfaces_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -89,10 +92,14 @@ add_executable(fusion_graph_node
   src/fusion_graph_node_misc.cpp
   src/fusion_graph_node_timer.cpp
   src/fusion_graph_node_publish.cpp
+  src/fusion_graph_node_lidar_anchor.cpp
 )
 
 target_link_libraries(fusion_graph_node
   fusion_graph_core
+)
+target_link_libraries(fusion_graph_node
+  ${beluga_ros_TARGETS}
 )
 
 # ---------------------------------------------------------------------------
@@ -197,6 +204,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_yaw_gates fusion_graph_core)
 
+  ament_add_gtest(test_clear_graph_gate
+    test/test_clear_graph_gate.cpp
+  )
+  target_link_libraries(test_clear_graph_gate fusion_graph_core)
+
   ament_add_gtest(test_dr_slip_veto
     test/test_dr_slip_veto.cpp
   )
@@ -217,35 +229,62 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_slip_window fusion_graph_core)
 
-  ament_add_gtest(test_scan_match_dedup
-    test/test_scan_match_dedup.cpp
+  ament_add_gtest(test_lidar_occupancy_mapper
+    test/test_lidar_occupancy_mapper.cpp
   )
-  target_link_libraries(test_scan_match_dedup fusion_graph_core)
+  target_link_libraries(test_lidar_occupancy_mapper fusion_graph_core)
 
-  ament_add_gtest(test_loop_closure_gate
-    test/test_loop_closure_gate.cpp
+  ament_add_gtest(test_lidar_map_anchor_gate
+    test/test_lidar_map_anchor_gate.cpp
   )
-  target_link_libraries(test_loop_closure_gate fusion_graph_core)
+  target_link_libraries(test_lidar_map_anchor_gate fusion_graph_core)
+  ament_add_gtest(test_lidar_anchor_validator
+    test/test_lidar_anchor_validator.cpp
+  )
+  target_link_libraries(test_lidar_anchor_validator fusion_graph_core)
+  ament_add_gtest(test_lidar_anchor_odom
+    test/test_lidar_anchor_odom.cpp
+  )
+  target_link_libraries(test_lidar_anchor_odom fusion_graph_core)
+  target_link_libraries(test_lidar_anchor_odom
+    ${beluga_ros_TARGETS}
+  )  # Sophus comes with beluga_ros
+  ament_add_gtest(test_lidar_map_file
+    test/test_lidar_map_file.cpp
+  )
+  target_link_libraries(test_lidar_map_file fusion_graph_core)
+  ament_add_gtest(test_lidar_anchor_shadow_stats
+    test/test_lidar_anchor_shadow_stats.cpp
+  )
+  target_link_libraries(test_lidar_anchor_shadow_stats fusion_graph_core)
+
+  ament_add_gtest(test_lidar_submap_store test/test_lidar_submap_store.cpp)
+  target_link_libraries(test_lidar_submap_store fusion_graph_core)
+  ament_add_gtest(test_lidar_compute_gate test/test_lidar_compute_gate.cpp)
+  target_link_libraries(test_lidar_compute_gate fusion_graph_core)
+
+  ament_add_gtest(test_lidar_scan_history test/test_lidar_scan_history.cpp)
+  target_link_libraries(test_lidar_scan_history fusion_graph_core)
 
   ament_add_gtest(test_cog_flip_recovery
     test/test_cog_flip_recovery.cpp
   )
   target_link_libraries(test_cog_flip_recovery fusion_graph_core)
 
-  ament_add_gtest(test_loop_closure_robust
-    test/test_loop_closure_robust.cpp
-  )
-  target_link_libraries(test_loop_closure_robust fusion_graph_core)
-
   ament_add_gtest(test_gyro_bias
     test/test_gyro_bias.cpp
   )
   target_link_libraries(test_gyro_bias fusion_graph_core)
 
-  ament_add_gtest(test_keyframe_map
-    test/test_keyframe_map.cpp
+  ament_add_gtest(test_rigid_transform
+    test/test_rigid_transform.cpp
   )
-  target_link_libraries(test_keyframe_map fusion_graph_core)
+  target_link_libraries(test_rigid_transform fusion_graph_core)
+
+  ament_add_gtest(test_lidar_map_xy_prior
+    test/test_lidar_map_xy_prior.cpp
+  )
+  target_link_libraries(test_lidar_map_xy_prior fusion_graph_core)
 
   ament_add_gtest(test_gnss_timestamp
     test/test_gnss_timestamp.cpp

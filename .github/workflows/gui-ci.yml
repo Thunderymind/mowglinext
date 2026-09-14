@@ -11,10 +11,12 @@ name: GUI — CI
 # well under a minute.
 
 on:
+  workflow_call:
   push:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'gui/web/**'
+      - 'gui/*.go'
       - 'gui/pkg/**'
       - 'gui/asserts/**'
       - 'gui/go.mod'
@@ -30,6 +32,7 @@ on:
     # does not support YAML anchors, so this list cannot be shared.
     paths:
       - 'gui/web/**'
+      - 'gui/*.go'
       - 'gui/pkg/**'
       - 'gui/asserts/**'
       - 'gui/go.mod'
@@ -42,7 +45,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: gui-ci-${{ github.ref }}
+  group: gui-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 defaults:
@@ -61,7 +64,7 @@ jobs:
       # in lockstep so a version-specific failure cannot pass here and break the
       # image build (or vice versa).
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: yarn
@@ -92,6 +95,12 @@ jobs:
 
       - name: Unit tests
         run: yarn test
+
+      - name: Install Chromium for power-menu regression tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test shared power menu and Diagnostics shortcut
+        run: npx playwright test system-power.spec.ts --project=chromium
 
   # The Go backend's ~36 test files gated NOTHING — no workflow ran `go test`,
   # exactly the gap this file's header describes for vitest. That is how the

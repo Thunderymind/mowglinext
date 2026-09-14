@@ -1414,17 +1414,59 @@ EOF
   _yaml_patch_key "$yaml_file" gnss_ntrip_gga_enabled "$resolved_ntrip_gga_enabled"
   _yaml_patch_key "$yaml_file" gnss_ntrip_gga_interval_s "$resolved_ntrip_gga_interval_s"
 
-  # LiDAR enable + the LiDAR-aware localizer flags. When the operator
-  # picked a LiDAR in the previous step we also want the GTSAM
-  # factor-graph backend on with scan-matching + loop closure, so
-  # the GUI doesn't show LiDAR plugged in but ignored.
+  # LiDAR hardware availability gates obstacle detection and scan-to-map localization.
   local lidar_on="false"
   if [[ "${LIDAR_ENABLED:-false}" == "true" ]]; then
     lidar_on="true"
   fi
   _yaml_patch_key "$yaml_file" lidar_enabled     "$lidar_on"
-  _yaml_patch_key "$yaml_file" use_scan_matching "$lidar_on"
-  _yaml_patch_key "$yaml_file" use_loop_closure  "$lidar_on"
+
+  # Remove retired localization overrides from upgraded installations.
+  python3 - "$yaml_file" <<'PY_RETIRED'
+import re
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+retired = {
+    'use_scan_matching',
+    'use_loop_closure',
+    'icp_max_iter',
+    'icp_max_corresp_dist',
+    'icp_source_subsample',
+    'scan_min_inliers',
+    'icp_sigma_xy_base',
+    'icp_sigma_theta_base',
+    'icp_max_rmse_m',
+    'icp_max_delta_xy_m',
+    'icp_max_delta_theta_rad',
+    'icp_max_divergence_xy_m',
+    'icp_max_divergence_theta_rad',
+    'scan_yield_to_rtk',
+    'scan_yield_timeout_s',
+    'scan_yield_sigma_xy',
+    'scan_yield_sigma_theta',
+    'scan_yaw_sigma_floor_rad',
+    'lc_max_dist_m',
+    'lc_min_age_s',
+    'lc_max_candidates',
+    'lc_min_delta_m',
+    'lc_min_delta_theta',
+    'lc_max_rmse',
+    'lc_sigma_xy',
+    'lc_sigma_theta',
+    'lc_skip_when_rtk_fixed',
+    'lc_min_travel_m',
+    'lc_min_interval_s',
+    'lc_gps_sigma_ratio',
+    'scan_retention_nodes',
+    'lidar_map_half_extent_m',
+}
+lines = path.read_text().splitlines(keepends=True)
+def keep(line):
+    match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*):", line)
+    return not match or match.group(1) not in retired
+path.write_text("".join(line for line in lines if keep(line)))
+PY_RETIRED
 
   # Lidar mounting only patched when explicitly set (auto-detect step
   # leaves them alone so the GUI / template defaults survive).
@@ -1474,7 +1516,7 @@ auto_detect_position() {
   local fix_data="" lat="" lon=""
   local attempt=0
   while [[ $attempt -lt 12 ]]; do
-    fix_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" 2>/dev/null || true)
+    fix_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" 2>/dev/null || true)
     lat=$(awk '/latitude:/ {print $2; exit}' <<< "$fix_data")
     lon=$(awk '/longitude:/ {print $2; exit}' <<< "$fix_data")
 
@@ -1497,7 +1539,7 @@ auto_detect_position() {
   local is_charging="false"
   if docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
     local status_data
-    status_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" 2>/dev/null || true)
+    status_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" 2>/dev/null || true)
     is_charging=$(awk '/is_charging:/ {print $2; exit}' <<< "$status_data")
   fi
 

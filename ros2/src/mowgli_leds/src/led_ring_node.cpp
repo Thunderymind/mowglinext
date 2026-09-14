@@ -6,8 +6,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <string>
+#include <vector>
 
 #include "mowgli_interfaces/gnss_status_utils.hpp"
+#include "mowgli_leds/indicator_ids.hpp"
 
 namespace mowgli_leds
 {
@@ -75,6 +78,21 @@ LedRingNode::LedRingNode(const rclcpp::NodeOptions& options)
   const double low_battery = declare_parameter<double>("led_low_battery_percent", 20.0);
   const double charge_full = declare_parameter<double>("led_charge_full_percent", 99.0);
   const double idle_scale = declare_parameter<double>("led_idle_scale", 0.10);
+  const double charge_complete_timeout =
+      declare_parameter<double>("led_charge_complete_timeout_s", 600.0);
+  const double charge_complete_dim_scale =
+      declare_parameter<double>("led_charge_complete_dim_scale", 0.0);
+  const int charge_complete_indicator_count =
+      declare_parameter<int>("led_charge_complete_indicator_count", 0);
+  const double charge_complete_indicator_scale =
+      declare_parameter<double>("led_charge_complete_indicator_scale", 0.15);
+  // A string, not a native ROS2 integer array: an empty array default in a
+  // params YAML fails to type-infer and throws at load ("ROS2 cannot type
+  // an empty YAML list", see mowgli_map/config/map_server.yaml for the same
+  // gotcha), and this needs to default to empty. "0,4,8,12" also happens to
+  // be a much friendlier GUI text field than an array editor.
+  const std::string charge_complete_indicator_ids_raw =
+      declare_parameter<std::string>("led_charge_complete_indicator_ids", "");
 
   led_count_ = static_cast<std::size_t>(std::clamp(led_count, 0, static_cast<int>(kMaxLedCount)));
   if (static_cast<int>(led_count_) != led_count)
@@ -109,6 +127,40 @@ LedRingNode::LedRingNode(const rclcpp::NodeOptions& options)
   pattern_cfg_.low_battery_percent = static_cast<float>(std::clamp(low_battery, 0.0, 100.0));
   pattern_cfg_.charge_full_percent = static_cast<float>(std::clamp(charge_full, 0.0, 100.0));
   pattern_cfg_.idle_scale = static_cast<float>(std::clamp(idle_scale, 0.0, 1.0));
+  // 0 is the documented "disabled" sentinel, not clamped away.
+  pattern_cfg_.charge_complete_timeout_s = std::max(charge_complete_timeout, 0.0);
+  pattern_cfg_.charge_complete_dim_scale =
+      static_cast<float>(std::clamp(charge_complete_dim_scale, 0.0, 1.0));
+  // Only guarded against negative here; PaintEvenIndicators clamps to the
+  // actual led_count_ at render time, so an operator value larger than the
+  // ring is harmless (every pixel just becomes an indicator pixel).
+  pattern_cfg_.charge_complete_indicator_count =
+      static_cast<std::size_t>(std::max(charge_complete_indicator_count, 0));
+  pattern_cfg_.charge_complete_indicator_scale =
+      static_cast<float>(std::clamp(charge_complete_indicator_scale, 0.0, 1.0));
+  pattern_cfg_.charge_complete_indicator_ids = ParseIndicatorIds(charge_complete_indicator_ids_raw);
+  // An ID past the end of the strip is dropped at render time; say so once at
+  // startup, because if EVERY ID is stale the ring simply goes fully dim and
+  // the count-based spacing is NOT used (explicit IDs take priority).
+  {
+    std::string stale;
+    for (const auto id : pattern_cfg_.charge_complete_indicator_ids)
+    {
+      if (id >= led_count_)
+      {
+        stale += (stale.empty() ? "" : ", ") + std::to_string(id);
+      }
+    }
+    if (!stale.empty())
+    {
+      RCLCPP_WARN(
+          get_logger(),
+          "led_charge_complete_indicator_ids: pixel(s) %s are outside the %zu-pixel ring and "
+          "will never light",
+          stale.c_str(),
+          led_count_);
+    }
+  }
 
   if (!enabled_ || led_count_ == 0u)
   {
@@ -312,9 +364,30 @@ void LedRingNode::blank()
   spi_.Close();
 }
 
+void LedRingNode::updateChargeCompleteTracking(LedInputs& in)
+{
+  const bool charge_complete_now =
+      in.is_charging && in.battery_valid && in.battery_percent >= pattern_cfg_.charge_full_percent;
+  if (!charge_complete_now)
+  {
+    // Unplugged, or the level fell back below the threshold: the ring must
+    // return to full brightness immediately, not stay dim from a stale timer.
+    charge_complete_since_s_ = -1.0;
+    in.charge_complete_elapsed_s = 0.0;
+    return;
+  }
+  if (charge_complete_since_s_ < 0.0)
+  {
+    charge_complete_since_s_ = in.now_s;
+  }
+  in.charge_complete_elapsed_s = in.now_s - charge_complete_since_s_;
+}
+
 void LedRingNode::onTimer()
 {
-  writeFrame(RenderFrame(collectInputs(), pattern_cfg_));
+  LedInputs in = collectInputs();
+  updateChargeCompleteTracking(in);
+  writeFrame(RenderFrame(in, pattern_cfg_));
 }
 
 }  // namespace mowgli_leds
