@@ -3179,6 +3179,66 @@
     "saveFailed": "Échec de l'enregistrement des réglages IrriSense",
     "loadFailed": "Échec du chargement des réglages IrriSense"
   },
+  "settingsRemoteAccess": {
+    "title": "Accès distant (Tailscale)",
+    "description": "Lance un nœud Tailscale à côté du robot pour que l'interface soit accessible depuis votre téléphone ou ordinateur, sans ouvrir de port sur votre box.",
+    "scopeTitle": "Réseau privé uniquement",
+    "scopeBody": "Seuls les appareils connectés à votre tailnet peuvent joindre le robot ; rien n'est publié sur Internet. L'interface n'a pas d'identifiants propres : toute personne invitée sur le tailnet peut piloter la tondeuse — réservez-le à des personnes de confiance et utilisez les ACL Tailscale si vous le partagez.",
+    "connection": "Connexion",
+    "hostname": "Nom du nœud",
+    "hostnameTooltip": "Nom du robot sur le tailnet : lettres minuscules, chiffres et tirets. Avec MagicDNS il devient https://<nom>.<tailnet>.ts.net.",
+    "key": "Clé d'authentification (optionnelle)",
+    "keyTooltip": "Clé pré-autorisée depuis la console d'administration Tailscale (Settings → Keys). Laissez vide pour vous connecter en ouvrant le lien affiché ci-dessous au démarrage du nœud. La clé est stockée sur le robot et n'est jamais réaffichée.",
+    "keyPlaceholder": "Collez une nouvelle clé tskey-auth-…",
+    "keyApply": "Définir",
+    "keyClear": "Effacer",
+    "keySet": "Clé stockée ({{masked}})",
+    "keyNotSet": "Aucune clé — connexion interactive",
+    "keyPending": "La nouvelle clé sera stockée à l'enregistrement",
+    "keyCleared": "La clé sera supprimée à l'enregistrement",
+    "serveHttps": "Publier en HTTPS",
+    "serveHttpsTooltip": "Utilise Tailscale Serve pour exposer l'interface en https://<nom>.<tailnet>.ts.net avec un certificat automatique. Nécessite MagicDNS et les certificats HTTPS activés dans la console Tailscale (page DNS). L'adresse http://<ip-tailnet>:4006 fonctionne toujours.",
+    "serveHttpsHint": "https://<nom>.<tailnet>.ts.net (HTTPS doit être activé sur votre tailnet)",
+    "image": "Image du conteneur",
+    "imageTooltip": "Image Tailscale épinglée pour le sidecar. Seul le dépôt officiel tailscale/tailscale est accepté (n'importe quel tag ou digest sha256). Ne la changez que si vous savez pourquoi ; videz le champ pour revenir à la valeur par défaut.",
+    "status": "État",
+    "refresh": "Actualiser",
+    "retry": "Réessayer",
+    "phase": {
+      "disabled": "Sidecar arrêté",
+      "pulling": "Téléchargement de l'image Tailscale…",
+      "starting": "Démarrage du sidecar…",
+      "running": "Sidecar en marche",
+      "error": "Sidecar en échec",
+      "unknown": "État inconnu"
+    },
+    "verdict": {
+      "off": "Désactivé",
+      "working": "En cours…",
+      "needsLogin": "Connexion requise",
+      "connected": "Connecté",
+      "error": "Erreur"
+    },
+    "backendState": "Tailscale : {{state}}",
+    "errorTitle": "L'accès distant n'a pas pu démarrer",
+    "needsLoginTitle": "Approuvez ce robot sur votre tailnet",
+    "needsLoginBody": "Ouvrez le lien, connectez-vous à Tailscale et approuvez l'appareil. Cette page se met à jour toute seule une fois le nœud connecté.",
+    "openLogin": "Ouvrir la connexion Tailscale",
+    "workingHint": "En attente du nœud… le premier démarrage télécharge l'image, ce qui peut prendre une minute sur une connexion lente.",
+    "reachableAt": "Depuis n'importe quel appareil de votre tailnet, ouvrez :",
+    "noHttpsHint": "Pas encore d'adresse HTTPS : activez MagicDNS et les certificats HTTPS dans la console Tailscale (page DNS), ou utilisez l'adresse http://.",
+    "noMagicDnsHint": "MagicDNS est désactivé sur votre tailnet, seules les adresses IP sont résolues.",
+    "healthTitle": "Tailscale signale",
+    "logout": "Quitter le tailnet",
+    "logoutConfirmTitle": "Retirer ce robot du tailnet ?",
+    "logoutConfirmBody": "La clé du nœud est supprimée et le sidecar redémarre. Il faudra l'approuver à nouveau (ou stocker une clé d'authentification avant).",
+    "saveToStart": "Enregistrez pour démarrer le sidecar.",
+    "saved": "Réglages d'accès distant enregistrés",
+    "saveFailed": "Échec de l'enregistrement des réglages d'accès distant",
+    "loadFailed": "Échec du chargement des réglages d'accès distant",
+    "retryFailed": "Nouvelle tentative échouée",
+    "logoutFailed": "Déconnexion échouée"
+  },
   "settingsLeds": {
     "statusRing": "Anneau d'état WS2812",
     "statusRingDescription": "Un anneau de LED adressables sur le robot qui montre l'état d'un coup d'œil : arrêt d'urgence, charge, progression de la tonte et santé RTK. En lecture seule — il ne commande jamais le robot et ne fait pas partie de la chaîne de sécurité des lames (le firmware garde sa propre LED d'état).",
@@ -3322,6 +3382,10 @@
     "irrisense": {
       "label": "IrriSense",
       "description": "Humidité du sol depuis votre jardin IrriSense Cloud : suspend les tontes planifiées sur herbe mouillée"
+    },
+    "remote_access": {
+      "label": "Accès distant",
+      "description": "Accéder au robot depuis n'importe où via votre réseau Tailscale privé"
     },
     "leds": {
       "label": "LED d'état",

@@ -35,6 +35,7 @@ func main() {
 		providers.NewMqttProvider(rosProvider, dbProvider)
 	}
 	irriSenseProvider := providers.NewIrriSenseProvider(dbProvider)
+	remoteAccessProvider := providers.NewRemoteAccessProvider(dbProvider, dockerProvider)
 	providers.NewSchedulerProvider(rosProvider, dbProvider, irriSenseProvider)
-	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider)
+	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider, remoteAccessProvider)
 }

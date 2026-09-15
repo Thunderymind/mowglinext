@@ -3183,6 +3183,66 @@
     "saveFailed": "Failed to save IrriSense settings",
     "loadFailed": "Failed to load IrriSense settings"
   },
+  "settingsRemoteAccess": {
+    "title": "Remote access (Tailscale)",
+    "description": "Runs a Tailscale node next to the robot so the interface is reachable from your phone or laptop anywhere, without opening a port on your router.",
+    "scopeTitle": "Private network only",
+    "scopeBody": "Only devices signed in to your tailnet can reach the robot; nothing is published to the public internet. The interface has no login of its own, so anyone you invite to the tailnet can drive the mower — keep it to people you trust and use Tailscale ACLs if you share it.",
+    "connection": "Connection",
+    "hostname": "Node name",
+    "hostnameTooltip": "Name of the robot on the tailnet: lowercase letters, digits and hyphens. With MagicDNS this becomes https://<name>.<tailnet>.ts.net.",
+    "key": "Auth key (optional)",
+    "keyTooltip": "Pre-authorised key from the Tailscale admin console (Settings → Keys). Leave empty to log in by opening the link shown below once the node starts. The key is stored on the robot and never shown again.",
+    "keyPlaceholder": "Paste a new tskey-auth-… key",
+    "keyApply": "Set",
+    "keyClear": "Clear",
+    "keySet": "Auth key stored ({{masked}})",
+    "keyNotSet": "No auth key — interactive login",
+    "keyPending": "New auth key will be stored on save",
+    "keyCleared": "Auth key will be removed on save",
+    "serveHttps": "Publish over HTTPS",
+    "serveHttpsTooltip": "Uses Tailscale Serve to expose the interface as https://<name>.<tailnet>.ts.net with an automatic certificate. Requires MagicDNS and HTTPS certificates enabled in the Tailscale admin console (DNS page). The plain http://<tailnet-ip>:4006 address always works.",
+    "serveHttpsHint": "https://<name>.<tailnet>.ts.net (needs HTTPS enabled in your tailnet)",
+    "image": "Container image",
+    "imageTooltip": "Pinned Tailscale image for the sidecar. Only the official tailscale/tailscale repository is accepted (any tag or sha256 digest). Leave as-is unless you know why you need another version; clear the field to return to the default.",
+    "status": "Status",
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "phase": {
+      "disabled": "Sidecar stopped",
+      "pulling": "Downloading the Tailscale image…",
+      "starting": "Starting the sidecar…",
+      "running": "Sidecar running",
+      "error": "Sidecar failed",
+      "unknown": "Status unknown"
+    },
+    "verdict": {
+      "off": "Off",
+      "working": "Working…",
+      "needsLogin": "Login required",
+      "connected": "Connected",
+      "error": "Error"
+    },
+    "backendState": "Tailscale: {{state}}",
+    "errorTitle": "Remote access could not be started",
+    "needsLoginTitle": "Approve this robot on your tailnet",
+    "needsLoginBody": "Open the link, sign in to Tailscale and approve the device. This page updates by itself once the node is connected.",
+    "openLogin": "Open Tailscale login",
+    "workingHint": "Waiting for the node to come up… the first start downloads the image, which can take a minute on a slow connection.",
+    "reachableAt": "From any device on your tailnet, open:",
+    "noHttpsHint": "No HTTPS address yet: enable MagicDNS and HTTPS certificates in the Tailscale admin console (DNS page), or use the http:// address.",
+    "noMagicDnsHint": "MagicDNS is off in your tailnet, so only the IP addresses resolve.",
+    "healthTitle": "Tailscale reports",
+    "logout": "Log out of tailnet",
+    "logoutConfirmTitle": "Remove this robot from the tailnet?",
+    "logoutConfirmBody": "The node key is discarded and the sidecar restarts. You will need to approve it again (or store an auth key first).",
+    "saveToStart": "Save to start the sidecar.",
+    "saved": "Remote access settings saved",
+    "saveFailed": "Failed to save remote access settings",
+    "loadFailed": "Failed to load remote access settings",
+    "retryFailed": "Retry failed",
+    "logoutFailed": "Logout failed"
+  },
   "settingsLeds": {
     "statusRing": "WS2812 status ring",
     "statusRingDescription": "An addressable LED ring on the robot showing state at a glance: emergency, charging, mowing progress and RTK health. Read-only — it never commands the robot, and it is not part of the blade-safety path (the firmware keeps its own status LED).",
@@ -3326,6 +3386,10 @@
     "irrisense": {
       "label": "IrriSense",
       "description": "Soil moisture from your IrriSense Cloud garden: skip scheduled mows on wet grass"
+    },
+    "remote_access": {
+      "label": "Remote access",
+      "description": "Reach the robot from anywhere over your private Tailscale network"
     },
     "leds": {
       "label": "Status LEDs",

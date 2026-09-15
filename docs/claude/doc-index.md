@@ -8,6 +8,7 @@
 ## Update-system documents added after index generation
 
 - [Software updates and recovery](../UPDATES.md) — **current**, operator/contributor: host updater, installer, publication and platform contract.
+- [Remote access (Tailscale sidecar)](../REMOTE_ACCESS.md) — **current**, operator/contributor: optional `mowgli-remote` container owned by the GUI backend, settings keys, reconcile rules, troubleshooting.
 - [Update-system design snapshot](../UPDATE_SYSTEM_PLAN.md) — **historical**, contributor: original design intent; use UPDATES.md for implemented behavior.
 
 ## How to read this index
