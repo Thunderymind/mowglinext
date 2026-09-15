@@ -221,6 +221,7 @@
 <section class="features" id="features">
   <div class="container">
     <h2>What Makes MowgliNext Different</h2>
+    <p class="section-subtitle">Everything the stack does today — the foundations, and what each release added on top.</p>
     <div class="features-grid">
 
       <div class="feature-card">
@@ -232,49 +233,115 @@
       <div class="feature-card">
         <div class="icon">📡</div>
         <h3>Factor-Graph Sensor Fusion</h3>
-        <p>One iSAM2 factor graph owns both the odometry and map frames. RTK-GPS, IMU heading, wheel odometry, and optional LiDAR all enter as factors — with a tight non-holonomic constraint on the wheel input for smooth, drift-resistant tracking.</p>
+        <p>One iSAM2 factor graph owns both the odometry and map frames. RTK-GPS, IMU heading, wheel odometry, and optional LiDAR all enter as factors — with a tight non-holonomic constraint on the wheel input for smooth, drift-resistant tracking, and a wrong-fix gate that rejects RTK jumps the wheels cannot explain.</p>
       </div>
 
       <div class="feature-card">
         <div class="icon">🧠</div>
         <h3>Behavior Trees</h3>
-        <p>Reactive, composable control logic using BehaviorTree.CPP v4. Emergency guards, docking, coverage — all orchestrated by a single tree.</p>
+        <p>Reactive, composable control logic using BehaviorTree.CPP v4. Emergency guards, docking, coverage, rain and battery pauses, resume after a restart — all orchestrated by a single tree you can watch live in the GUI.</p>
       </div>
 
       <div class="feature-card">
         <div class="icon">🚧</div>
         <h3>Obstacle Avoidance</h3>
-        <p>Real-time collision monitor with polygon stop/slow zones. The robot navigates around obstacles, not just stops.</p>
+        <p>Real-time collision monitor with polygon stop/slow zones. With LiDAR the coverage controller deviates laterally around obstacles instead of stopping; repeatedly seen obstacles become keepout proposals you accept or reject on the map.</p>
       </div>
 
       <div class="feature-card">
-        <div class="icon">🐳</div>
-        <h3>Docker Deploy</h3>
-        <p>One-command deployment with Docker Compose. Cyclone DDS for reliable inter-container communication on ARM boards.</p>
+        <div class="icon">🕳️</div>
+        <h3>Dig Detection</h3>
+        <p>Spinning wheels with no GNSS motion means a dig, not progress. The bridge hard-stops on the wire, reverses out, stamps a keepout so the plan routes around the hole, and stops the mission if the same spot traps the robot three times.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🗂️</div>
+        <h3>Multi-Area Mowing</h3>
+        <p>Record multiple mowing areas from your phone, with obstacles and navigation-only corridors. The robot mows them all sequentially on continuous headland-plus-stripe paths (Fields2Cover v3), tracks progress per cell, and resumes exactly where it stopped.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">✂️</div>
+        <h3>Cross-Hatch Mowing <span class="feature-badge">New in v1.4.0</span></h3>
+        <p>Alternate the stripe angle by 90° every session, per area, so the lawn is not always cut the same way. See and override the next direction for each zone without interrupting a run.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🔋</div>
+        <h3>Auto-Docking &amp; Charge Management</h3>
+        <p>Nav2 docking to the charger with one-click dock calibration from the GUI, undock via a safe back-up behaviour, critical-battery return with automatic resume once charged, and a manual "resume now" once the battery is above the floor.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">📅</div>
+        <h3>Scheduling, Rain &amp; Soil</h3>
+        <p>Weekly schedule grid, rain behaviour (ignore, dock, dock until dry, pause), and an optional IrriSense soil-moisture gate that skips a scheduled mow while the garden is still wet.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🔄</div>
+        <h3>Update From the GUI <span class="feature-badge">New in v1.4.0</span></h3>
+        <p>Settings → Updates checks for releases daily and installs the one you review — the whole stack together, with backup, verification and rollback, only while the mower is idle with the blade off.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🏠</div>
+        <h3>Home Assistant &amp; MQTT <span class="feature-badge">New in v1.4.0</span></h3>
+        <p>Retained mowing status, battery and coverage, live GPS position, online/offline availability and a command topic, on the bundled broker or yours. A documented topic contract for any integration.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">📲</div>
+        <h3>Push Notifications <span class="feature-badge">New in v1.4.0</span></h3>
+        <p>Telegram, Pushover, ntfy or a webhook tell you when the mower starts, finishes a zone, gets home, gets stuck, hits the emergency stop, waits for rain or GPS, or runs low on battery.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🌍</div>
+        <h3>Remote Access <span class="feature-badge">New in v1.4.0</span></h3>
+        <p>An optional, hardened Tailscale sidecar puts the web interface on your private tailnet with HTTPS. Reachable from anywhere, never public.</p>
       </div>
 
       <div class="feature-card">
         <div class="icon">🌐</div>
         <h3>Web GUI &amp; Diagnostics</h3>
-        <p>State-adaptive dashboard with hero card, live sparkline telemetry, radial gauges, and health checks. Weekly schedule grid, statistics with bar charts, full map editor, in-GUI software updates, push notifications and optional remote access. Dark &amp; light themes, responsive mobile layout. React + Go + WebSocket.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🗺️</div>
-        <h3>Multi-Area Mowing</h3>
-        <p>Record multiple mowing areas from your phone. The robot mows them all sequentially, optimizing paths across zones. Save unlimited area layouts.</p>
+        <p>State-adaptive dashboard with hero card, live sparkline telemetry, radial gauges and health checks. Full Mapbox map editor, live ROS2 parameter tuning, logs, diagnostics, and firmware flashing from the browser. Dark &amp; light themes, responsive mobile layout, English and French. React + Go + WebSocket.</p>
       </div>
 
       <div class="feature-card">
         <div class="icon">📊</div>
         <h3>Statistics &amp; History</h3>
-        <p>Automatic session recording with aggregate stats: area covered, time spent, blade hours, battery cycles. Review mowing history anytime.</p>
+        <p>Automatic session recording with aggregate stats: area covered, time spent, blade hours, battery cycles. Review mowing history anytime, and record a ROS bag of a session for analysis.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">💡</div>
+        <h3>Status LED Ring</h3>
+        <p>An optional WS2812 ring shows the robot's state from across the garden — mowing, docking, charging, error — and dims to a configurable "still charged" glow once the battery is full.</p>
       </div>
 
       <div class="feature-card">
         <div class="icon">🔌</div>
         <h3>Your Existing Hardware</h3>
-        <p>Works with your stock YardForce board — no need to replace electronics. Add sensors and capabilities on top of what you have.</p>
+        <p>Works with your stock YardForce board — no need to replace electronics. Add an RTK receiver (u-blox F9P, Unicore UM98x or any NMEA source), a LiDAR (LD19, STL27L, RPLIDAR A1) and an SBC, and import your existing OpenMower map.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🛡️</div>
+        <h3>Firmware-Owned Safety</h3>
+        <p>The STM32 firmware is the sole blade-safety authority: emergency stop, tilt, lift and stop-button latches, a wheel anti-dig gate and both motor loops run on the board. ROS2 can ask; the firmware decides.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🐳</div>
+        <h3>Docker Deploy</h3>
+        <p>One-command deployment with Docker Compose on Raspberry Pi 4/5, RK3566/RK3588 or any arm64/amd64 Linux box. Cyclone DDS for reliable inter-container communication on ARM boards. Every image on ROS 2 Lyrical.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🧪</div>
+        <h3>Simulation &amp; Tests</h3>
+        <p>A Webots world with the mower model runs the full stack on your laptop — record areas, plan coverage, dock — and the CI builds and tests every package on every pull request.</p>
       </div>
 
       <div class="feature-card">
