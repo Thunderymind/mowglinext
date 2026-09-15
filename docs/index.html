@@ -12,9 +12,9 @@
 
 <!-- ─── Beta Banner ─────────────────────────────────── -->
 <div class="beta-banner">
-  <span class="beta-tag">BETA</span>
-  First public beta — running on real hardware and open to testers.
-  <a href="https://github.com/mowglinext/mowglinext">Join the testers on GitHub</a>
+  <span class="beta-tag">v1.4.0</span>
+  Out now: update from the GUI, Home Assistant over MQTT, push notifications, remote access, ROS 2 Lyrical.
+  <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.4.0">Read the release notes</a>
 </div>
 
 <!-- ─── Navigation ──────────────────────────────────── -->
@@ -22,6 +22,7 @@
   <div class="container">
     <div class="logo"><img src="icon.svg" alt="" width="28" height="28" style="vertical-align: middle; margin-right: 8px;">Mowgli<span>Next</span></div>
     <ul class="links">
+      <li><a href="#whats-new">What's New</a></li>
       <li><a href="#how-it-works">How It Works</a></li>
       <li><a href="#features">Features</a></li>
       <li><a href="#getting-started">Get Started</a></li>
@@ -135,6 +136,61 @@
   </div>
 </section>
 
+<!-- ─── What's New ──────────────────────────────────── -->
+<section class="whats-new" id="whats-new">
+  <div class="container">
+    <p class="release-pill">Release <strong>v1.4.0</strong> · September 2026</p>
+    <h2>The mower now looks after itself</h2>
+    <p class="section-subtitle">Checks for its own updates, tells your phone what it is doing, talks to Home Assistant, and is reachable from anywhere — privately.</p>
+    <div class="features-grid">
+
+      <div class="feature-card">
+        <div class="icon">🔄</div>
+        <h3>Update From the GUI</h3>
+        <p><strong>Settings → Updates</strong> checks for new releases every day and shows them in the notification bell. One reviewed click installs the whole stack — robot software, GUI and sensor drivers together — with a backup, a health check and automatic rollback, and only while the mower is idle with the blade off. Pin a version, follow Production or Development, or roll back.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🏠</div>
+        <h3>Home Assistant &amp; MQTT</h3>
+        <p>A real MQTT bridge, configured from the GUI: retained mowing status, battery and coverage, live GPS position, online/offline availability and a command topic. Works with the bundled broker or the one you already run. The topic contract is documented for any integration to build on.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">📲</div>
+        <h3>Push Notifications</h3>
+        <p>Telegram, Pushover, ntfy or a JSON webhook. Know when the mower starts, finishes a zone, gets home, gets stuck, hits the emergency stop, waits for rain or GPS, or runs low on battery — in English or French, with a test button to prove the channel.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🌍</div>
+        <h3>Remote Access</h3>
+        <p>An optional, hardened Tailscale sidecar puts the web interface on your private tailnet with HTTPS — reachable from your phone anywhere, without opening a router port. Never public: no Funnel, no exposed login, userspace networking with every capability dropped.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">✂️</div>
+        <h3>Cross-Hatch Mowing</h3>
+        <p>Alternate the stripe angle by 90° every session, per area, so the lawn is not always cut in the same direction. See and override the next direction for each zone without interrupting a run.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🐢</div>
+        <h3>ROS 2 Lyrical</h3>
+        <p>Every image rebuilt on ROS 2 Lyrical and Ubuntu 26.04 with pinned source dependencies, plus a Cyclone DDS discovery fix, wheel gains that actually turn the inner wheel on tight arcs, and dock calibration that works on real receivers. The host OS does not change.</p>
+      </div>
+
+    </div>
+
+    <div class="release-callout">
+      <h3>Already running MowgliNext?</h3>
+      <p>Rerun the installer once to enable in-GUI updates, then open <strong>Settings → Updates</strong>. That replaces <code>mowgli-pull &amp;&amp; mowgli-up</code> for good.</p>
+      <code>curl -sSL https://mowgli.garden/install.sh | bash</code>
+      <p class="composer-note">Check <code>docker volume ls | grep mowgli_maps</code> first — if your map volume is not prefixed <code>install_</code>, set <code>COMPOSE_PROJECT_NAME</code> in <code>docker/.env</code> so the stack keeps its data. Full steps in the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.4.0">release notes</a>.</p>
+    </div>
+  </div>
+</section>
+
 <!-- ─── How It Works ────────────────────────────────── -->
 <section class="how-it-works" id="how-it-works">
   <div class="container">
@@ -143,7 +199,7 @@
       <div class="flow-step">
         <div class="flow-icon">📡</div>
         <h3>See</h3>
-        <p>LiDAR scans the surroundings 10x/second. Required for obstacle avoidance and optional scan-matching + loop-closure factors in the localizer. RTK-GPS pinpoints position to centimeter accuracy.</p>
+        <p>LiDAR scans the surroundings 10x/second. Required for obstacle avoidance, and optionally builds a map that anchors the position when RTK drops out. RTK-GPS pinpoints position to centimeter accuracy.</p>
       </div>
       <div class="flow-arrow">→</div>
       <div class="flow-step">
@@ -170,7 +226,7 @@
       <div class="feature-card">
         <div class="icon">🗺️</div>
         <h3>RTK Localization, No SLAM</h3>
-        <p>No SLAM needed. A single GTSAM iSAM2 factor-graph localizer (<code>fusion_graph</code>) fuses RTK-GPS + IMU + wheel odometry under REP-105, holding a centimetre-accurate map pose. In RTK-Float windows or GPS-denied corners it folds LiDAR scan-matching and loop-closure factors into the same graph to keep the estimate stable.</p>
+        <p>No SLAM needed. A single GTSAM iSAM2 factor-graph localizer (<code>fusion_graph</code>) fuses RTK-GPS + IMU + wheel odometry under REP-105, holding a centimetre-accurate map pose. When RTK drops out, an optional LiDAR map anchor localises the robot against the map it built under RTK, so the estimate rides through the outage.</p>
       </div>
 
       <div class="feature-card">
@@ -200,7 +256,7 @@
       <div class="feature-card">
         <div class="icon">🌐</div>
         <h3>Web GUI &amp; Diagnostics</h3>
-        <p>State-adaptive dashboard with hero card, live sparkline telemetry, radial gauges, and health checks. Weekly schedule grid, statistics with bar charts, and full map editor. Dark &amp; light themes, responsive mobile layout. React + Go + WebSocket.</p>
+        <p>State-adaptive dashboard with hero card, live sparkline telemetry, radial gauges, and health checks. Weekly schedule grid, statistics with bar charts, full map editor, in-GUI software updates, push notifications and optional remote access. Dark &amp; light themes, responsive mobile layout. React + Go + WebSocket.</p>
       </div>
 
       <div class="feature-card">
@@ -349,7 +405,7 @@
       <!-- LiDAR -->
       <div class="composer-group">
         <h3>LiDAR Sensor</h3>
-        <p class="composer-hint">Required for obstacle avoidance and optional scan-matching + loop-closure localization</p>
+        <p class="composer-hint">Required for obstacle avoidance and the optional LiDAR map anchor</p>
         <div class="composer-options" data-group="lidar">
           <button class="composer-option active" data-value="ldlidar-uart">
             <span class="option-icon">🔴</span>
@@ -443,6 +499,11 @@
         <h3>Open the GUI</h3>
         <p>Once running, open the web interface to define mowing areas, monitor the robot, and fine-tune settings.</p>
         <code>http://&lt;mower-ip&gt;:4006</code>
+      </div>
+      <div class="step">
+        <div class="step-number">4</div>
+        <h3>Stay Up to Date</h3>
+        <p>Settings → Updates checks for new releases every day and installs the one you review, with backup and rollback. No shell needed after the first install.</p>
       </div>
     </div>
 
