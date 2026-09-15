@@ -38,6 +38,7 @@ export type SettingsSection =
     | "mqtt"
     | "irrisense"
     | "remote_access"
+    | "notifications"
     | "advanced";
 
 export type SectionMeta = {
@@ -280,6 +281,14 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         description: "settingsSections.remote_access.description",
         // No yaml keys: the remote-access settings (auth key included) live
         // in the GUI's key-value DB and the section loads/saves them itself.
+        keys: [],
+    },
+    {
+        id: "notifications",
+        label: "settingsSections.notifications.label",
+        icon: "bell",
+        description: "settingsSections.notifications.description",
+        // Same as IrriSense: DB-backed, the section owns load/save.
         keys: [],
     },
     {
