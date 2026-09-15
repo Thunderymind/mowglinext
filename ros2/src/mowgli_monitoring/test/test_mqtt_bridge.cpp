@@ -120,8 +120,7 @@ TEST(SerialisePower, ClampsBatteryPercentToZeroAndHundred)
 {
   mowgli_interfaces::msg::Power below{};
   below.v_battery = 5.0f;  // below kVEmpty (12.0)
-  EXPECT_NE(MqttBridgeNode::serialise_power(below).find("\"battery_pct\":0.0"),
-            std::string::npos);
+  EXPECT_NE(MqttBridgeNode::serialise_power(below).find("\"battery_pct\":0.0"), std::string::npos);
 
   mowgli_interfaces::msg::Power above{};
   above.v_battery = 20.0f;  // above kVFull (16.8)
@@ -148,9 +147,8 @@ TEST(SerialiseEmergency, ProducesExpectedJson)
   msg.latched_emergency = true;
   msg.reason = "lift detected";
 
-  EXPECT_EQ(
-      MqttBridgeNode::serialise_emergency(msg),
-      "{\"active_emergency\":true,\"latched_emergency\":true,\"reason\":\"lift detected\"}");
+  EXPECT_EQ(MqttBridgeNode::serialise_emergency(msg),
+            "{\"active_emergency\":true,\"latched_emergency\":true,\"reason\":\"lift detected\"}");
 }
 
 // ===========================================================================
@@ -165,7 +163,8 @@ TEST(SerialisePosition, ExtractsXyAndYawFromOdometry)
   msg.pose.pose.orientation.z = 0.0;
   msg.pose.pose.orientation.w = 1.0;  // identity quaternion -> theta = 0
 
-  EXPECT_EQ(MqttBridgeNode::serialise_position(msg), "{\"x\":1.2345,\"y\":-6.7890,\"theta\":0.0000}");
+  EXPECT_EQ(MqttBridgeNode::serialise_position(msg),
+            "{\"x\":1.2345,\"y\":-6.7890,\"theta\":0.0000}");
 }
 
 // ===========================================================================

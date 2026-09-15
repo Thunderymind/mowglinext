@@ -607,8 +607,9 @@ void MqttBridgeNode::on_diagnostics(diagnostic_msgs::msg::DiagnosticArray::Const
 void MqttBridgeNode::on_high_level_status(
     mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
 {
-  mqtt_client_->publish(
-      full_topic("high_level_status"), serialise_high_level_status(*msg), /*retain=*/true);
+  mqtt_client_->publish(full_topic("high_level_status"),
+                        serialise_high_level_status(*msg),
+                        /*retain=*/true);
 }
 
 void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)

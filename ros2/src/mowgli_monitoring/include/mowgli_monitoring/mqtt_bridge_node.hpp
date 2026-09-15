@@ -30,8 +30,8 @@
  *   /hardware_bridge/status              → <prefix>/status             (JSON)
  *   /hardware_bridge/power               → <prefix>/power              (JSON)
  *   /hardware_bridge/emergency           → <prefix>/emergency          (JSON)
- *   /wheel_odom                          → <prefix>/position   (JSON: x, y, theta, odom frame) — rate-limited
- *   /diagnostics                         → <prefix>/diagnostics        (JSON summary)
+ *   /wheel_odom                          → <prefix>/position   (JSON: x, y, theta, odom frame) —
+ * rate-limited /diagnostics                         → <prefix>/diagnostics        (JSON summary)
  *   /behavior_tree_node/high_level_status → <prefix>/high_level_status (JSON) — retained
  *   /gps/fix                             → <prefix>/gps        (JSON: lat/lon/alt) — rate-limited
  *   (connection state)                   → <prefix>/available  ("online"/"offline", retained, LWT)
