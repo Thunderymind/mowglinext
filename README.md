@@ -98,7 +98,7 @@ See the **[Architecture wiki page](https://github.com/mowglinext/mowglinext/wiki
 ## Dashboard
 
 <p align="center">
-  <img src="docs/screenshots/dashboard-mowing.png" alt="Dashboard — mowing state" width="720">
+  <img src="docs/screenshots/dashboard-idle.png" alt="Dashboard — robot idle on the dock" width="720">
 </p>
 
 State-adaptive hero card with a live mini-map, telemetry tiles, health checks, and contextual actions. Weekly schedule grid, statistics with bar charts, and full Mapbox map editor. Dark-only theme with Visual / Balanced / Efficient display modes, responsive mobile layout.

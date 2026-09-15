@@ -41,7 +41,7 @@ From outside the home network: Settings → **Remote access** starts an optional
 
 ## Dashboard
 
-![Dashboard — mowing state](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/dashboard-mowing.png)
+![Dashboard — idle on the dock](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/dashboard-idle.png)
 
 The dashboard adapts to the mower's current state with a **hero card**. It always carries the active zone, a battery ring, and -- once a map is loaded -- a "coverage today" ribbon with the mowed / total area in m². The headline and the big primary button change with the state:
 

@@ -788,3 +788,7 @@ footer a:hover { color: var(--text-heading); }
   .composer-copy { position: static; margin-top: 8px; width: 100%; justify-content: center; }
   .composer-command-wrapper { position: static; }
 }
+
+/* ─── Build manual callout (Get Started) ───────────── */
+.build-callout { margin-bottom: 32px; }
+.build-callout .btn { margin-top: 12px; }
