@@ -86,7 +86,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `compose/docker-compose.foxglove.yml` | 5 | **Unused** — no code selects it; overrides `mowgli.command` with a non-existent `enable_coverage:=` arg |
 | **`install/config/`** (seeds copied to `docker/config/`) | | |
 | `config/mowgli/mowgli_robot.yaml` | 79 | The SPARSE installed robot config seed (Invariant 15) |
-| `config/cyclonedds.xml` | 27 | Loopback-only DDS: `AllowMulticast=false`, iface `lo`, `MaxAutoParticipantIndex=500`, unicast peer `localhost` |
+| `config/cyclonedds.xml` | ~45 | Loopback-only DDS: `AllowMulticast=false`, iface `lo`, `MaxAutoParticipantIndex=500`, unicast peer `localhost` with `PruneDelay="inf"` (Cyclone 11 otherwise stops re-announcing to a peer port after 30 s — a dropped boot-burst SPDP then leaves two participants blind to each other) |
 | `config/mqtt/mosquitto.conf` | 18 | Anonymous listeners 1883 + 9001 (websockets) |
 | `config/mowgli/hardware_bridge.yaml` | 6 | **Dead copy** — launch reads the package share copy |
 | `config/mowgli/twist_mux.yaml` | 45 | **Dead copy** — launch reads the package share copy |
@@ -120,7 +120,8 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `docker/stack.sh` | 178 | Dev-checkout stack manager reusing `install/lib/compose.sh` (`regen up down restart pull update logs ps config`) |
 | `docker/README.md` | 792 | Operator deployment manual (largely stale — see stale claims) |
 | `docker/.env.example` | 28 | Template for `docker/.env` (`COMPOSE_PROJECT_NAME`, `ENABLE_MQTT`, `ENABLE_WATCHTOWER`, image refs) |
-| `docker/config/cyclonedds.xml` | 31 | TRACKED runtime copy actually mounted by the stack; must stay in sync with the `install/config/` seed |
+| `docker/config/cyclonedds.xml` | ~49 | TRACKED runtime copy actually mounted by the stack; must stay in sync with the `install/config/` seed |
+| `install/lib/sysctl.sh` | ~45 | `install_dds_sysctl`: writes `/etc/sysctl.d/90-mowgli-dds.conf` (rmem/wmem 8 MiB) and applies it — the DDS boot burst overflowed the 208 KiB default (`UdpRcvbufErrors`); run in the udev step |
 | `docker/config/mowgli/README.md` | 77 | Runtime-config note (stale) |
 | `docker/config/mowgli/drive_tuning/drive_pid_last_backup.yaml` | 9 | GUI drive-PID backup sample (dir otherwise gitignored) |
 | `docker/docker-compose.simulation.yaml` | 125 | `simulation` / `dev-sim` / `simulation-gui` built from `ros2/Dockerfile` target `simulation` |

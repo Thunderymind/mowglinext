@@ -24,6 +24,7 @@ source "${INSTALL_LIB_DIR}/platform.sh"
 source "${INSTALL_LIB_DIR}/docker.sh"
 source "${INSTALL_LIB_DIR}/backend_choice.sh"
 source "${INSTALL_LIB_DIR}/udev.sh"
+source "${INSTALL_LIB_DIR}/sysctl.sh"
 source "${INSTALL_LIB_DIR}/deploy.sh"
 source "${INSTALL_LIB_DIR}/env.sh"
 source "${INSTALL_LIB_DIR}/serial_probe.sh"
@@ -157,7 +158,7 @@ main() {
       'setup_env'
 
     progress_run 11 "$TOTAL_STEPS" "Installing udev rules" \
-      'install_udev_rules'
+      'install_udev_rules && install_dds_sysctl'
 
     progress_run_interactive 12 "$TOTAL_STEPS" "Configuring mower" \
       run_mower_configuration_step
