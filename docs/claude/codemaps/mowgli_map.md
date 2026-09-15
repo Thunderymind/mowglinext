@@ -158,7 +158,7 @@ Defaults: `ros2/src/mowgli_map/config/map_server.yaml` (`map_params`, `full_syst
 ```bash
 cd ros2 && make build-pkg PKG=mowgli_map          # ./scripts/build.sh, PACKAGES=mowgli_map
 cd ros2 && make test                              # ./scripts/test.sh (whole workspace)
-# direct colcon (inside the devcontainer / ros:kilted image):
+# direct colcon (inside the devcontainer / ros:lyrical image):
 colcon build --packages-select mowgli_map --cmake-args -DCMAKE_BUILD_TYPE=Release
 colcon test  --packages-select mowgli_map --return-code-on-test-failure && colcon test-result --verbose
 # single binary after build:
@@ -218,5 +218,5 @@ All node tests call handlers directly through the `*_for_test` accessors (`map_s
 
 ## Generated & vendored — do not hand-edit
 - Nothing generated inside `ros2/src/mowgli_map`. Downstream generated artefacts of its interfaces: `gui/pkg/msgs/mowgli/types_generated.go`, `gui/web/src/types/ros.generated.ts` (regen scripts in `gui/`).
-- `grid_map_*`, `nav2_msgs`, `map_msgs`, Boost come from the ROS Kilted image; `/opt/fields2cover-300` is not used here.
+- `grid_map_*`, `nav2_msgs`, `map_msgs`, Boost come from the ROS Lyrical image (`grid_map_*` from the pinned source build in `/opt/lyrical_vendor`); `/opt/fields2cover-300` is not used here.
 - **DIG_OBSTRUCTION exit:** `~/discard_dig_keepouts_near_robot` (`std_srvs/Trigger`, `area_manager.cpp` `discard_dig_keepouts_near_robot`) drops PENDING `SOURCE_DIG` proposals that contain / lie within `kDigDiscardClearanceM` (0.60 m) of the latched robot pose; accepted keepouts and farther proposals are untouched. Test hooks: `set_robot_pose_for_test`, `discard_dig_keepouts_near_robot_for_test`.
