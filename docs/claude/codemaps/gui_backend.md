@@ -28,6 +28,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | Per-topic JSON reshaping for the frontend | `gui/pkg/providers/transform.go` (`adaptGPS` `:254`, `adaptPose` `:287`, `adaptGnssStatus` `:325`, `adaptLidar` `:222`) |
 | Manual-mow joystick lag / cmd_vel path | `gui/pkg/providers/cmd_vel_relay.go` + `ros.go:547-552` (`Publish` prefers relay for `/cmd_vel_teleop`); server side `ros2/src/mowgli_bringup/scripts/cmd_vel_ws_relay.py` |
 | Scheduler fires / does not fire | `gui/pkg/providers/scheduler.go` (`checkSchedules` `:118`, `safeToStart` `:227`, `shouldRun` `:245`); CRUD in `gui/pkg/api/schedules.go` |
+| Remote access (Tailscale sidecar) | `gui/pkg/providers/remote_access.go` (`reconcile`, `buildSpec`, `Status`, `Logout`), DB keys `remote_access_config.go`, Docker service-container ops `docker_service.go` (`ImagePull`, `FindContainerByName`, `ContainerCreateService`, `ContainerRemove`), API `gui/pkg/api/remote_access.go`; operator doc `docs/REMOTE_ACCESS.md` |
 | IrriSense soil gate | `gui/pkg/providers/irrisense.go` (poll/backoff/`SoilStatus`), rule `irrisense_wetness.go`, DB keys `irrisense_config.go:18-28`, HTTP `irrisense_client.go`, API `gui/pkg/api/irrisense.go` |
 | Session statistics wrong | `gui/pkg/providers/session_tracker.go` (`OnHighLevelStatus` `:174`, `OnOdometry` `:138`, DB key `mowing.sessions` `:80`); read/delete in `gui/pkg/api/diagnostics.go:332-443` |
 | Map polling / dock pose shown on map | `gui/pkg/providers/ros.go:351-468` (`initDockPoseSubscription`, `pollMap` every 5 s → virtual `"map"` topic) |
@@ -76,6 +77,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/api/calibration_status.go` | 240 | `/calibration/status`: dock pose from yaml, IMU/mag calibration files under `/ros2_ws/maps` |
 | `gui/pkg/api/containers.go` | 234 | Docker list/start/stop/restart + WS log stream with stdcopy demux |
 | `gui/pkg/api/schedules.go` | 224 | Schedule CRUD (`schedule:<id>` DB keys, validation) |
+| `gui/pkg/api/remote_access.go` | ~180 | `/remote-access/{settings,status,apply,logout}` (auth key masked, write-only) |
 | `gui/pkg/api/irrisense.go` | 228 | IrriSense settings/status/gardens (token masked, write-only) |
 | `gui/pkg/api/weather.go` | 158 | `/weather`: open-meteo at the yaml datum, 10 min cache |
 | `gui/pkg/api/ntrip.go` | 139 | `/ntrip/sourcetable`: fetch + parse a caster sourcetable |
@@ -94,6 +96,9 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/providers/firmware.go` | 373 | Flash routing (prebuilt/custom/Vermut), openocd + platformio invocations, post-flash handshake check |
 | `gui/pkg/providers/docker.go` | 339 | Docker SDK wrapper (list/logs/start/stop/restart/inspect/run/exec) |
 | `gui/pkg/providers/session_tracker.go` | 333 | Mowing session state machine from `highLevelStatus` + odometer from `wheelOdom`; keeps last 500 |
+| `gui/pkg/providers/remote_access.go` | ~420 | `RemoteAccessProvider`: reconcile loop for `mowgli-remote` (spec-hash label decides start vs recreate), `tailscale status --json` projection, logout |
+| `gui/pkg/providers/remote_access_config.go` | ~150 | `remoteAccess.*` DB keys, defaults, validation, masking |
+| `gui/pkg/providers/docker_service.go` | ~180 | Named service-container ops on the Docker SDK (pull, find, create + `CopyToContainer` files, remove) |
 | `gui/pkg/providers/irrisense.go` | 289 | Poll loop (10 min, backoff 1→30 min), `SoilStatus` verdict |
 | `gui/pkg/providers/scheduler.go` | 267 | 1-min ticker → `COMMAND_START` (=1) via `/behavior_tree_node/high_level_control` |
 | `gui/pkg/providers/irrisense_config.go` | 237 | `irrisense.*` DB keys, defaults, validation, masking |
@@ -159,6 +164,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `POST /tools/drive/ff-calibration/start`, `POST …/pid-tuning/start`, `POST …/tuning/rollback`, `GET …/tuning/status`, `GET …/tuning/report/latest` | `gui/pkg/api/drive_tuning.go:297-301` | container `mowgli-ros2` |
 | `GET/POST /schedules`, `PUT/DELETE /schedules/:id` | `gui/pkg/api/schedules.go:35-38` | |
 | `GET /irrisense/status`, `GET/PUT /irrisense/settings`, `GET /irrisense/gardens` | `gui/pkg/api/irrisense.go:64-67` | |
+| `GET/PUT /remote-access/settings`, `GET /remote-access/status`, `POST /remote-access/{apply,logout}` | `gui/pkg/api/remote_access.go` | status runs `docker exec mowgli-remote tailscale status --json` |
 | `POST /import/openmower` | `gui/pkg/api/openmower_import.go:162` | `{map, om_datum_lat?, om_datum_lon?, apply}` — preview unless `apply` |
 | `ANY /tiles/*proxyPath` (root, not `/api`) | `gui/pkg/api/tiles.go:46` | only when `system.map.enabled=true` |
 | `GET /swagger/*any` (root) | `gui/pkg/api/api.go:62` | from `gui/docs` |
@@ -227,7 +233,7 @@ Tests (what each pins):
 - `.msg`/`.srv` in `ros2/src/mowgli_interfaces` → run `gui/generate_go_msgs.sh` **and** `gui/generate_ts_types.sh`, commit both (`msg-codegen-drift.yml` fails otherwise); also `firmware/scripts/sync_ros_lib.py` (see `docs/claude/commands.md`).
 - New parameter default in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` → add the same `default` to `gui/asserts/mower_config.schema.json` (or allowlist it in `schema_template_parity_test.go`), else `TestSchemaDefaultsMatchTemplate` fails and the GUI's "at default" dot lies (Invariant 15).
 - New browser topic → `topicMap` (`ros.go`) + `topicSubscribeInterval` (`mowglinext.go`) + `TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics` + the frontend hook.
-- Container names are hardcoded: `mowgli-gps` (`gnss.go:19`), `mowgli-ros2` (`rosbag.go:44`, `drive_tuning.go:24`); renaming them in `install/compose/*.yml` breaks those tools.
+- Container names are hardcoded: `mowgli-gps` (`gnss.go:19`), `mowgli-ros2` (`rosbag.go:44`, `drive_tuning.go:24`); renaming them in `install/compose/*.yml` breaks those tools. `mowgli-remote` (`providers/remote_access.go`) is GUI-created, not a compose service.
 - Paths shared with the ROS2 container: `/ros2_ws/maps` (rosbags, calibration files; `mowgli_maps` volume mounted in both), `/ros2_ws/config/mowgli_robot.yaml` (drive tuning passes it to `tune_drive_pid`), `/ros2_ws/config/drive_tuning`.
 - `GNSS_*` env keys written by `gnssRuntimeEnvFallbackFromFlat` (`settings.go:749`) are consumed by the sensors/GPS compose service — keep names in sync with `install/compose` and `docs/UNIVERSAL_GNSS_SIDECAR_MIGRATION.md`; `legacyGnssEnvKeys` (`settings.go:850`) are actively purged.
 - `api.Schedule` (`schedules.go:13`) and `providers.schedule` (`scheduler.go:16`) are duplicated structs (import-cycle) — change both.

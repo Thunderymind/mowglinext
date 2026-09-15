@@ -36,6 +36,7 @@ export type SettingsSection =
     | "rain"
     | "leds"
     | "irrisense"
+    | "remote_access"
     | "advanced";
 
 export type SectionMeta = {
@@ -256,6 +257,15 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         description: "settingsSections.irrisense.description",
         // No yaml keys: the IrriSense settings (token included) live in the
         // GUI's key-value DB and the section loads/saves them itself.
+        keys: [],
+    },
+    {
+        id: "remote_access",
+        label: "settingsSections.remote_access.label",
+        icon: "global",
+        description: "settingsSections.remote_access.description",
+        // No yaml keys: the remote-access settings (auth key included) live
+        // in the GUI's key-value DB and the section loads/saves them itself.
         keys: [],
     },
     {

@@ -31,6 +31,7 @@ import { NavigationSection } from "../components/settings/NavigationSection.tsx"
 import { RainSection } from "../components/settings/RainSection.tsx";
 import { LedsSection } from "../components/settings/LedsSection.tsx";
 import { IrriSenseSection } from "../components/settings/IrriSenseSection.tsx";
+import { RemoteAccessSection } from "../components/settings/RemoteAccessSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
 import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 import { DisplayModeSection } from "../components/settings/DisplayModeSection.tsx";
@@ -237,6 +238,13 @@ export const SettingsPage = () => {
             case "irrisense":
                 return (
                     <IrriSenseSection
+                        registerSaver={registerExternalSaver}
+                        unregisterSaver={unregisterExternalSaver}
+                    />
+                );
+            case "remote_access":
+                return (
+                    <RemoteAccessSection
                         registerSaver={registerExternalSaver}
                         unregisterSaver={unregisterExternalSaver}
                     />
