@@ -194,6 +194,19 @@ type SetDockingPointRes struct {
 	StoredPose                geometry.Pose                  `json:"stored_pose"`
 }
 
+// SetFleetAssignmentReq for mowgli_interfaces/srv/SetFleetAssignment request.
+type SetFleetAssignmentReq struct {
+	ExcludedAreas             []uint32                       `json:"excluded_areas"`
+	PreferredStartIndex       int32                          `json:"preferred_start_index"`
+	Reason                    string                         `json:"reason"`
+}
+
+// SetFleetAssignmentRes for mowgli_interfaces/srv/SetFleetAssignment response.
+type SetFleetAssignmentRes struct {
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+}
+
 // StartInAreaReq for mowgli_interfaces/srv/StartInArea request.
 type StartInAreaReq struct {
 	Area                      uint8                          `json:"area"`
