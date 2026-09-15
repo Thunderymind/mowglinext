@@ -107,34 +107,34 @@
         "wheel_pid_kp": {
           "type": "number",
           "title": "Drive PID — Kp",
-          "default": 0.2,
+          "default": 10.0,
           "minimum": 0,
           "maximum": 200,
-          "description": "Proportional gain of the firmware per-wheel velocity loop (PWM per m/s). Applied live; higher = stiffer tracking, too high oscillates."
+          "description": "Proportional gain of the firmware per-wheel velocity loop, applied unscaled in PWM per m/s (10 = 3 PWM at a 0.3 m/s step). Applied live; higher = stiffer tracking, too high oscillates. Field-validated default 10."
         },
         "wheel_pid_ki": {
           "type": "number",
           "title": "Drive PID — Ki",
-          "default": 0.092,
+          "default": 2000.0,
           "minimum": 0,
           "maximum": 20000,
-          "description": "Integral gain of the firmware per-wheel velocity loop (PWM per m/s·s). Bridges the static-friction deadband; too high overshoots."
+          "description": "Integral gain of the firmware per-wheel velocity loop, applied unscaled in PWM per (m/s·s). Winds the integrator up to the static-friction deadband — 2000 reaches it from a 0.03 m/s error in about 0.5 s; values near 0.1 never move the wheel. Too high overshoots."
         },
         "wheel_pid_kd": {
           "type": "number",
           "title": "Drive PID — Kd",
-          "default": 0.01,
+          "default": 0.0,
           "minimum": 0,
           "maximum": 500,
-          "description": "Derivative gain of the firmware per-wheel velocity loop (PWM per m/s²). 0 = disabled (default)."
+          "description": "Derivative gain of the firmware per-wheel velocity loop (PWM per m/s²). 0 = disabled (default): the 50 Hz tick-quantised wheel speed makes the derivative term noise."
         },
         "wheel_pid_integral_limit": {
           "type": "number",
           "title": "Drive PID — Integral Limit",
-          "default": 15.0,
+          "default": 45.0,
           "minimum": 0,
           "maximum": 255,
-          "description": "Anti-windup clamp on the integral term (PWM units, motor max 255)."
+          "description": "Anti-windup clamp on the integral term (PWM units, motor max 255). Must let the integrator reach the ~40 PWM motor deadband minus feedforward (about 32 PWM at 0.03 m/s), or the slow inner wheel of an arc never turns. hardware_bridge refuses a set that cannot bridge deadband_pwm."
         },
         "wheel_pid_pwm_per_mps": {
           "type": "number",
@@ -143,6 +143,14 @@
           "minimum": 50,
           "maximum": 600,
           "description": "Open-loop velocity→PWM feedforward scale. Dominant drive term; sets the deadband/idle mapping. Change with care."
+        },
+        "deadband_pwm": {
+          "type": "number",
+          "title": "Drive Motor Deadband (PWM)",
+          "default": 40.0,
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Estimated static-friction deadband of the drive motors in PWM. Sanity gate only, never sent to the firmware: when the configured wheel_pid_* set cannot reach it (integral_limit + kp*0.03 + pwm_per_mps*0.03), hardware_bridge sends the template gains instead and logs an error; a live change that fails the gate is rejected."
         }
       }
     },
