@@ -180,6 +180,23 @@ if(BUILD_TESTING)
     ${geometry_msgs_TARGETS}
     ${mowgli_interfaces_TARGETS}
   )
+
+  ament_add_gtest(test_mqtt_bridge
+    test/test_mqtt_bridge.cpp
+  )
+
+  target_link_libraries(test_mqtt_bridge
+    mowgli_monitoring_core
+  )
+
+  target_link_libraries(test_mqtt_bridge
+    ${rclcpp_TARGETS}
+    ${diagnostic_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+  )
 endif()
 
 # ---------------------------------------------------------------------------

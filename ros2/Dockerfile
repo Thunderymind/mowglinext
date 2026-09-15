@@ -275,6 +275,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdal-dev libgeos++-dev libtinyxml2-dev libtbb12 \
     ros-lyrical-ortools-vendor \
     # LiDAR map anchor: Beluga MCL (header-only) + its ROS adapters
+    # MQTT bridge (mowgli_monitoring/mqtt_bridge_node) runtime dependency.
+    # libmosquitto-dev (headers + .so, needed to link) is installed in the
+    # deps stage below; this is the runtime .so the final `runtime` image
+    # (built FROM base, not FROM deps) actually needs to load
+    # MosquittoMqttClient. Not a rosdep key (checked ros/rosdistro
+    # rosdep/base.yaml — absent), so it's a plain apt-get here rather than
+    # a package.xml <depend>.
+    libmosquitto1 \
     # Utilities
     python3-argcomplete \
     # WebSocket server for cmd_vel_ws_relay (manual mowing low-latency path)
@@ -317,6 +325,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
+    # mowgli_monitoring's mqtt_bridge_node links against libmosquitto at
+    # build time (CMakeLists.txt's pkg_check_modules/find_library(mosquitto)
+    # gate on this to define MOWGLI_HAS_MOSQUITTO). Installed directly here,
+    # not via rosdep, because libmosquitto-dev has no rosdep key. The
+    # runtime-only libmosquitto1 is installed in the `base` stage above so
+    # the final `runtime` image (FROM base) has it too.
+    libmosquitto-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /ros2_ws

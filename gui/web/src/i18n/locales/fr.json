@@ -3242,6 +3242,25 @@
     "modeIdle": "Au repos",
     "modeIdleDescription": "Tout l'anneau en blanc atténué, sans mouvement. Alimenté et éveillé, sans activité."
   },
+  "settingsMqtt": {
+    "bridge": "Passerelle MQTT",
+    "bridgeDescription": "Publie l'état, la batterie et l'état de tonte vers un broker MQTT (par ex. pour une intégration Home Assistant) et accepte en retour les commandes démarrer/pause/retour dock. Lecture seule, sauf le topic de commande — le même canal que les boutons de l'interface.",
+    "securityTitle": "Aucune authentification par défaut",
+    "securityDescription": "Le broker fourni autorise les connexions anonymes et le topic de commande accepte n'importe quelle commande de haut niveau — traitez ceci comme n'importe quelle autre surface de contrôle sur votre réseau local, pas comme quelque chose à exposer sur internet.",
+    "broker": "Broker",
+    "host": "Hôte",
+    "hostTooltip": "Nom d'hôte ou IP du broker MQTT. \"localhost\" atteint aussi le broker fourni — pointez plutôt vers le broker de votre propre serveur si vous en avez un.",
+    "port": "Port",
+    "useSsl": "TLS",
+    "useSslTooltip": "Se connecter en TLS, vérifié via le magasin de certificats CA du système. Si le certificat du broker n'est pas approuvé au niveau du système, la passerelle refuse de se connecter plutôt que de revenir en clair.",
+    "username": "Nom d'utilisateur",
+    "usernameTooltip": "Laissez vide pour un broker en accès anonyme (par défaut).",
+    "password": "Mot de passe",
+    "topicPrefix": "Préfixe des topics",
+    "topicPrefixTooltip": "Tous les topics sont publiés sous la forme \"<préfixe>/<nom>\".",
+    "topicsTitle": "Topics",
+    "topicsDescription": "Le schéma JSON complet et les codes de commande sont documentés dans docs/MQTT_CONTROL.md."
+  },
   "settingsSections": {
     "updates": {"label": "Mises à jour", "description": "Versions installées, sources des mises à jour et récupération"},
     "appearance": {
@@ -3307,6 +3326,10 @@
     "leds": {
       "label": "LED d'état",
       "description": "Anneau d'état WS2812 : ce qu'il affiche et sa luminosité"
+    },
+    "mqtt": {
+      "label": "MQTT / Home Assistant",
+      "description": "Relie l'état et les commandes à un broker MQTT"
     },
     "advanced": {
       "label": "Avancé",
