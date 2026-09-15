@@ -31,6 +31,7 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
@@ -284,6 +285,64 @@ TEST(SerialiseGps, NoFixStatusIsNegative)
   sensor_msgs::msg::NavSatFix msg{};
   msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
   EXPECT_NE(MqttBridgeNode::serialise_gps(msg).find("\"status\":-1"), std::string::npos);
+}
+
+// ===========================================================================
+// serialise_rtk_status
+// ===========================================================================
+
+TEST(SerialiseRtkStatus, RtkFixedProducesExpectedJson)
+{
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = mowgli_interfaces::msg::GnssStatus::FIX_TYPE_RTK_FIXED;
+  msg.rtk_mode = mowgli_interfaces::msg::GnssStatus::RTK_MODE_FIXED;
+  msg.fix_valid = true;
+
+  EXPECT_EQ(MqttBridgeNode::serialise_rtk_status(msg),
+            "{\"fix_type\":3,\"fix_type_name\":\"RTK_FIXED\",\"rtk_mode\":3,"
+            "\"rtk_mode_name\":\"FIXED\",\"fix_valid\":true,\"quality_percent\":100}");
+}
+
+TEST(SerialiseRtkStatus, RtkFloatIsSeventyPercentQuality)
+{
+  // Matches gnss_status_utils::NormalizedQuality's RTK_FLOAT branch (0.7)
+  // when no horizontal_accuracy_m capability is present — same value
+  // test_gnss_status_authority.cpp pins for HardwareQualityPercent.
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = mowgli_interfaces::msg::GnssStatus::FIX_TYPE_RTK_FLOAT;
+  msg.rtk_mode = mowgli_interfaces::msg::GnssStatus::RTK_MODE_FLOAT;
+  msg.fix_valid = true;
+
+  const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
+  EXPECT_NE(json.find("\"fix_type_name\":\"RTK_FLOAT\""), std::string::npos);
+  EXPECT_NE(json.find("\"rtk_mode_name\":\"FLOAT\""), std::string::npos);
+  EXPECT_NE(json.find("\"quality_percent\":70"), std::string::npos);
+}
+
+TEST(SerialiseRtkStatus, InvalidFixIsZeroQualityRegardlessOfFixType)
+{
+  // fix_valid=false must win over a stale/leftover fix_type — matches
+  // gnss_status_utils::IsRtkFixed/IsRtkFloat/NormalizedQuality, which all
+  // check fix_valid first.
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = mowgli_interfaces::msg::GnssStatus::FIX_TYPE_RTK_FIXED;
+  msg.rtk_mode = mowgli_interfaces::msg::GnssStatus::RTK_MODE_FIXED;
+  msg.fix_valid = false;
+
+  const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
+  EXPECT_NE(json.find("\"fix_valid\":false"), std::string::npos);
+  EXPECT_NE(json.find("\"quality_percent\":0"), std::string::npos);
+}
+
+TEST(SerialiseRtkStatus, UnknownEnumValuesFallBackToUnknownName)
+{
+  mowgli_interfaces::msg::GnssStatus msg{};
+  msg.fix_type = 255;
+  msg.rtk_mode = 255;
+
+  const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
+  EXPECT_NE(json.find("\"fix_type_name\":\"UNKNOWN\""), std::string::npos);
+  EXPECT_NE(json.find("\"rtk_mode_name\":\"UNKNOWN\""), std::string::npos);
 }
 
 // ===========================================================================

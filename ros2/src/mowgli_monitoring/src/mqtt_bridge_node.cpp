@@ -556,6 +556,19 @@ void MqttBridgeNode::create_subscriptions()
         on_gps_fix(msg);
       });
 
+  // RTK/GNSS fix quality — the same typed status (and gnss_status_utils
+  // helpers) the LED ring and behavior tree read, so this topic can never
+  // disagree with what the robot itself shows. QoS(10) reliable, matching
+  // led_ring_node's and behavior_tree_node's own subscriptions to it (a
+  // derived status topic, not raw sensor data).
+  sub_gnss_status_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
+      "/gps/status",
+      10,
+      [this](mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+      {
+        on_gnss_status(msg);
+      });
+
   // Subscribe to MQTT command topic.
   mqtt_client_->subscribe(full_topic("command"),
                           [this](const std::string& topic, const std::string& payload)
@@ -623,6 +636,11 @@ void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // Store the latest fix; the timer will rate-limit publication (same
   // pattern as on_odom/pending_odom_ above).
   pending_gps_ = *msg;
+}
+
+void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+{
+  mqtt_client_->publish(full_topic("rtk_status"), serialise_rtk_status(*msg), /*retain=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -918,9 +936,9 @@ std::string MqttBridgeNode::serialise_high_level_status(
 std::string MqttBridgeNode::serialise_gps(const sensor_msgs::msg::NavSatFix& msg)
 {
   // status.status is STATUS_NO_FIX(-1)/STATUS_FIX(0)/STATUS_SBAS_FIX(1)/
-  // STATUS_GBAS_FIX(2); this is a raw NavSatFix relay, not the richer
-  // universal_gnss RTK-quality summary the GUI/BT use elsewhere — a
-  // consumer wanting Fixed-vs-Float should not read this field as that.
+  // STATUS_GBAS_FIX(2); this is a raw NavSatFix relay, not RTK-quality — a
+  // consumer wanting Fixed-vs-Float should read <prefix>/rtk_status
+  // (serialise_rtk_status() below) instead.
   char buf[192];
   std::snprintf(buf,
                 sizeof(buf),
@@ -931,6 +949,80 @@ std::string MqttBridgeNode::serialise_gps(const sensor_msgs::msg::NavSatFix& msg
                 msg.altitude,
                 static_cast<int>(msg.status.status),
                 static_cast<unsigned>(msg.status.service));
+  return std::string{buf};
+}
+
+namespace
+{
+const char* FixTypeName(uint8_t fix_type)
+{
+  using mowgli_interfaces::msg::GnssStatus;
+  switch (fix_type)
+  {
+    case GnssStatus::FIX_TYPE_NO_FIX:
+      return "NO_FIX";
+    case GnssStatus::FIX_TYPE_GPS_FIX:
+      return "GPS_FIX";
+    case GnssStatus::FIX_TYPE_RTK_FLOAT:
+      return "RTK_FLOAT";
+    case GnssStatus::FIX_TYPE_RTK_FIXED:
+      return "RTK_FIXED";
+    case GnssStatus::FIX_TYPE_DEAD_RECKONING:
+      return "DEAD_RECKONING";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+const char* RtkModeName(uint8_t rtk_mode)
+{
+  using mowgli_interfaces::msg::GnssStatus;
+  switch (rtk_mode)
+  {
+    case GnssStatus::RTK_MODE_UNKNOWN:
+      return "UNKNOWN";
+    case GnssStatus::RTK_MODE_NONE:
+      return "NONE";
+    case GnssStatus::RTK_MODE_FLOAT:
+      return "FLOAT";
+    case GnssStatus::RTK_MODE_FIXED:
+      return "FIXED";
+    default:
+      return "UNKNOWN";
+  }
+}
+}  // namespace
+
+std::string MqttBridgeNode::serialise_rtk_status(const mowgli_interfaces::msg::GnssStatus& msg)
+{
+  // quality_percent here is mowgli_interfaces::gnss_status_utils::
+  // HardwareQualityPercent(msg) — deliberately NOT msg.quality_percent
+  // directly. That field's own population is backend-dependent per
+  // GnssStatus.msg's header comment ("richer value" vs "derived from
+  // fix_type") and isn't guaranteed 0-100 the way this already-relied-upon
+  // helper is: it's the exact computation hardware_bridge_node.cpp uses for
+  // its own gps_quality_ (the GUI's "GPS %" health-check card), so this
+  // topic can never disagree with what the robot itself already shows.
+  const unsigned quality_percent =
+      static_cast<unsigned>(mowgli_interfaces::gnss_status_utils::HardwareQualityPercent(msg));
+
+  char buf[320];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{"
+                "\"fix_type\":%u,"
+                "\"fix_type_name\":\"%s\","
+                "\"rtk_mode\":%u,"
+                "\"rtk_mode_name\":\"%s\","
+                "\"fix_valid\":%s,"
+                "\"quality_percent\":%u"
+                "}",
+                static_cast<unsigned>(msg.fix_type),
+                FixTypeName(msg.fix_type),
+                static_cast<unsigned>(msg.rtk_mode),
+                RtkModeName(msg.rtk_mode),
+                msg.fix_valid ? "true" : "false",
+                quality_percent);
   return std::string{buf};
 }
 
