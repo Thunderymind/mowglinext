@@ -865,6 +865,20 @@ std::string MqttBridgeNode::serialise_diagnostics(const diagnostic_msgs::msg::Di
 std::string MqttBridgeNode::serialise_high_level_status(
     const mowgli_interfaces::msg::HighLevelStatus& msg)
 {
+  // HighLevelStatus.gps_quality_percent is misnamed at the source: BT
+  // context (behavior_tree_node.cpp's context_->gps_quality) is a 0.0-1.0
+  // normalized fraction (std::clamp(..., 0.0f, 1.0f) / gnss_status_utils::
+  // NormalizedQuality), and status_snapshot.cpp assigns it straight into
+  // this field with no *100 — so a "fully good" fix reads as 1.0, not
+  // 100.0. Not something to fix at the source (mowgli_behavior has other
+  // consumers of that same field/context member; changing its scale there
+  // is a separate, larger change). Scale it here so the MQTT contract's
+  // field genuinely means "percent", matching docs/MQTT_CONTROL.md and
+  // what an external consumer (e.g. a Home Assistant sensor with
+  // PERCENTAGE as its unit) will reasonably assume from the field name.
+  const double gps_quality_pct =
+      std::max(0.0, std::min(100.0, static_cast<double>(msg.gps_quality_percent) * 100.0));
+
   char buf[768];
   std::snprintf(buf,
                 sizeof(buf),
@@ -894,7 +908,7 @@ std::string MqttBridgeNode::serialise_high_level_status(
                 static_cast<int>(msg.completed_swaths),
                 static_cast<int>(msg.skipped_swaths),
                 static_cast<double>(msg.coverage_percent),
-                static_cast<double>(msg.gps_quality_percent),
+                gps_quality_pct,
                 static_cast<double>(msg.battery_percent),
                 msg.is_charging ? "true" : "false",
                 msg.emergency ? "true" : "false");

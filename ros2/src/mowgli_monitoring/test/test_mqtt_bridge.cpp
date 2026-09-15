@@ -212,7 +212,12 @@ TEST(SerialiseHighLevelStatus, ProducesExpectedJson)
   msg.completed_swaths = 12;
   msg.skipped_swaths = 1;
   msg.coverage_percent = 42.5f;
-  msg.gps_quality_percent = 99.0f;
+  // gps_quality_percent is misnamed at the source: behavior_tree_node.cpp's
+  // context_->gps_quality is a 0.0-1.0 fraction, assigned straight into this
+  // field with no *100 (status_snapshot.cpp). serialise_high_level_status()
+  // scales it up here so the wire field genuinely means "percent" — see the
+  // comment at its definition.
+  msg.gps_quality_percent = 0.99f;
   msg.battery_percent = 73.5f;
   msg.is_charging = false;
   msg.emergency = false;
@@ -225,6 +230,27 @@ TEST(SerialiseHighLevelStatus, ProducesExpectedJson)
             "\"total_swaths\":40,\"completed_swaths\":12,\"skipped_swaths\":1,"
             "\"coverage_percent\":42.5,\"gps_quality_percent\":99.0,"
             "\"battery_percent\":73.5,\"is_charging\":false,\"emergency\":false}");
+}
+
+TEST(SerialiseHighLevelStatus, ScalesGpsQualityFractionToPercentAndClamps)
+{
+  mowgli_interfaces::msg::HighLevelStatus full{};
+  full.gps_quality_percent = 1.0f;  // "fully good" fix, per the 0.0-1.0 source convention
+  EXPECT_NE(MqttBridgeNode::serialise_high_level_status(full).find("\"gps_quality_percent\":100.0"),
+            std::string::npos);
+
+  mowgli_interfaces::msg::HighLevelStatus none{};
+  none.gps_quality_percent = 0.0f;
+  EXPECT_NE(MqttBridgeNode::serialise_high_level_status(none).find("\"gps_quality_percent\":0.0"),
+            std::string::npos);
+
+  // Defensive: the source field is documented 0.0-1.0 and should never
+  // exceed it, but a caller passing an already-scaled 0-100 value by
+  // mistake must not silently produce a nonsensical >100% reading.
+  mowgli_interfaces::msg::HighLevelStatus over{};
+  over.gps_quality_percent = 50.0f;
+  EXPECT_NE(MqttBridgeNode::serialise_high_level_status(over).find("\"gps_quality_percent\":100.0"),
+            std::string::npos);
 }
 
 TEST(SerialiseHighLevelStatus, EscapesSubStateName)

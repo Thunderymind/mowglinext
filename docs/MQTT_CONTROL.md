@@ -75,6 +75,13 @@ reads. Every field of `mowgli_interfaces/msg/HighLevelStatus.msg`:
 }
 ```
 
+`gps_quality_percent` is a genuine 0–100 percent on the wire — the bridge scales it up from the
+underlying ROS field, which (despite its name) is actually a 0.0–1.0 fraction at the source
+(`mowgli_behavior/src/status_snapshot.cpp` assigns the BT context's `gps_quality` — itself
+`std::clamp(..., 0.0f, 1.0f)` — straight into `HighLevelStatus.gps_quality_percent` with no ×100).
+If you're reading this field via any *other* path than `<prefix>/high_level_status` (e.g. straight
+off the `/behavior_tree_node/high_level_status` ROS topic), remember it's 0.0–1.0 there, not 0–100.
+
 `state` values (`mowgli_interfaces/msg/HighLevelStatus.msg`):
 
 | Value | Name | Meaning |
