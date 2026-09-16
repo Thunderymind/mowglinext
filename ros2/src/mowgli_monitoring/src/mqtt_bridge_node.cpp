@@ -574,11 +574,17 @@ void MqttBridgeNode::create_subscriptions()
         on_gnss_status(msg);
       });
 
-  // Subscribe to MQTT command topic.
+  // Subscribe to MQTT command topics.
   mqtt_client_->subscribe(full_topic("command"),
                           [this](const std::string& topic, const std::string& payload)
                           {
                             on_mqtt_command(topic, payload);
+                          });
+
+  mqtt_client_->subscribe(full_topic("start_area"),
+                          [this](const std::string& topic, const std::string& payload)
+                          {
+                            on_mqtt_start_area(topic, payload);
                           });
 }
 
@@ -586,6 +592,10 @@ void MqttBridgeNode::create_service_client()
 {
   srv_high_level_ = create_client<mowgli_interfaces::srv::HighLevelControl>(
       "/behavior_tree_node/high_level_control");
+  srv_get_area_ =
+      create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
+  srv_start_area_ =
+      create_client<mowgli_interfaces::srv::StartInArea>("/behavior_tree_node/start_in_area");
   srv_get_mowing_area_ =
       create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
 }
@@ -708,6 +718,128 @@ void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::st
 }
 
 // ---------------------------------------------------------------------------
+// MQTT start_area callback → StartInArea service call
+// ---------------------------------------------------------------------------
+
+void MqttBridgeNode::on_mqtt_start_area(const std::string& /*topic*/, const std::string& payload)
+{
+  // Same payload convention as <prefix>/command: ASCII decimal, not a raw
+  // byte. Reuses parse_command_payload — StartInArea.area is a uint8, same
+  // range and format as the HighLevelControl command codes.
+  uint8_t area_index = 0;
+  if (!parse_command_payload(payload, area_index))
+  {
+    RCLCPP_WARN(get_logger(),
+                "MQTT start_area payload '%s' is not a valid uint8 area index. Ignored.",
+                payload.c_str());
+    return;
+  }
+
+  if (!srv_start_area_->service_is_ready())
+  {
+    RCLCPP_WARN(get_logger(), "StartInArea service not available; command dropped.");
+    return;
+  }
+
+  auto request = std::make_shared<mowgli_interfaces::srv::StartInArea::Request>();
+  request->area = area_index;
+
+  // Fire-and-forget async call, same pattern as on_mqtt_command above — this
+  // is exactly as consequential as the existing bare COMMAND_START relay
+  // (StartInArea raises COMMAND_START internally too, ahead of the normal
+  // area-iteration order), so it inherits the same "no ack topic, poll
+  // high_level_status" contract rather than a bespoke response channel.
+  srv_start_area_->async_send_request(
+      request,
+      [this, area_index](rclcpp::Client<mowgli_interfaces::srv::StartInArea>::SharedFuture future)
+      {
+        const auto response = future.get();
+        if (response->success)
+        {
+          RCLCPP_INFO(get_logger(),
+                      "StartInArea area=%u accepted.",
+                      static_cast<unsigned>(area_index));
+        }
+        else
+        {
+          RCLCPP_WARN(get_logger(),
+                      "StartInArea area=%u reported failure.",
+                      static_cast<unsigned>(area_index));
+        }
+      });
+}
+
+// ---------------------------------------------------------------------------
+// Area list: periodic poll of GetMowingArea + publish
+// ---------------------------------------------------------------------------
+
+void MqttBridgeNode::poll_areas()
+{
+  if (!srv_get_area_->service_is_ready())
+  {
+    // map_server_node not up yet (or currently down) — try again next
+    // interval; areas_poll_in_flight_ stays false so on_timer() will retry.
+    return;
+  }
+  areas_poll_in_flight_ = true;
+  poll_areas_step(0, std::make_shared<std::vector<AreaSummary>>());
+}
+
+void MqttBridgeNode::poll_areas_step(uint32_t index,
+                                     std::shared_ptr<std::vector<AreaSummary>> collected)
+{
+  if (index >= kMaxAreasPoll)
+  {
+    areas_poll_in_flight_ = false;
+    publish_areas_if_changed(*collected);
+    return;
+  }
+
+  auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+  request->index = index;
+
+  srv_get_area_->async_send_request(
+      request,
+      [this, index, collected](
+          rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
+      {
+        const auto response = future.get();
+        if (!response->success)
+        {
+          // index >= areas_.size() on the server side — end of the list.
+          areas_poll_in_flight_ = false;
+          publish_areas_if_changed(*collected);
+          return;
+        }
+
+        // Navigation-only areas (keepout/boundary zones, never mowed) are
+        // deliberately excluded — same split the GUI applies
+        // (splitMapAreas) before offering "mow this area" to an operator. A
+        // start_area command targeting one would just be skipped by the
+        // BT's own mow-selection loop regardless, but excluding it here
+        // keeps the published list meaning "things you can actually ask
+        // this topic to mow".
+        if (!response->area.is_navigation_area)
+        {
+          collected->push_back(AreaSummary{index, response->area.name});
+        }
+
+        poll_areas_step(index + 1, collected);
+      });
+}
+
+void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& areas)
+{
+  const std::string json = serialise_areas(areas);
+  if (json == last_areas_json_)
+  {
+    return;
+  }
+  last_areas_json_ = json;
+  mqtt_client_->publish(full_topic("areas"), json, /*retain=*/true);
+}
+
+// ---------------------------------------------------------------------------
 // Timer: network loop + rate-limited position publish
 // ---------------------------------------------------------------------------
 
@@ -760,6 +892,19 @@ void MqttBridgeNode::on_timer()
   }
 
   maybe_poll_area_boundaries();
+
+  // Slow periodic area-list poll — independent of publish_rate_, see
+  // kAreasPollIntervalS's doc comment (mqtt_bridge_node.hpp).
+  if (!areas_poll_in_flight_)
+  {
+    const rclcpp::Time t = now();
+    const double elapsed = (t - last_areas_poll_).seconds();
+    if (elapsed >= kAreasPollIntervalS)
+    {
+      last_areas_poll_ = t;
+      poll_areas();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1118,6 +1263,31 @@ std::string MqttBridgeNode::serialise_rtk_status(const mowgli_interfaces::msg::G
                 msg.fix_valid ? "true" : "false",
                 quality_percent);
   return std::string{buf};
+}
+
+std::string MqttBridgeNode::serialise_areas(const std::vector<AreaSummary>& areas)
+{
+  // Dynamic string building, not the fixed-size snprintf buffers the other
+  // serialise_* functions use above — area names are operator-supplied free
+  // text of unbounded length, so a fixed buffer could silently truncate the
+  // JSON (see the file-level doc comment's note on this).
+  std::string json = "[";
+  bool first = true;
+  for (const auto& area : areas)
+  {
+    if (!first)
+    {
+      json += ',';
+    }
+    first = false;
+    json += "{\"index\":";
+    json += std::to_string(area.index);
+    json += ",\"name\":\"";
+    json += json_escape(area.name);
+    json += "\"}";
+  }
+  json += ']';
+  return json;
 }
 
 std::string MqttBridgeNode::serialise_area_boundaries(

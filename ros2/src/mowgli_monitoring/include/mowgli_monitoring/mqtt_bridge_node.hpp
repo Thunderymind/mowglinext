@@ -52,10 +52,32 @@
  *                                           once #638 lands, not done here to avoid touching that
  *                                           in-flight PR's branch.
  *   (connection state)                   → <prefix>/available  ("online"/"offline", retained, LWT)
+ *   (periodic poll, ~10s)                → <prefix>/areas      (JSON array of {index,name}) —
+ *                                           retained; walks map_server_node's GetMowingArea
+ *                                           index-by-index (same pattern the GUI backend's
+ *                                           pollMap() uses). Navigation-only areas are excluded —
+ *                                           "index" is the raw map_server_node area index, the
+ *                                           SAME index space <prefix>/start_area and
+ *                                           GetMowingArea/StartInArea use.
+ *
+ *                                           INTERIM CONTRACT, index-based on purpose: areas have
+ *                                           no stable id today (mowglinext#637 tracks adding one).
+ *                                           "index" is purely positional and the GUI's own
+ *                                           edit/delete flow rebuilds the whole area list on any
+ *                                           single-area change, which can reassign every index —
+ *                                           so a client MUST re-fetch <prefix>/areas and re-resolve
+ *                                           by name rather than caching an index across a session.
+ *                                           Once #637 lands, <prefix>/areas is expected to gain a
+ *                                           stable "id" field and <prefix>/start_area an id-based
+ *                                           counterpart — this index-only shape is a stepping
+ *                                           stone, not the final contract.
  *
  * MQTT → ROS2
- *   <prefix>/command → /behavior_tree_node/high_level_control service call
- *                       (payload: ASCII decimal uint8, e.g. "1" — not a raw byte)
+ *   <prefix>/command    → /behavior_tree_node/high_level_control service call
+ *                          (payload: ASCII decimal uint8, e.g. "1" — not a raw byte)
+ *   <prefix>/start_area → /behavior_tree_node/start_in_area service call — start mowing the given
+ *                          area now, ahead of the normal area-iteration order (payload: ASCII
+ *                          decimal uint8 area index, same index space as <prefix>/areas above)
  *
  * See docs/MQTT_CONTROL.md for the full JSON schema of every topic above.
  *
@@ -96,6 +118,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
+#include "mowgli_interfaces/srv/start_in_area.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
@@ -291,6 +314,22 @@ public:
   static std::string serialise_rtk_status(const mowgli_interfaces::msg::GnssStatus& msg);
 
   /**
+   * @brief One mowing area's MQTT-relevant summary.
+   *
+   * `index` is the raw map_server_node area index — the same positional
+   * index space GetMowingArea/StartInArea already use, NOT a stable id
+   * (see the file-level doc comment above and mowglinext#637). Navigation-
+   * only areas are never represented here — see serialise_areas().
+   */
+  struct AreaSummary
+  {
+    uint32_t index{0};
+    std::string name{};
+  };
+
+  static std::string serialise_areas(const std::vector<AreaSummary>& areas);
+
+  /**
    * @brief Build the <prefix>/area_boundary payload from a polled area list.
    * @param areas (index, MapArea) pairs, in whatever order they were polled —
    *        NOT necessarily sorted or contiguous (an area can be deleted,
@@ -361,6 +400,13 @@ private:
   // ---- MQTT command callback ------------------------------------------------
 
   void on_mqtt_command(const std::string& topic, const std::string& payload);
+  void on_mqtt_start_area(const std::string& topic, const std::string& payload);
+
+  // ---- Area list: periodic poll of GetMowingArea + publish ------------------
+
+  void poll_areas();
+  void poll_areas_step(uint32_t index, std::shared_ptr<std::vector<AreaSummary>> collected);
+  void publish_areas_if_changed(const std::vector<AreaSummary>& areas);
 
   // ---- Timer: network loop + rate-limited position/gps -----------------------
 
@@ -387,6 +433,11 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr sub_gnss_status_;
 
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr srv_high_level_;
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr srv_get_area_;
+  rclcpp::Client<mowgli_interfaces::srv::StartInArea>::SharedPtr srv_start_area_;
+  // Separate client (same service as srv_get_area_ above) so the
+  // <prefix>/area_boundary poll chain (below) and the <prefix>/areas poll
+  // chain (PR #638) never share in-flight request/response state.
   rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr srv_get_mowing_area_;
 
   rclcpp::TimerBase::SharedPtr timer_;
@@ -410,6 +461,21 @@ private:
   rclcpp::Time last_odom_publish_{0, 0, RCL_ROS_TIME};
   std::optional<sensor_msgs::msg::NavSatFix> pending_gps_{};
   rclcpp::Time last_gps_publish_{0, 0, RCL_ROS_TIME};
+
+  // ---- Area-list poll state --------------------------------------------------
+  // Areas change rarely (only on an explicit add/edit/record) and there is no
+  // ROS notification for "the area list changed", so <prefix>/areas is a slow
+  // periodic poll rather than driven off a subscription like every other
+  // topic here. kAreasPollIntervalS is independent of publish_rate_ on
+  // purpose — walking GetMowingArea index-by-index is much heavier than the
+  // single-message publishes the rate limiter above governs.
+  static constexpr double kAreasPollIntervalS = 10.0;
+  // Matches the GUI backend's own cap in pollMap() (gui/pkg/providers/ros.go).
+  static constexpr uint32_t kMaxAreasPoll = 100;
+
+  rclcpp::Time last_areas_poll_{0, 0, RCL_ROS_TIME};
+  bool areas_poll_in_flight_{false};
+  std::string last_areas_json_{};
 
   // ---- Area boundary polling state -------------------------------------------
 

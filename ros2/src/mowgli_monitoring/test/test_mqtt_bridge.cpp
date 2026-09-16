@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
@@ -345,6 +346,35 @@ TEST(SerialiseRtkStatus, UnknownEnumValuesFallBackToUnknownName)
   const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
   EXPECT_NE(json.find("\"fix_type_name\":\"UNKNOWN\""), std::string::npos);
   EXPECT_NE(json.find("\"rtk_mode_name\":\"UNKNOWN\""), std::string::npos);
+}
+
+// ===========================================================================
+// serialise_areas
+// ===========================================================================
+
+TEST(SerialiseAreas, EmptyListIsEmptyJsonArray)
+{
+  EXPECT_EQ(MqttBridgeNode::serialise_areas({}), "[]");
+}
+
+TEST(SerialiseAreas, ProducesExpectedJsonWithRawIndices)
+{
+  // "index" is deliberately the raw map_server_node index, not a compacted
+  // 0..N-1 position — a navigation-only area between two mowing areas would
+  // leave a gap here, matching what GetMowingArea/StartInArea expect.
+  std::vector<MqttBridgeNode::AreaSummary> areas{
+      {0, "Front Lawn"},
+      {2, "Back Garden"},
+  };
+
+  EXPECT_EQ(MqttBridgeNode::serialise_areas(areas),
+            "[{\"index\":0,\"name\":\"Front Lawn\"},{\"index\":2,\"name\":\"Back Garden\"}]");
+}
+
+TEST(SerialiseAreas, EscapesAreaName)
+{
+  std::vector<MqttBridgeNode::AreaSummary> areas{{1, R"(Side "yard")"}};
+  EXPECT_EQ(MqttBridgeNode::serialise_areas(areas), R"([{"index":1,"name":"Side \"yard\""}])");
 }
 
 // ===========================================================================
