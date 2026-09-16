@@ -13,7 +13,8 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 
 | Task | Start here |
 |------|------------|
-| Trace an install end-to-end (15 steps) | `install/mowglinext.sh` `main()` L88–199 (each `progress_run*` names the lib function) |
+| Trace an install end-to-end (15 steps) | `install/mowglinext.sh` `main()` (each `progress_run*` names the lib function) |
+| Run a single install step in isolation (issue #632) | `install/mowglinext.sh` `run_only_step()`/`list_only_steps()`, dispatched from `main()`'s `ONLY_STEP` branch (`--only=<step>`, parsed in `config.sh` `parse_args`) — skips `select_repo_branch`/`select_language` on purpose; see `install/tests/test_only_step.sh` |
 | Add / change a `docker/.env` key | `install/lib/env.sh` `setup_env` L210–374 (defaults L216–301, writes L325–367) + whitelist `install/lib/state.sh` `is_allowed_installer_key` L11–33 + guard `install/tests/test_env_output.sh` L38 |
 | "Which env var starts which container?" | `install/lib/compose.sh` `build_compose_stack` L52–138 — see the env→service table below |
 | Change how the merged compose is produced | `install/lib/compose.sh` `write_compose_merged` L208–244 (`docker compose config --no-interpolate`), pure-Bash fallback L169–206 |
