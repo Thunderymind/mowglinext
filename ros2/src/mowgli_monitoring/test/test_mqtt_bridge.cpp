@@ -30,9 +30,11 @@
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
+#include "mowgli_interfaces/msg/map_area.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_monitoring/mqtt_bridge_node.hpp"
@@ -343,6 +345,93 @@ TEST(SerialiseRtkStatus, UnknownEnumValuesFallBackToUnknownName)
   const std::string json = MqttBridgeNode::serialise_rtk_status(msg);
   EXPECT_NE(json.find("\"fix_type_name\":\"UNKNOWN\""), std::string::npos);
   EXPECT_NE(json.find("\"rtk_mode_name\":\"UNKNOWN\""), std::string::npos);
+}
+
+// ===========================================================================
+// serialise_area_boundaries
+// ===========================================================================
+
+TEST(SerialiseAreaBoundaries, EmptyListProducesEmptyAreasArray)
+{
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{};
+
+  EXPECT_EQ(MqttBridgeNode::serialise_area_boundaries(areas, 52.0, 4.5),
+            "{\"datum_lat\":52.00000000,\"datum_lon\":4.50000000,\"areas\":[]}");
+}
+
+TEST(SerialiseAreaBoundaries, SingleAreaWithBoundaryAndNoObstacles)
+{
+  mowgli_interfaces::msg::MapArea area{};
+  area.name = "Front Lawn";
+  geometry_msgs::msg::Point32 p0;
+  p0.x = 1.0f;
+  p0.y = 2.0f;
+  geometry_msgs::msg::Point32 p1;
+  p1.x = 3.5f;
+  p1.y = -4.25f;
+  area.area.points = {p0, p1};
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area}};
+
+  EXPECT_EQ(MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0),
+            "{\"datum_lat\":0.00000000,\"datum_lon\":0.00000000,\"areas\":["
+            "{\"index\":0,\"name\":\"Front Lawn\",\"boundary\":[[1.000,2.000],[3.500,-4.250]],"
+            "\"obstacles\":[]}]}");
+}
+
+TEST(SerialiseAreaBoundaries, IncludesObstaclePolygons)
+{
+  mowgli_interfaces::msg::MapArea area{};
+  area.name = "Back Lawn";
+  geometry_msgs::msg::Point32 boundary_pt;
+  boundary_pt.x = 10.0f;
+  boundary_pt.y = 10.0f;
+  area.area.points = {boundary_pt};
+
+  geometry_msgs::msg::Point32 obstacle_pt0;
+  obstacle_pt0.x = 1.0f;
+  obstacle_pt0.y = 1.0f;
+  geometry_msgs::msg::Point32 obstacle_pt1;
+  obstacle_pt1.x = 2.0f;
+  obstacle_pt1.y = 1.0f;
+  geometry_msgs::msg::Polygon obstacle;
+  obstacle.points = {obstacle_pt0, obstacle_pt1};
+  area.obstacles = {obstacle};
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{2, area}};
+
+  const std::string json = MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0);
+  EXPECT_NE(json.find("\"index\":2"), std::string::npos);
+  EXPECT_NE(json.find("\"obstacles\":[[[1.000,1.000],[2.000,1.000]]]"), std::string::npos);
+}
+
+TEST(SerialiseAreaBoundaries, EscapesAreaName)
+{
+  mowgli_interfaces::msg::MapArea area{};
+  area.name = "Back \"yard\"";
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area}};
+
+  const std::string json = MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0);
+  EXPECT_NE(json.find("\"name\":\"Back \\\"yard\\\"\""), std::string::npos);
+}
+
+TEST(SerialiseAreaBoundaries, PreservesNonContiguousIndicesAndMultipleAreas)
+{
+  // Indices are exactly whatever the caller polled — this serialiser does
+  // not renumber, matching <prefix>/areas' own contract that indices are
+  // not assumed stable/contiguous (mowglinext#637).
+  mowgli_interfaces::msg::MapArea area0{};
+  area0.name = "A";
+  mowgli_interfaces::msg::MapArea area5{};
+  area5.name = "B";
+
+  const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area0},
+                                                                                 {5, area5}};
+
+  const std::string json = MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0);
+  EXPECT_NE(json.find("\"index\":0,\"name\":\"A\""), std::string::npos);
+  EXPECT_NE(json.find("\"index\":5,\"name\":\"B\""), std::string::npos);
 }
 
 // ===========================================================================
