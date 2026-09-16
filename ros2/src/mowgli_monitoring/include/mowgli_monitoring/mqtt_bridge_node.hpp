@@ -47,10 +47,9 @@
  *                                           consumer can render a boundary/obstacle overview
  *                                           without needing the GUI's own map stack. Independent
  *                                           of <prefix>/areas' own index/name polling (mowglinext
- *                                           PR #638) — the two currently poll the same service
- *                                           separately; consolidating them is a natural follow-up
- *                                           once #638 lands, not done here to avoid touching that
- *                                           in-flight PR's branch.
+ *                                           PR #638) — the two poll the same service separately,
+ *                                           on their own timers/clients; consolidating them into
+ *                                           one poll loop is a natural follow-up, not done here.
  *   (connection state)                   → <prefix>/available  ("online"/"offline", retained, LWT)
  *   (periodic poll, ~10s)                → <prefix>/areas      (JSON array of {index,name}) —
  *                                           retained; walks map_server_node's GetMowingArea

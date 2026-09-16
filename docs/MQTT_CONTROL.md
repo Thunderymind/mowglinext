@@ -209,11 +209,11 @@ through the datum with the same equirectangular formula. `boundary` is the area'
 empty when the area has none. Navigation-only areas (`MapArea.is_navigation_area`) are excluded —
 they aren't mowed, so there's nothing useful to draw.
 
-This topic is polled independently of `<prefix>/command`'s `RECORD_AREA`/`start_area` flow and of
-the (separate, unrelated) `<prefix>/areas` name-list topic some branches add for area-selection —
-it exists purely to describe geometry for drawing, not to identify areas for a start-area command.
-Indices are **not guaranteed stable or contiguous** across a session (mowglinext#637) — match on
-`name`, not `index`, if you need to correlate with another topic. The bridge polls
+This topic is polled independently of the `<prefix>/areas` name-list topic above (each runs its own
+`GetMowingArea` poll loop, on the same 10s cadence but not synchronised) — it exists purely to
+describe geometry for drawing, not to identify areas for a `<prefix>/start_area` command. Indices
+are **not guaranteed stable or contiguous** across a session (mowglinext#637) — match on `name`,
+not `index`, if you need to correlate with `<prefix>/areas`. The bridge polls
 `/map_server_node/get_mowing_area` every 10 seconds (index 0, 1, 2, … until the service reports
 `success: false`, capped at 100 areas) and only republishes (retained) when the serialised geometry
 actually changed, so a static map does not spam the broker.
