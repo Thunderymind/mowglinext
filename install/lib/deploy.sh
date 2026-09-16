@@ -241,7 +241,6 @@ setup_directory() {
 
 run_startup_step_live() {
   build_compose_stack
-  prune_backup_if_unchanged "$DOCKER_DIR/docker-compose.yaml" "${MIGRATED_COMPOSE_BACKUP:-}"
   run_compose_stack
 
   if ! $SKIP_WRITE_CONFIG; then
