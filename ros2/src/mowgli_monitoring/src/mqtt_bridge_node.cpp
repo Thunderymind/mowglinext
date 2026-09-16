@@ -586,8 +586,8 @@ void MqttBridgeNode::create_service_client()
 {
   srv_high_level_ = create_client<mowgli_interfaces::srv::HighLevelControl>(
       "/behavior_tree_node/high_level_control");
-  srv_get_mowing_area_ = create_client<mowgli_interfaces::srv::GetMowingArea>(
-      "/map_server_node/get_mowing_area");
+  srv_get_mowing_area_ =
+      create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
 }
 
 void MqttBridgeNode::create_timer()

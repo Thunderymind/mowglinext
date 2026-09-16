@@ -427,7 +427,7 @@ TEST(SerialiseAreaBoundaries, PreservesNonContiguousIndicesAndMultipleAreas)
   area5.name = "B";
 
   const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>> areas{{0, area0},
-                                                                                 {5, area5}};
+                                                                                {5, area5}};
 
   const std::string json = MqttBridgeNode::serialise_area_boundaries(areas, 0.0, 0.0);
   EXPECT_NE(json.find("\"index\":0,\"name\":\"A\""), std::string::npos);

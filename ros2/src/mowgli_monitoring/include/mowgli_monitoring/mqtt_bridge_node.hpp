@@ -336,16 +336,15 @@ private:
   /// Kick off a fresh index-0..N poll chain, if one isn't already running.
   void maybe_poll_area_boundaries();
   /// Request GetMowingArea for `index`, then chain to `index + 1` on success.
-  void poll_area_boundary_step(uint32_t index,
-                               std::shared_ptr<std::vector<
-                                   std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
-                                   accumulated);
+  void poll_area_boundary_step(
+      uint32_t index,
+      std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
+          accumulated);
   /// Serialise + publish (retained) `accumulated`, but only if it differs
   /// from the last payload actually sent — <prefix>/area_boundary is meant
   /// to be a quiet, retained topic, not a ~10s heartbeat.
   void finish_area_boundary_poll(
-      std::shared_ptr<
-          std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
+      std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
           accumulated);
 
   // ---- ROS2 subscription callbacks -----------------------------------------
