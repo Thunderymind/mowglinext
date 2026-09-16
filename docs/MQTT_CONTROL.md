@@ -50,7 +50,9 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | on change |
 | `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
+| `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
 | `<prefix>/command` | **in** | — | → `/behavior_tree_node/high_level_control` | — |
+| `<prefix>/start_area` | **in** | — | → `/behavior_tree_node/start_in_area` | — |
 
 ### `<prefix>/high_level_status` — the primary "is it mowing?" topic
 
@@ -228,6 +230,42 @@ confirm it took effect.
 emergency via the separate `/hardware_bridge/emergency_stop` service and clears maps via
 `/map_server_node/clear_map`, not through `HighLevelControl`. Don't rely on sending 254/255 over
 MQTT to do either.
+
+### `<prefix>/areas` (recorded mow areas)
+
+```json
+[
+  {"index": 0, "name": "Front Lawn"},
+  {"index": 2, "name": "Back Garden"}
+]
+```
+
+Polled from `/map_server_node/get_mowing_area` roughly every 10 seconds (walking index 0, 1, 2, …
+until the service reports `success=false` — the same pattern the GUI backend's own map polling
+uses) and republished, retained, only when the resulting list actually changed. Navigation-only
+areas (keepout/boundary zones that are never mowed) are excluded.
+
+**⚠️ Interim, index-based contract — expect this to change.** `index` is the *raw*, purely
+*positional* index `map_server_node` uses internally — recorded areas have **no stable ID** yet
+([mowglinext#637](https://github.com/mowglinext/mowglinext/issues/637) tracks adding one). The
+GUI's own area editor rebuilds its entire area list on any single-area add/edit/delete, which can
+reassign *every* area's index in the process — so **do not cache an index across a session**.
+Re-fetch `<prefix>/areas` and re-resolve the target by `name` before sending `<prefix>/start_area`
+each time. Once #637 lands, this topic is expected to grow a stable `id` field and
+`<prefix>/start_area` an id-based counterpart; this index-only shape is a stepping stone, not the
+final contract — don't build a permanent integration against it without accounting for that.
+
+### `<prefix>/start_area` (inbound — start mowing a specific area)
+
+Payload is an **ASCII decimal integer string** matching the `index` field from `<prefix>/areas`
+(same convention as `<prefix>/command` — publish `"2"`, not the byte `0x02`). Relays straight
+through to `/behavior_tree_node/start_in_area`, which starts mowing that area now, **ahead of the
+normal area-iteration order** — exactly as consequential as `<prefix>/command`'s `COMMAND_START`
+(it raises that internally too). Same fire-and-forget contract: no ack/result topic, an
+unrecognised/out-of-range payload is logged and dropped, and the command is dropped silently if
+`/behavior_tree_node/start_in_area` isn't available. Poll `<prefix>/high_level_status` afterwards
+to confirm it took effect. Subject to the same index-staleness caveat as `<prefix>/areas` above —
+targeting a stale index can start the wrong area.
 
 ## Parameters
 
