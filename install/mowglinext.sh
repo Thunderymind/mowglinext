@@ -131,20 +131,24 @@ main() {
     progress_run 2 "$TOTAL_STEPS" "Installing Docker" \
       'install_docker'
 
-    progress_run 3 "$TOTAL_STEPS" "Enabling UARTs" \
-      'enable_all_platform_uarts && generate_rc_local'
-    
-    progress_run_interactive 4 "$TOTAL_STEPS" "Selecting hardware backend" \
+    progress_run_interactive 3 "$TOTAL_STEPS" "Selecting hardware backend" \
       select_hardware_backend
 
-    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring Universal GNSS" \
+    progress_run_interactive 4 "$TOTAL_STEPS" "Configuring Universal GNSS" \
       run_gps_configuration_step
 
-    progress_run_interactive 6 "$TOTAL_STEPS" "Configuring LiDAR" \
+    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring LiDAR" \
       run_lidar_configuration_step
 
-    progress_run_interactive 7 "$TOTAL_STEPS" "Configuring rangefinders" \
+    progress_run_interactive 6 "$TOTAL_STEPS" "Configuring rangefinders" \
       run_range_configuration_step
+
+    # Runs AFTER GPS/LiDAR/rangefinder configuration (not before, as it used
+    # to) so required_uart_overlays() (install/lib/uart.sh) can see which
+    # ports were actually picked and only claim the GPIO pins those need —
+    # see issue #631 for why enabling all five unconditionally is a bug.
+    progress_run 7 "$TOTAL_STEPS" "Enabling UARTs" \
+      'enable_all_platform_uarts && generate_rc_local'
 
     check_updater_hardware || return 1
 
