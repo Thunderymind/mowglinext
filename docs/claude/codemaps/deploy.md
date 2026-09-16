@@ -54,7 +54,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `lib/progress.sh` | 212 | Step progress bar/spinner, install log capture (`init_install_logs`) |
 | `lib/gps.sh` | 176 | `pick_serial_by_id`, `preset_key_loaded`, `configure_gps` |
 | `lib/platform.sh` | 163 | CPU arch / board family detection, `assert_supported_platform` |
-| `lib/uart.sh` | 150 | Boot-config line upsert, `dtoverlay=uart1..5`, Bluetooth disable, Pi-5 USB/fan params |
+| `lib/uart.sh` | ~215 | Boot-config line upsert; `required_uart_overlays()` derives which of `dtoverlay=uart1..5` the configured GNSS/LiDAR/TF-Luna ports actually need (issue #631 — used to enable all five unconditionally) — runs after GPS/LiDAR/rangefinder config, not before; Bluetooth disable, Pi-5 USB/fan params |
 | `lib/common.sh` | 135 | `info/warn/fail/error/step/prompt/confirm`, `detect_uart_ports`, `pick_uart_port`, `require_root*` |
 | `lib/motd.sh` | 127 | Writes `/etc/profile.d/mowgli-motd.sh` (reads `~/mowglinext/docker/.env`) |
 | `lib/range.sh` | 118 | TF-Luna front/edge rangefinder prompts |
