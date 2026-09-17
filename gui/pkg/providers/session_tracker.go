@@ -58,6 +58,8 @@ type SessionTracker struct {
 	lastOdomX      float64
 	lastOdomY      float64
 	hasOdom        bool
+	lastOdomStamp  float64
+	hasOdomStamp   bool
 	// queue serializes status messages through a single consumer goroutine so
 	// the start/pause/resume/end state machine is applied in arrival order.
 	// Previously fanOut spawned a goroutine per message (go OnHighLevelStatus),
@@ -145,12 +147,28 @@ func (s *SessionTracker) OnOdometry(msg []byte) {
 				} `json:"position"`
 			} `json:"pose"`
 		} `json:"pose"`
+		Twist struct {
+			Twist struct {
+				Linear struct {
+					X float64 `json:"x"`
+					Y float64 `json:"y"`
+				} `json:"linear"`
+			} `json:"twist"`
+		} `json:"twist"`
+		Header struct {
+			Stamp struct {
+				Sec     float64 `json:"sec"`
+				Nanosec float64 `json:"nanosec"`
+			} `json:"stamp"`
+		} `json:"header"`
 	}
 	if err := json.Unmarshal(msg, &odom); err != nil {
 		return
 	}
 	x := odom.Pose.Pose.Position.X
 	y := odom.Pose.Pose.Position.Y
+	speed := math.Hypot(odom.Twist.Twist.Linear.X, odom.Twist.Twist.Linear.Y)
+	stamp := odom.Header.Stamp.Sec + odom.Header.Stamp.Nanosec/1e9
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -160,13 +178,25 @@ func (s *SessionTracker) OnOdometry(msg []byte) {
 		return
 	}
 	if s.hasOdom {
-		if d := math.Hypot(x-s.lastOdomX, y-s.lastOdomY); d <= maxOdomStepM {
+		d := math.Hypot(x-s.lastOdomX, y-s.lastOdomY)
+		if d > 1e-6 && d <= maxOdomStepM {
 			s.distanceMeters += d
+		} else if d <= 1e-6 && s.hasOdomStamp && stamp > s.lastOdomStamp {
+			// Some firmware publishes wheel odometry with a fixed (0,0) pose.
+			// Integrate its reported linear velocity instead of losing the run.
+			dt := stamp - s.lastOdomStamp
+			if dt <= 2.0 {
+				s.distanceMeters += speed * dt
+			}
 		}
 	}
 	s.lastOdomX = x
 	s.lastOdomY = y
 	s.hasOdom = true
+	if stamp > 0 {
+		s.lastOdomStamp = stamp
+		s.hasOdomStamp = true
+	}
 }
 
 // OnHighLevelStatus processes a raw JSON high-level status message.
