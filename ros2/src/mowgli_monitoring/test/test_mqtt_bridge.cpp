@@ -500,3 +500,44 @@ TEST(ParseCommandPayload, TrailingGarbageAfterANumberIsTolerated)
   EXPECT_TRUE(MqttBridgeNode::parse_command_payload("1abc", out));
   EXPECT_EQ(out, 1);
 }
+
+// ===========================================================================
+// is_high_level_status_stale (mowglinext#644)
+// ===========================================================================
+
+TEST(IsHighLevelStatusStale, FalseBeforeAnyMessageEverReceived)
+{
+  // Never received one yet == still starting up (behavior_tree_node may not
+  // be up), not evidence of a stuck subscription — regardless of how much
+  // time has passed.
+  const rclcpp::Time epoch{0, 0, RCL_ROS_TIME};
+  const rclcpp::Time far_future = epoch + rclcpp::Duration::from_seconds(3600.0);
+  EXPECT_FALSE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/false, far_future, epoch, /*threshold_s=*/5.0));
+}
+
+TEST(IsHighLevelStatusStale, FalseWithinThreshold)
+{
+  const rclcpp::Time last_received{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last_received + rclcpp::Duration::from_seconds(2.0);
+  EXPECT_FALSE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/true, now, last_received, /*threshold_s=*/5.0));
+}
+
+TEST(IsHighLevelStatusStale, FalseExactlyAtThreshold)
+{
+  // Strict '>' — exactly at the threshold is not yet stale, avoiding a
+  // resubscribe right on the boundary of a perfectly-timed heartbeat.
+  const rclcpp::Time last_received{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last_received + rclcpp::Duration::from_seconds(5.0);
+  EXPECT_FALSE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/true, now, last_received, /*threshold_s=*/5.0));
+}
+
+TEST(IsHighLevelStatusStale, TrueBeyondThreshold)
+{
+  const rclcpp::Time last_received{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last_received + rclcpp::Duration::from_seconds(5.001);
+  EXPECT_TRUE(MqttBridgeNode::is_high_level_status_stale(
+      /*received_before=*/true, now, last_received, /*threshold_s=*/5.0));
+}

@@ -32,7 +32,8 @@
  *   /hardware_bridge/emergency           → <prefix>/emergency          (JSON)
  *   /wheel_odom                          → <prefix>/position   (JSON: x, y, theta, odom frame) —
  * rate-limited /diagnostics                         → <prefix>/diagnostics        (JSON summary)
- *   /behavior_tree_node/high_level_status → <prefix>/high_level_status (JSON) — retained
+ *   /behavior_tree_node/high_level_status → <prefix>/high_level_status (JSON) — retained;
+ *                                           subscription watchdog below (mowglinext#644)
  *   /gps/fix                             → <prefix>/gps        (JSON: lat/lon/alt) — rate-limited
  *   /gps/status                          → <prefix>/rtk_status (JSON) — retained; the SAME
  *                                           mowgli_interfaces/msg/GnssStatus + gnss_status_utils
@@ -79,6 +80,26 @@
  *                          decimal uint8 area index, same index space as <prefix>/areas above)
  *
  * See docs/MQTT_CONTROL.md for the full JSON schema of every topic above.
+ *
+ * <prefix>/high_level_status subscription watchdog (mowglinext#644)
+ * -------------------------------------------------------------------------
+ * Observed on a real deployment: this node's subscription to
+ * /behavior_tree_node/high_level_status can go stale for extended periods
+ * (30+ minutes seen in the field) — this node stays connected to the broker
+ * ("online"/LWT) and alive the whole time, and behavior_tree_node's own
+ * publish is fresh (confirmed via a brand-new `ros2 topic echo` subscriber
+ * getting live data at the same moment) — yet <prefix>/high_level_status
+ * keeps republishing old data. Root cause unconfirmed; a full host reboot
+ * always clears it, which is consistent with (but does not prove) a stuck
+ * long-lived DDS reader rather than anything wrong in behavior_tree_node or
+ * in this node's own publish logic (see is_high_level_status_stale()).
+ * Since behavior_tree_node republishes this topic unconditionally at least
+ * once a second regardless of state, on_timer() recreates JUST this one
+ * subscription (create_high_level_status_subscription()) whenever more than
+ * kHighLevelStatusStaleAfterS passes with nothing received — a local,
+ * in-process recovery that needs no restart of this node, the ROS2 stack,
+ * or the host, and is safe even mid-mow (this package has no motion/blade
+ * authority, root CLAUDE.md Safety).
  *
  * Parameters
  * ----------
@@ -360,12 +381,38 @@ public:
    */
   static bool parse_command_payload(const std::string& payload, uint8_t& out_command);
 
+  /**
+   * @brief True if the <prefix>/high_level_status subscription looks stuck
+   *        and should be recreated (mowglinext#644).
+   *
+   * behavior_tree_node republishes this topic unconditionally at least once
+   * a second — its own heartbeat timer, see behavior_tree_node.cpp's
+   * setupHighLevelStatusRepublish() — so once at least one message has ever
+   * arrived, `threshold_s` of subsequent silence is strong evidence that
+   * THIS subscription has gone stale (observed in the field: this node
+   * stays connected/"online" and alive throughout, while a brand-new
+   * subscriber to the same ROS topic gets live data immediately), not that
+   * the publisher stopped.
+   * @param received_before Has any high_level_status message EVER arrived
+   *        on this subscription? False before the first one is normal
+   *        startup (behavior_tree_node may not be up yet) and must never be
+   *        treated as staleness.
+   */
+  static bool is_high_level_status_stale(bool received_before,
+                                          const rclcpp::Time& now,
+                                          const rclcpp::Time& last_received,
+                                          double threshold_s);
+
 private:
   // ---- Initialisation -------------------------------------------------------
 
   void declare_parameters();
   void create_mqtt_client();
   void create_subscriptions();
+  /// (Re)create just the <prefix>/high_level_status subscription — used at
+  /// startup (create_subscriptions()) and by the staleness watchdog in
+  /// on_timer() to recover without restarting this node or the stack.
+  void create_high_level_status_subscription();
   void create_service_client();
   void create_timer();
 
@@ -460,6 +507,13 @@ private:
   rclcpp::Time last_odom_publish_{0, 0, RCL_ROS_TIME};
   std::optional<sensor_msgs::msg::NavSatFix> pending_gps_{};
   rclcpp::Time last_gps_publish_{0, 0, RCL_ROS_TIME};
+
+  // ---- High-level-status subscription watchdog state -------------------------
+
+  static constexpr double kHighLevelStatusStaleAfterS = 5.0;
+
+  bool received_high_level_status_{false};
+  rclcpp::Time last_high_level_status_received_{0, 0, RCL_ROS_TIME};
 
   // ---- Area-list poll state --------------------------------------------------
   // Areas change rarely (only on an explicit add/edit/record) and there is no
