@@ -543,13 +543,7 @@ void MqttBridgeNode::create_subscriptions()
 
   // Control-plane state (BT high-level status), not raw sensor data — reliable
   // QoS(10) like status/power/emergency above, not SensorDataQoS.
-  sub_high_level_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
-      "/behavior_tree_node/high_level_status",
-      10,
-      [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
-      {
-        on_high_level_status(msg);
-      });
+  create_high_level_status_subscription();
 
   // Raw GPS fix (lat/lon/alt) for external map/device_tracker consumers.
   // SensorDataQoS per .claude/rules/ros2.md: GPS drivers publish BEST_EFFORT.
@@ -586,6 +580,17 @@ void MqttBridgeNode::create_subscriptions()
                           {
                             on_mqtt_start_area(topic, payload);
                           });
+}
+
+void MqttBridgeNode::create_high_level_status_subscription()
+{
+  sub_high_level_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+      "/behavior_tree_node/high_level_status",
+      10,
+      [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
+      {
+        on_high_level_status(msg);
+      });
 }
 
 void MqttBridgeNode::create_service_client()
@@ -643,6 +648,9 @@ void MqttBridgeNode::on_diagnostics(diagnostic_msgs::msg::DiagnosticArray::Const
 void MqttBridgeNode::on_high_level_status(
     mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
 {
+  received_high_level_status_ = true;
+  last_high_level_status_received_ = now();
+
   mqtt_client_->publish(full_topic("high_level_status"),
                         serialise_high_level_status(*msg),
                         /*retain=*/true);
@@ -673,6 +681,20 @@ bool MqttBridgeNode::parse_command_payload(const std::string& payload, uint8_t& 
   }
   out_command = static_cast<uint8_t>(command_int);
   return true;
+}
+
+bool MqttBridgeNode::is_high_level_status_stale(bool received_before,
+                                                const rclcpp::Time& now,
+                                                const rclcpp::Time& last_received,
+                                                double threshold_s)
+{
+  if (!received_before)
+  {
+    // Never received one yet — normal during startup (behavior_tree_node may
+    // not be up), not evidence of a stuck subscription.
+    return false;
+  }
+  return (now - last_received).seconds() > threshold_s;
 }
 
 void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::string& payload)
@@ -904,6 +926,25 @@ void MqttBridgeNode::on_timer()
       last_areas_poll_ = t;
       poll_areas();
     }
+  }
+
+  // <prefix>/high_level_status subscription watchdog (mowglinext#644) — see
+  // the file-level doc comment (mqtt_bridge_node.hpp) for the full field
+  // observation this recovers from.
+  if (is_high_level_status_stale(received_high_level_status_,
+                                 now(),
+                                 last_high_level_status_received_,
+                                 kHighLevelStatusStaleAfterS))
+  {
+    RCLCPP_WARN(get_logger(),
+                "No /behavior_tree_node/high_level_status message in over %.0fs — "
+                "recreating the subscription.",
+                kHighLevelStatusStaleAfterS);
+    create_high_level_status_subscription();
+    // Give the fresh subscription a full window before re-checking, rather
+    // than re-triggering next tick if behavior_tree_node itself is what's
+    // actually down.
+    last_high_level_status_received_ = now();
   }
 }
 

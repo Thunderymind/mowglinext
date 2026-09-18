@@ -86,6 +86,15 @@ underlying ROS field, which (despite its name) is actually a 0.0–1.0 fraction 
 If you're reading this field via any *other* path than `<prefix>/high_level_status` (e.g. straight
 off the `/behavior_tree_node/high_level_status` ROS topic), remember it's 0.0–1.0 there, not 0–100.
 
+**Field-observed staleness (mowglinext#644):** the bridge's subscription to the underlying ROS topic
+has been seen to go stale for extended periods (30+ minutes) on a real deployment, continuing to
+report old data on `<prefix>/high_level_status` while the ROS topic itself stayed fresh and this
+node otherwise stayed connected. `mqtt_bridge_node` now watches for this — behavior_tree_node
+republishes the ROS topic unconditionally at least once a second, so several seconds of silence on
+that subscription makes the bridge recreate it automatically, with no restart needed. If you're
+seeing this topic disagree with the mower's actual state for more than a few seconds, check the
+bridge's own log for a "recreating the subscription" warning before assuming a code bug elsewhere.
+
 `state` values (`mowgli_interfaces/msg/HighLevelStatus.msg`):
 
 | Value | Name | Meaning |
