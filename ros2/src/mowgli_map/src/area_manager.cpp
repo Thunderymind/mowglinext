@@ -576,29 +576,38 @@ void MapServerNode::on_get_mowing_area(
     res->area.area = entry.polygon;
     res->area.is_navigation_area = entry.is_navigation_area;
 
-    // Start with the area's own obstacles. `obstacle_info` is index-aligned
-    // with `obstacles` (MapObstacleInfo.msg) and carries the name/provenance
-    // that tells a dig proposal apart from a keepout the operator drew.
-    // PENDING proposals are included: they are live keepouts for this
-    // session, so the coverage planner must route around them exactly like
-    // accepted ones — only persistence waits for the operator.
+    // `obstacles` holds APPLIED keepouts only — it is what PlanCoverageArea
+    // turns into coverage holes, so a PENDING proposal must never appear in
+    // it: a dig would otherwise change the plan mid-session (9 -> 10
+    // sub-paths on 2026-09-17), which breaks the determinism the resume cursor
+    // relies on, without the operator having agreed to anything. Proposals go
+    // to the separate `proposed_obstacles` list, read only by the GUI. Both
+    // lists carry an index-aligned MapObstacleInfo (name / provenance / id).
     for (const auto& obs : entry.obstacles)
     {
-      res->area.obstacles.push_back(obs.polygon);
       mowgli_interfaces::msg::MapObstacleInfo info;
       info.name = obs.name;
       info.source = obs.source;
       info.pending = obs.pending;
       info.id = obs.id;
-      res->area.obstacle_info.push_back(info);
+      if (obs.pending)
+      {
+        res->area.proposed_obstacles.push_back(obs.polygon);
+        res->area.proposed_obstacle_info.push_back(info);
+      }
+      else
+      {
+        res->area.obstacles.push_back(obs.polygon);
+        res->area.obstacle_info.push_back(info);
+      }
     }
 
-    // Area entries own every obstacle, including pending digs and promoted
+    // Area entries own every obstacle, including proposals and promoted
     // tracker observations. obstacle_polygons_ is only a flat keepout cache
     // for navigation; appending it here leaks other areas' obstacles into
-    // this response. With three lawns that drew one dig three times, and the
-    // extra copies lost their id/name/pending provenance. Return the owning
-    // area's entries only; the global keepout mask still protects every spot.
+    // this response and loses their id/name provenance. Return the owning
+    // area's entries only; the global keepout mask still protects every
+    // applied spot.
 
     res->success = true;
     RCLCPP_INFO(get_logger(),
@@ -1064,13 +1073,38 @@ void MapServerNode::on_promote_obstacle(
     const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
     mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res)
 {
-  // Path 1: accept a PENDING proposal (a wheel-slip dig keepout). The
-  // polygon is already live in the mask, so re-sending it through the
-  // append path below would hit the centroid dedup guard and silently do
-  // nothing — the proposal would stay pending and never be persisted.
-  // Clearing the flag here is what makes the next save write it out.
+  // Path 1: accept a PENDING proposal (a wheel-slip dig report). Until this
+  // call the proposal is inert — not in the keepout mask, not a NO_GO cell,
+  // not a coverage hole, not in areas.dat. Accepting it is the operator action
+  // that APPLIES it (mask + classification + replan) and persists it.
   if (req->pending_id != 0)
   {
+    // REFUSE while the robot stands where the resulting keepout would be.
+    // Accepting turns polygon + keepout_obstacle_margin into LETHAL cells, and
+    // right after a dig the robot is only ~0.2-0.3 m from the dig point: the
+    // keepout would sit under it and every plan from its own pose would be
+    // START_OCCUPIED — the 2026-09-10 / 2026-09-17 strand, re-created by one
+    // click. Refused rather than deferred: a deferred accept is hidden state
+    // that applies itself later, mid-mission, when nobody is looking; a refusal
+    // tells the operator exactly what to do and changes nothing.
+    if (const auto blocked_m = robot_inside_accepted_band(req->pending_id); blocked_m.has_value())
+    {
+      std::ostringstream why;
+      why << std::fixed << std::setprecision(2)
+          << "the robot is standing on this proposal: accepting it now would put the robot "
+             "INSIDE the new keepout ("
+          << *blocked_m << " m from its edge, " << accept_clearance_m()
+          << " m needed) and no path could be planned from there. Let the robot drive away "
+             "or send it home, then accept again.";
+      res->success = false;
+      res->message = why.str();
+      RCLCPP_WARN(get_logger(),
+                  "promote_obstacle: pending %u refused - %s",
+                  req->pending_id,
+                  res->message.c_str());
+      return;
+    }
+
     const auto area_index = accept_pending_obstacle(req->pending_id, req->name);
     if (!area_index.has_value())
     {
@@ -1123,7 +1157,7 @@ void MapServerNode::on_promote_obstacle(
     }
   }
 
-  if (!apply_promoted_obstacle(req->area_index, poly, req->name, source, /*pending=*/false))
+  if (!apply_promoted_obstacle(req->area_index, poly, req->name, source))
   {
     res->success = false;
     res->message = "promotion rejected (bad area_index, navigation area, or polygon < 3 points)";
@@ -1189,30 +1223,47 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
   if (!area_index.has_value())
   {
     // Digs during transit or docking can happen outside every mowing area.
-    // There is no area to attach a keepout to, and inventing one would put a
-    // permanent obstacle somewhere the operator never drew a boundary. The
-    // stop-and-reverse already happened at the bridge; this is only about
-    // whether COVERAGE needs to route around the spot, and coverage never
-    // goes here. Log it and move on.
+    // There is no area to attach a proposal to, and inventing one would put
+    // an obstacle somewhere the operator never drew a boundary. The
+    // stop-and-reverse already happened at the bridge. Log it and move on.
     RCLCPP_INFO(get_logger(),
-                "Dig at (%.2f, %.2f) is outside every mowing area - not stamping a "
-                "keepout (nothing plans coverage there).",
+                "Dig at (%.2f, %.2f) is outside every mowing area - no proposal recorded.",
                 x,
                 y);
     return;
   }
 
-  // Keepout dig_obstacle_size_ wide (one chassis length by default, see
-  // kDefaultDigKeepoutSizeM), biased AHEAD of the robot's heading: the hole is
-  // under the wheels and the bridge has just reversed the robot ~0.2-0.3 m out
-  // of it, so the keepout must not reach back over the spot the robot now
-  // stands on or every transit from there is START_OCCUPIED
-  // (kDigKeepoutBehindM, net of the mask's obstacle_margin band). The heading is the last one
-  // latched by on_odom; a dig with no heading yet falls back to the centred square.
-  const bool have_heading = have_robot_heading_;
-  const double yaw = last_robot_yaw_;
-  const geometry_msgs::msg::Polygon poly =
-      dig_keepout_polygon(x, y, yaw, have_heading, dig_obstacle_size_, obstacle_margin_m_);
+  // A dig INSIDE a hole that already exists there (accepted, or still
+  // proposed) is the same hole: the centroid dedup below only catches reports
+  // within kObstacleDedupEpsilonM, and issue #500's three latches spanned
+  // 0.13 m.
+  {
+    geometry_msgs::msg::Point32 dig_pt;
+    dig_pt.x = static_cast<float>(x);
+    dig_pt.y = static_cast<float>(y);
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    for (const auto& obs : areas_[*area_index].obstacles)
+    {
+      if (point_in_polygon(dig_pt, obs.polygon))
+      {
+        RCLCPP_INFO(get_logger(),
+                    "Dig at (%.2f, %.2f) lies inside obstacle/proposal %u ('%s') - no new "
+                    "proposal.",
+                    x,
+                    y,
+                    obs.id,
+                    obs.name.c_str());
+        return;
+      }
+    }
+  }
+
+  // The proposal is sized to the PHYSICAL dig — the two drive-wheel ruts —
+  // not to the chassis (internal_helpers.hpp). The body clearance is added
+  // separately, and exactly once, when an accepted proposal is applied
+  // (keepout band, coverage obstacle_margin).
+  const double radius = dig_proposal_radius(dig_proposal_radius_m_, msg->map_distance);
+  const geometry_msgs::msg::Polygon poly = dig_proposal_polygon(x, y, radius);
 
   // The name IS the proposal's evidence: it is what the operator reads in the
   // GUI when deciding whether this inferred dig deserves a permanent hole in
@@ -1222,32 +1273,100 @@ void MapServerNode::on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPt
         << msg->wheel_distance << " m vs pose " << msg->map_distance << " m, sigma "
         << std::setprecision(3) << msg->position_sigma << " m";
 
-  // PENDING: live in the keepout mask right now (issue #500's re-dig loop -
-  // 3 latches in 18.4 s inside 0.13 m - is exactly what this prevents), but
-  // NOT written to areas.dat. A single inferred dig is weaker evidence than a
-  // repeatedly-observed tracker obstacle, and those already require operator
-  // sign-off (auto_promote_persistent_obstacles defaults false); the less
-  // certain signal must not get the more automatic treatment.
-  if (!apply_promoted_obstacle(*area_index,
-                               poly,
-                               label.str(),
-                               mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG,
-                               /*pending=*/true))
+  // PROPOSAL ONLY. Nothing here may touch the keepout mask, the
+  // classification layer, the coverage holes or areas.dat: the robot is
+  // standing ~0.2-0.3 m from this point, and a keepout stamped under or around
+  // it made every transit START_OCCUPIED and stranded the robot mid-lawn
+  // (2026-09-10, again 2026-09-17). Issue #500's re-dig loop is prevented in
+  // the coverage-following layer instead (mowgli_behavior/dig_skip.hpp), which
+  // cannot block planning. A single inferred dig is also weaker evidence than
+  // a repeatedly-observed tracker obstacle, and those already need operator
+  // sign-off (auto_promote_persistent_obstacles defaults false).
+  const auto proposal_id = add_obstacle_proposal(
+      *area_index, poly, label.str(), mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+  if (!proposal_id.has_value())
   {
-    RCLCPP_WARN(
-        get_logger(), "Dig keepout rejected for area %zu at (%.2f, %.2f).", *area_index, x, y);
+    RCLCPP_INFO(get_logger(),
+                "Dig at (%.2f, %.2f): an obstacle or proposal already covers this spot in area "
+                "%zu - no new proposal.",
+                x,
+                y,
+                *area_index);
     return;
   }
 
   RCLCPP_WARN(get_logger(),
-              "Dig keepout (%.2f m wide, %s) proposed for area %zu at (%.2f, %.2f); coverage "
-              "will route around it for this session. It is NOT saved to the map - accept "
-              "it in the GUI to make it permanent.",
-              std::max(dig_obstacle_size_, kMinDigKeepoutSizeM),
-              have_heading ? "ahead of the heading" : "centred square, no heading yet",
+              "Dig proposal %u (radius %.2f m, the wheel ruts) recorded for area %zu at (%.2f, "
+              "%.2f). It is NOT applied: no keepout, no coverage hole, nothing saved. Accept or "
+              "reject it in the GUI.",
+              *proposal_id,
+              radius,
               *area_index,
               x,
               y);
+}
+
+std::optional<uint32_t> MapServerNode::add_obstacle_proposal(
+    size_t area_index,
+    const geometry_msgs::msg::Polygon& polygon,
+    const std::string& name,
+    uint8_t source)
+{
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  if (area_index >= areas_.size() || areas_[area_index].is_navigation_area ||
+      polygon.points.size() < 3)
+  {
+    return std::nullopt;
+  }
+  // One proposal per spot: repeated digs at the same place (and a dig on a
+  // keepout that already exists) must not stack entries in the GUI list.
+  if (has_duplicate_obstacle_entry(areas_[area_index].obstacles, polygon, kObstacleDedupEpsilonM))
+  {
+    return std::nullopt;
+  }
+  // Deliberately NOT obstacle_polygons_, NOT masks_dirty_, NOT
+  // apply_area_classifications, NOT replan_needed: a proposal changes nothing
+  // that a planner or a controller can see.
+  areas_[area_index].obstacles.push_back(make_obstacle_entry(polygon, name, source, true));
+  return areas_[area_index].obstacles.back().id;
+}
+
+double MapServerNode::accept_clearance_m() const
+{
+  // The lethal region of an accepted obstacle is polygon + the mask band
+  // (Smac 2D is a point check, the mask is not inflated); one cell of slack
+  // for the rasterisation.
+  return std::max(keepout_obstacle_margin_m_, 0.0) + resolution_;
+}
+
+std::optional<double> MapServerNode::robot_inside_accepted_band(uint32_t pending_id)
+{
+  if (!have_robot_pose_)
+  {
+    return std::nullopt;  // no pose yet: nothing to protect, do not block the operator
+  }
+  const double rx = last_robot_x_;
+  const double ry = last_robot_y_;
+  geometry_msgs::msg::Point32 robot;
+  robot.x = static_cast<float>(rx);
+  robot.y = static_cast<float>(ry);
+
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  for (const auto& area : areas_)
+  {
+    for (const auto& obs : area.obstacles)
+    {
+      if (obs.id != pending_id || !obs.pending)
+      {
+        continue;
+      }
+      const double dist = point_in_polygon(robot, obs.polygon)
+                              ? 0.0
+                              : point_to_polygon_distance(rx, ry, obs.polygon);
+      return dist <= accept_clearance_m() ? std::optional<double>(dist) : std::nullopt;
+    }
+  }
+  return std::nullopt;  // unknown id: accept_pending_obstacle reports it
 }
 
 std::optional<size_t> MapServerNode::accept_pending_obstacle(uint32_t pending_id,
@@ -1258,26 +1377,43 @@ std::optional<size_t> MapServerNode::accept_pending_obstacle(uint32_t pending_id
     return std::nullopt;
   }
 
-  std::lock_guard<std::mutex> lock(map_mutex_);
-  for (size_t i = 0; i < areas_.size(); ++i)
+  std::optional<size_t> accepted_area;
   {
-    for (auto& obs : areas_[i].obstacles)
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    for (size_t i = 0; i < areas_.size() && !accepted_area.has_value(); ++i)
     {
-      if (obs.id != pending_id || !obs.pending)
+      for (auto& obs : areas_[i].obstacles)
       {
-        continue;
+        if (obs.id != pending_id || !obs.pending)
+        {
+          continue;
+        }
+        obs.pending = false;
+        if (!name.empty())
+        {
+          obs.name = name;
+        }
+        // THIS is the moment the polygon becomes a keepout: same stores as
+        // apply_promoted_obstacle.
+        obstacle_polygons_.push_back(obs.polygon);
+        masks_dirty_ = true;
+        accepted_area = i;
+        break;
       }
-      obs.pending = false;
-      if (!name.empty())
-      {
-        obs.name = name;
-      }
-      // Geometry, classification and mask are unchanged - the polygon has
-      // been live since the dig. Only its persistence status changed.
-      return i;
     }
   }
-  return std::nullopt;
+  if (!accepted_area.has_value())
+  {
+    return std::nullopt;
+  }
+
+  // Stamp NO_GO_ZONE and tell planners the map changed (the coverage plan has
+  // one more hole from now on). apply_area_classifications locks by itself.
+  apply_area_classifications();
+  std_msgs::msg::Bool replan_msg;
+  replan_msg.data = true;
+  replan_needed_pub_->publish(replan_msg);
+  return accepted_area;
 }
 
 bool MapServerNode::discard_pending_obstacle(uint32_t pending_id)
@@ -1287,41 +1423,25 @@ bool MapServerNode::discard_pending_obstacle(uint32_t pending_id)
     return false;
   }
 
-  bool removed = false;
+  // A proposal was never applied, so dropping it touches neither the mask nor
+  // the classification layer and needs no replan.
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  for (auto& area : areas_)
   {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    for (auto& area : areas_)
+    auto it = std::find_if(area.obstacles.begin(),
+                           area.obstacles.end(),
+                           [pending_id](const ObstacleEntry& obs)
+                           {
+                             return obs.id == pending_id && obs.pending;
+                           });
+    if (it == area.obstacles.end())
     {
-      auto it = std::find_if(area.obstacles.begin(),
-                             area.obstacles.end(),
-                             [pending_id](const ObstacleEntry& obs)
-                             {
-                               return obs.id == pending_id && obs.pending;
-                             });
-      if (it == area.obstacles.end())
-      {
-        continue;
-      }
-      erase_obstacle_polygon_locked(it->polygon);
-      area.obstacles.erase(it);
-      masks_dirty_ = true;
-      removed = true;
-      break;
+      continue;
     }
+    area.obstacles.erase(it);
+    return true;
   }
-
-  if (!removed)
-  {
-    return false;
-  }
-
-  // Re-stamp the classification layer from the surviving geometry so the
-  // discarded square stops being NO_GO_ZONE, then nudge planners to replan.
-  apply_area_classifications();
-  std_msgs::msg::Bool replan_msg;
-  replan_msg.data = true;
-  replan_needed_pub_->publish(replan_msg);
-  return true;
+  return false;
 }
 
 void MapServerNode::on_discard_obstacle(
@@ -1344,97 +1464,6 @@ void MapServerNode::on_discard_obstacle(
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
 }
 
-namespace
-{
-/// How far outside a pending dig polygon the robot centre may sit and still
-/// count as "trapped by it": one chassis length, which also covers the
-/// inflation the global costmap wraps around the lethal band (floor 0.58 m).
-constexpr double kDigDiscardClearanceM = 0.60;
-}  // namespace
-
-std::size_t MapServerNode::discard_dig_keepouts_near_robot()
-{
-  if (!have_robot_heading_)
-  {
-    RCLCPP_WARN(get_logger(),
-                "discard_dig_keepouts_near_robot: no robot pose latched yet - nothing dropped.");
-    return 0;
-  }
-  const double rx = last_robot_x_;
-  const double ry = last_robot_y_;
-  geometry_msgs::msg::Point32 robot;
-  robot.x = static_cast<float>(rx);
-  robot.y = static_cast<float>(ry);
-  std::size_t dropped = 0;
-  {
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    for (auto& area : areas_)
-    {
-      for (auto it = area.obstacles.begin(); it != area.obstacles.end();)
-      {
-        const bool is_pending_dig =
-            it->pending && it->source == mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG;
-        const bool touches_robot =
-            is_pending_dig &&
-            (point_in_polygon(robot, it->polygon) ||
-             point_to_polygon_distance(rx, ry, it->polygon) <= kDigDiscardClearanceM);
-        if (!touches_robot)
-        {
-          ++it;
-          continue;
-        }
-        RCLCPP_WARN(get_logger(),
-                    "Dropping pending dig keepout %u ('%s') - it sits under the robot at "
-                    "(%.2f, %.2f) and would refuse the way out.",
-                    it->id,
-                    it->name.c_str(),
-                    rx,
-                    ry);
-        erase_obstacle_polygon_locked(it->polygon);
-        it = area.obstacles.erase(it);
-        masks_dirty_ = true;
-        ++dropped;
-      }
-    }
-  }
-  if (dropped == 0)
-  {
-    return 0;
-  }
-  // Same re-stamp + replan nudge as a single discard.
-  apply_area_classifications();
-  std_msgs::msg::Bool replan_msg;
-  replan_msg.data = true;
-  replan_needed_pub_->publish(replan_msg);
-  return dropped;
-}
-
-void MapServerNode::on_discard_dig_keepouts_near_robot(
-    const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
-    std_srvs::srv::Trigger::Response::SharedPtr res)
-{
-  const std::size_t dropped = discard_dig_keepouts_near_robot();
-  res->success = true;
-  res->message = std::to_string(dropped) + " pending dig keepout(s) under the robot discarded";
-  RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
-}
-
-void MapServerNode::erase_obstacle_polygon_locked(const geometry_msgs::msg::Polygon& polygon)
-{
-  const auto target = polygon_centroid(polygon);
-  const auto is_same_keepout = [&target](const geometry_msgs::msg::Polygon& poly)
-  {
-    const auto c = polygon_centroid(poly);
-    return std::hypot(static_cast<double>(c.x) - static_cast<double>(target.x),
-                      static_cast<double>(c.y) - static_cast<double>(target.y)) <=
-           kObstacleDedupEpsilonM;
-  };
-  obstacle_polygons_.erase(std::remove_if(obstacle_polygons_.begin(),
-                                          obstacle_polygons_.end(),
-                                          is_same_keepout),
-                           obstacle_polygons_.end());
-}
-
 MapServerNode::ObstacleEntry MapServerNode::make_obstacle_entry(
     const geometry_msgs::msg::Polygon& polygon,
     const std::string& name,
@@ -1452,13 +1481,17 @@ MapServerNode::ObstacleEntry MapServerNode::make_obstacle_entry(
 
 bool MapServerNode::has_duplicate_obstacle_entry(const std::vector<ObstacleEntry>& existing,
                                                  const geometry_msgs::msg::Polygon& candidate,
-                                                 double eps)
+                                                 double eps,
+                                                 bool include_pending)
 {
   std::vector<geometry_msgs::msg::Polygon> polygons;
   polygons.reserve(existing.size());
   for (const auto& obs : existing)
   {
-    polygons.push_back(obs.polygon);
+    if (include_pending || !obs.pending)
+    {
+      polygons.push_back(obs.polygon);
+    }
   }
   return has_duplicate_obstacle(polygons, candidate, eps);
 }
@@ -1532,8 +1565,7 @@ void MapServerNode::save_areas_to_file(const std::string& path)
     out << "area_" << i << "_polygon: " << polygon_to_string(area.polygon) << "\n";
     out << "area_" << i << "_is_navigation: " << (area.is_navigation_area ? 1 : 0) << "\n";
     // PENDING obstacles (wheel-slip dig proposals) are deliberately NOT
-    // written: they protect the spot for this session only, and become
-    // permanent solely when the operator accepts them through
+    // written: they are inert until the operator accepts them through
     // ~/promote_obstacle. Count only what we actually write, and keep the
     // written indices contiguous so the loader sees no gaps.
     std::size_t persisted = 0;
@@ -1864,6 +1896,10 @@ void MapServerNode::apply_area_classifications()
 
     for (const auto& obstacle : area.obstacles)
     {
+      if (obstacle.pending)
+      {
+        continue;  // a proposal is not applied: its cells stay LAWN
+      }
       grid_map::Polygon obs_gm;
       for (const auto& pt : obstacle.polygon.points)
       {
