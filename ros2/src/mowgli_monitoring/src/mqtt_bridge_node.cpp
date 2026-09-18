@@ -453,6 +453,11 @@ void MqttBridgeNode::declare_parameters()
   topic_prefix_ = declare_parameter<std::string>("mqtt_topic_prefix", "mowgli");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   use_ssl_ = declare_parameter<bool>("use_ssl", false);
+  // Injected by full_system.launch.py from mowgli_robot.yaml, same as
+  // map_server_node/navsat_to_absolute_pose_node — labels
+  // <prefix>/area_boundary's map-frame geometry with its WGS84 origin.
+  datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
+  datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
 
   if (publish_rate_ < 0.01 || publish_rate_ > 100.0)
   {
@@ -591,6 +596,8 @@ void MqttBridgeNode::create_service_client()
       create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
   srv_start_area_ =
       create_client<mowgli_interfaces::srv::StartInArea>("/behavior_tree_node/start_in_area");
+  srv_get_mowing_area_ =
+      create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
 }
 
 void MqttBridgeNode::create_timer()
@@ -884,6 +891,8 @@ void MqttBridgeNode::on_timer()
     }
   }
 
+  maybe_poll_area_boundaries();
+
   // Slow periodic area-list poll — independent of publish_rate_, see
   // kAreasPollIntervalS's doc comment (mqtt_bridge_node.hpp).
   if (!areas_poll_in_flight_)
@@ -896,6 +905,91 @@ void MqttBridgeNode::on_timer()
       poll_areas();
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Area boundary polling
+// ---------------------------------------------------------------------------
+
+void MqttBridgeNode::maybe_poll_area_boundaries()
+{
+  if (area_poll_in_progress_)
+  {
+    return;
+  }
+  const rclcpp::Time t = now();
+  if ((t - last_area_poll_).seconds() < kAreaPollIntervalS)
+  {
+    return;
+  }
+  if (!srv_get_mowing_area_->service_is_ready())
+  {
+    // map_server_node not up (yet, or at all) — retry after the same
+    // interval rather than hammering service_is_ready() every tick.
+    last_area_poll_ = t;
+    return;
+  }
+
+  area_poll_in_progress_ = true;
+  last_area_poll_ = t;
+  auto accumulated =
+      std::make_shared<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>();
+  poll_area_boundary_step(0, accumulated);
+}
+
+void MqttBridgeNode::poll_area_boundary_step(
+    uint32_t index,
+    std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated)
+{
+  if (index >= kMaxAreaPollCount)
+  {
+    finish_area_boundary_poll(accumulated);
+    return;
+  }
+
+  auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+  request->index = index;
+
+  // Not native recursion: async_send_request's callback runs later, off the
+  // executor's queue, not synchronously inline — each step's lambda returns
+  // immediately after scheduling the next request, so there is no growing
+  // call stack even for many areas.
+  srv_get_mowing_area_->async_send_request(
+      request,
+      [this, index, accumulated](
+          rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
+      {
+        const auto response = future.get();
+        if (!response->success)
+        {
+          // Index out of range = end of the (possibly non-contiguous, see
+          // docs/MQTT_CONTROL.md) area list.
+          finish_area_boundary_poll(accumulated);
+          return;
+        }
+        if (!response->area.is_navigation_area)
+        {
+          // Navigation-only areas (keepout/boundary zones, never mowed) are
+          // excluded — matches <prefix>/areas' own filter (PR #638).
+          accumulated->emplace_back(index, response->area);
+        }
+        poll_area_boundary_step(index + 1, accumulated);
+      });
+}
+
+void MqttBridgeNode::finish_area_boundary_poll(
+    std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated)
+{
+  area_poll_in_progress_ = false;
+  const std::string json = serialise_area_boundaries(*accumulated, datum_lat_, datum_lon_);
+  if (json == last_area_boundary_json_)
+  {
+    // Retained topic: republish only when the geometry actually changed,
+    // not every ~10s poll tick.
+    return;
+  }
+  last_area_boundary_json_ = json;
+  mqtt_client_->publish(full_topic("area_boundary"), json, /*retain=*/true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1193,6 +1287,77 @@ std::string MqttBridgeNode::serialise_areas(const std::vector<AreaSummary>& area
     json += "\"}";
   }
   json += ']';
+  return json;
+}
+
+std::string MqttBridgeNode::serialise_area_boundaries(
+    const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>& areas,
+    double datum_lat,
+    double datum_lon)
+{
+  // Unbounded-length payload (polygon point counts vary), so this is built
+  // with std::string concatenation rather than a fixed snprintf buffer —
+  // same precedent as <prefix>/areas (PR #638).
+  auto append_point = [](std::string& json, double x, double y)
+  {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "[%.3f,%.3f]", x, y);
+    json += buf;
+  };
+
+  auto append_polygon = [&](std::string& json, const geometry_msgs::msg::Polygon& polygon)
+  {
+    json += '[';
+    bool first_point = true;
+    for (const auto& point : polygon.points)
+    {
+      if (!first_point)
+      {
+        json += ',';
+      }
+      first_point = false;
+      append_point(json, static_cast<double>(point.x), static_cast<double>(point.y));
+    }
+    json += ']';
+  };
+
+  char header[96];
+  std::snprintf(header,
+                sizeof(header),
+                "{\"datum_lat\":%.8f,\"datum_lon\":%.8f,\"areas\":[",
+                datum_lat,
+                datum_lon);
+  std::string json{header};
+
+  bool first_area = true;
+  for (const auto& [index, area] : areas)
+  {
+    if (!first_area)
+    {
+      json += ',';
+    }
+    first_area = false;
+
+    json += "{\"index\":";
+    json += std::to_string(index);
+    json += ",\"name\":\"";
+    json += json_escape(area.name);
+    json += "\",\"boundary\":";
+    append_polygon(json, area.area);
+    json += ",\"obstacles\":[";
+    bool first_obstacle = true;
+    for (const auto& obstacle : area.obstacles)
+    {
+      if (!first_obstacle)
+      {
+        json += ',';
+      }
+      first_obstacle = false;
+      append_polygon(json, obstacle);
+    }
+    json += "]}";
+  }
+  json += "]}";
   return json;
 }
 

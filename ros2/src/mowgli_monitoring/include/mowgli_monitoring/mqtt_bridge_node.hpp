@@ -39,6 +39,17 @@
  *                                           helpers the LED ring and behavior tree use, so this
  *                                           can never disagree with what the robot's own ring or
  *                                           GUI "GPS %" badge shows.
+ *   /map_server_node/get_mowing_area     → <prefix>/area_boundary (JSON) — retained; polled every
+ *                                           ~10s (piggybacks on the existing on_timer() tick, no
+ *                                           separate timer), republished only when it actually
+ *                                           changed. Datum + map-frame (metres, X=east/Y=north)
+ *                                           polygon geometry for every mowing area, so an external
+ *                                           consumer can render a boundary/obstacle overview
+ *                                           without needing the GUI's own map stack. Independent
+ *                                           of <prefix>/areas' own index/name polling (mowglinext
+ *                                           PR #638) — the two poll the same service separately,
+ *                                           on their own timers/clients; consolidating them into
+ *                                           one poll loop is a natural follow-up, not done here.
  *   (connection state)                   → <prefix>/available  ("online"/"offline", retained, LWT)
  *   (periodic poll, ~10s)                → <prefix>/areas      (JSON array of {index,name}) —
  *                                           retained; walks map_server_node's GetMowingArea
@@ -79,6 +90,10 @@
  * mqtt_topic_prefix  string  "mowgli"
  * publish_rate       double  1.0   Hz — position/gps update rate limit
  * use_ssl            bool    false
+ * datum_lat          double  0.0   — injected from mowgli_robot.yaml by full_system.launch.py,
+ * datum_lon          double  0.0     same as map_server_node/navsat_to_absolute_pose_node; used
+ *                                     only to label <prefix>/area_boundary's map-frame geometry
+ *                                     with the WGS84 origin it's relative to.
  */
 
 #ifndef MOWGLI_MONITORING__MQTT_BRIDGE_NODE_HPP_
@@ -88,13 +103,16 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
+#include "mowgli_interfaces/msg/map_area.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
@@ -310,6 +328,22 @@ public:
 
   static std::string serialise_areas(const std::vector<AreaSummary>& areas);
 
+  /**
+   * @brief Build the <prefix>/area_boundary payload from a polled area list.
+   * @param areas (index, MapArea) pairs, in whatever order they were polled —
+   *        NOT necessarily sorted or contiguous (an area can be deleted,
+   *        leaving gaps; see docs/MQTT_CONTROL.md's index-staleness caveat).
+   *        Navigation-only areas (MapArea::is_navigation_area) must already
+   *        be filtered out by the caller, matching <prefix>/areas' own
+   *        exclusion (mowglinext PR #638).
+   * @param datum_lat / datum_lon WGS84 origin the polygon points (map-frame
+   *        metres, X=east/Y=north) are relative to.
+   */
+  static std::string serialise_area_boundaries(
+      const std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>& areas,
+      double datum_lat,
+      double datum_lon);
+
   /// Escape a raw string so it is safe inside a JSON string literal.
   static std::string json_escape(const std::string& raw);
 
@@ -334,6 +368,22 @@ private:
   void create_subscriptions();
   void create_service_client();
   void create_timer();
+
+  // ---- Area boundary polling (piggybacks on on_timer(), ~every 10s) --------
+
+  /// Kick off a fresh index-0..N poll chain, if one isn't already running.
+  void maybe_poll_area_boundaries();
+  /// Request GetMowingArea for `index`, then chain to `index + 1` on success.
+  void poll_area_boundary_step(
+      uint32_t index,
+      std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
+          accumulated);
+  /// Serialise + publish (retained) `accumulated`, but only if it differs
+  /// from the last payload actually sent — <prefix>/area_boundary is meant
+  /// to be a quiet, retained topic, not a ~10s heartbeat.
+  void finish_area_boundary_poll(
+      std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>
+          accumulated);
 
   // ---- ROS2 subscription callbacks -----------------------------------------
 
@@ -384,6 +434,10 @@ private:
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr srv_high_level_;
   rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr srv_get_area_;
   rclcpp::Client<mowgli_interfaces::srv::StartInArea>::SharedPtr srv_start_area_;
+  // Separate client (same service as srv_get_area_ above) so the
+  // <prefix>/area_boundary poll chain (below) and the <prefix>/areas poll
+  // chain (PR #638) never share in-flight request/response state.
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr srv_get_mowing_area_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -397,6 +451,8 @@ private:
   std::string topic_prefix_{"mowgli"};
   double publish_rate_{1.0};
   bool use_ssl_{false};
+  double datum_lat_{0.0};
+  double datum_lon_{0.0};
 
   // ---- Rate-limiting state --------------------------------------------------
 
@@ -419,6 +475,15 @@ private:
   rclcpp::Time last_areas_poll_{0, 0, RCL_ROS_TIME};
   bool areas_poll_in_flight_{false};
   std::string last_areas_json_{};
+
+  // ---- Area boundary polling state -------------------------------------------
+
+  static constexpr double kAreaPollIntervalS = 10.0;
+  static constexpr uint32_t kMaxAreaPollCount = 100;  // matches <prefix>/areas' own cap (PR #638)
+
+  rclcpp::Time last_area_poll_{0, 0, RCL_ROS_TIME};
+  bool area_poll_in_progress_{false};
+  std::string last_area_boundary_json_{};
 };
 
 }  // namespace mowgli_monitoring
