@@ -399,9 +399,9 @@ public:
    *        treated as staleness.
    */
   static bool is_high_level_status_stale(bool received_before,
-                                          const rclcpp::Time& now,
-                                          const rclcpp::Time& last_received,
-                                          double threshold_s);
+                                         const rclcpp::Time& now,
+                                         const rclcpp::Time& last_received,
+                                         double threshold_s);
 
 private:
   // ---- Initialisation -------------------------------------------------------

@@ -684,9 +684,9 @@ bool MqttBridgeNode::parse_command_payload(const std::string& payload, uint8_t& 
 }
 
 bool MqttBridgeNode::is_high_level_status_stale(bool received_before,
-                                                 const rclcpp::Time& now,
-                                                 const rclcpp::Time& last_received,
-                                                 double threshold_s)
+                                                const rclcpp::Time& now,
+                                                const rclcpp::Time& last_received,
+                                                double threshold_s)
 {
   if (!received_before)
   {
