@@ -805,12 +805,13 @@ mowgli:
     # Inflation radius (m) around LiDAR-detected obstacles in the LOCAL
     # costmap — the buffer FTC/RPP keep from trunks, legs, walls seen by the
     # scan. Injected into local_costmap.inflation_layer.inflation_radius.
-    # Clamped to [0.58, 1.50]: the nav2 inflation layer degrades
-    # footprint-cost semantics below the chassis circumscribed radius
-    # (~0.572 m), and FTC's deviation detector (cost threshold 253) assumes
-    # the inscribed band exists. Raise this if the robot passes too close to
-    # trees it can see. Does NOT affect the global costmap (its 0.20 m radius
-    # is pinned — larger values blocked transit paths, see nav2_params_base).
+    # Clamped to [effective floor, 1.50]. By default the floor is derived from
+    # the live chassis circumscribed radius (~0.597 m for this template);
+    # local_inflation_inscribed_radius, when enabled, replaces that floor.
+    # FTC's deviation detector (cost threshold 253) assumes the resulting
+    # inscribed band exists. Raise this if the robot passes too close to trees
+    # it can see. Does NOT affect the global costmap (its 0.20 m radius is
+    # pinned — larger values blocked transit paths, see nav2_params_base).
     # 1.0 (was 0.80, was 0.60 before that) — task #35, 2026-07-17: field
     # analysis showed obstacles only pushing the path from 0.4-0.6 m out at
     # ~0.17 m/s, reacting too late for a smooth deviation; 0.80 was the
@@ -826,22 +827,21 @@ mowgli:
     # 0.58 (was 1.0, 2026-07-23): a 1.0 m halo smeared a side obstacle's cost
     # across the whole front of a narrow (0.5-1.0 m) gap, so RPP transit saw
     # "collision ahead" and Nav2 backup/spin recoveries could not back out of a
-    # physically-passable pocket (obstacle-wedge). Clamp-floored at 0.58 in
-    # navigation.launch.py (chassis circumscribed radius ~0.572); this is the
-    # smallest value the inflation layer supports without degrading footprint-
-    # cost semantics. Values below 0.58 are raised to 0.58 at launch.
+    # physically-passable pocket (obstacle-wedge). 0.58 remains the setting
+    # default; with the default derived floor, values below the current chassis
+    # radius (~0.597 m) are raised to that radius at launch.
     obstacle_inflation_radius: 0.58
     # local_inflation_inscribed_radius: what the LOCAL costmap's inflation layer
     # calls "inscribed" (the 253 band), in metres. -1.0 = derive it from the
     # footprint, which is Nav2's behaviour and what this robot has always used.
     #
     # WHY IT EXISTS (Nav2 1.5.1 / ROS 2 Lyrical added `custom_inscribed_radius`):
-    # the 0.58 floor above is not a tuning choice, it is a CONSEQUENCE — the
+    # the default floor above is not a tuning choice, it is a CONSEQUENCE — the
     # inflation layer derives the inscribed radius from the footprint's
     # CIRCUMSCRIBED radius (~0.597 m on the template chassis), and FTC's obstacle
     # detector reads the 253 inscribed band, so an inflation radius below that
     # radius silently truncates the band FTC depends on. That is why a 1.0 m halo
-    # had to be cut to 0.58 and not lower, even though 0.58 m of inflation around
+    # had to retain a geometry-derived floor, even though that much inflation around
     # every obstacle is far more than this 0.45 m-wide chassis needs and is what
     # makes narrow gaps between areas unplannable.
     #

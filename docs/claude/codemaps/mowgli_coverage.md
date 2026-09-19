@@ -92,7 +92,7 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 
 | Param | Node default | Injected from (`mowgli_robot.yaml` key → launch line) | Read |
 |-------|--------------|-------------------------------------------------------|------|
-| `robot_width` | 0.40 | `chassis_width` → `navigation.launch.py:930` (semantic only + footprint check `coverage_server.cpp:635-636`) | configure |
+| `robot_width` | 0.40 (node fallback; shipped launch injection is 0.45) | `chassis_width` → `navigation.launch.py:930` (semantic only + footprint check `coverage_server.cpp:635-636`) | configure |
 | `operation_width` | 0.18 (yaml 0.16) | `max(0.05, tool_width − swath_overlap)` → `:924`; template `tool_width` `:195`, `swath_overlap` `:405` | configure |
 | `default_headland_width` | 0.20 | `headland_width` (template `:344`) → `:931`; only used when `num_headland_passes == 0` (AUTO) | configure |
 | `num_headland_passes` | 0 | `num_headland_passes` (template `:374`, default 5) → `:932` **unclamped** (`<0` NONE / `0` AUTO / `>0` FORCED) | configure (restart to change) |

@@ -286,7 +286,7 @@ All dimensions are in **metres**, angles in **radians**, speeds in **m/s**. The 
 |-----------|---------|-------------|
 | `mower_model` | `"YardForce500"` | Robot model identifier |
 | `chassis_length` | `0.60` | Chassis length |
-| `chassis_width` | `0.40` | Chassis width |
+| `chassis_width` | `0.45` | Chassis width (shipped template; site-specific values may override it) |
 | `chassis_height` | `0.19` | Chassis height |
 | `chassis_mass_kg` | `8.76` | Total robot mass |
 | `wheel_radius` | `0.04475` | Drive wheel radius |

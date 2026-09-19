@@ -665,12 +665,15 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.5           # gentle, WIDE gradient → smooth deviation
-        # 0.58 m == the clamp floor (chassis circumscribed radius ~0.572 m).
+        # By default the effective floor is the live chassis circumscribed
+        # radius (about 0.597 m for the shipped 0.60 x 0.45 m chassis).
+        # local_inflation_inscribed_radius, when enabled, replaces that floor;
+        # 0.58 m is the setting default, not a universal runtime floor.
         # The earlier 1.0 m halo smeared a side obstacle's cost across the whole
         # front of a 0.5-1.0 m gap, so transit read "collision ahead" and Nav2
         # recoveries could not escape a physically passable pocket.
         # OVERWRITTEN at launch from mowgli_robot.yaml.obstacle_inflation_radius
-        # (clamped [0.58, 1.50]).
+        # (clamped to [the effective floor described above, 1.50]).
         inflation_radius: 0.58
 
   # LiDAR overlay adds:    plugins: ["obstacle_layer", "inflation_layer"] on /scan_costmap
@@ -719,7 +722,7 @@ coverage_server:
     use_sim_time: false
     # PHYSICAL chassis width — injected at launch from mowgli_robot.yaml.chassis_width.
     # Semantic only; the geometry is driven by operation_width + the insets.
-    robot_width: 0.40                    # m
+    robot_width: 0.45                    # m (injected from chassis_width)
     # Swath SPACING (F2C cov_width). INJECTED at launch as
     # tool_width − swath_overlap, so adjacent swaths slightly OVERLAP.
     operation_width: 0.16                # m

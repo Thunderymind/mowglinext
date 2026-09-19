@@ -163,7 +163,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - **`max_cmd_vel_speed` clamp** ↔ `navigation.launch.py:762-764` (raise-to-`mowing_speed`); `speed_fast` callback range [0, 2.0].
 - **`min_speed_mps` / `max_cmd_vel_ang`** are read by `robot_config_util.derive_turn_speed` / `check_turn_geometry` (`test_robot_config_util.py:251,296`).
 - **`obstacle_lookahead` is a pose count** assuming F2C 0.05 m sampling (`kF2CSamplingM`, `navigation.launch.py:822`); change coverage sampling → change the conversion.
-- **Line-model threshold 253** relies on the local costmap inscribed band → `local_costmap.inflation_layer.inflation_radius` floor 0.58 (`navigation.launch.py:859-860`). Footprint model (254) does not; clearance there is `obstacle_clearance_margin` only.
+- **Line-model threshold 253** relies on the local costmap inscribed band → by default `local_costmap.inflation_layer.inflation_radius` is floored at the live chassis circumscribed radius (`navigation.launch.py:945-960`; the shipped 0.45 × 0.60 chassis is ≈0.597 m). An enabled `local_inflation_inscribed_radius` override becomes the floor instead; the operator inflation setting (default 0.58) can raise either floor, up to the 1.50 m cap. Footprint model (254) does not; clearance there is `obstacle_clearance_margin` only.
 - **Goal-checker topic has TWO publishers** (FTC `newPathReceived` and BT `FollowStrip`); keep QoS identical (`coverage_nodes.cpp:387-391`).
 - **`oscillation_recovery_min_duration` × 10 = buffer length** assumes `controller_frequency: 10.0` (`nav2_params_base.yaml:83`).
 - **`<library path="mowgli_nav2_plugins">`** in both XMLs must equal the CMake target name.

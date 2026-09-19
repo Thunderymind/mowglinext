@@ -1020,8 +1020,8 @@ local_costmap:
         # 2026-07-17 field analysis: the robot let obstacles get to 0.4-0.6 m
         # forward before reacting, at ~0.17 m/s that's under 4 s of margin;
         # task #43, same day: folded in the user's field-converged value,
-        # superseding #35's 0.80). 0.60 m already sat ABOVE the chassis
-        # circumscribed radius (~0.572 m), which clears the "inflation
+        # superseding #35's 0.80). At the then-current chassis dimensions,
+        # 0.60 m sat above the circumscribed radius, which clears the "inflation
         # radius is smaller than circumscribed radius" error — restoring
         # MPPI/FTC CostCritic's potential-field fast path (no full-footprint
         # check = less ARM CPU) — raising this further keeps that margin and
@@ -1032,7 +1032,9 @@ local_costmap:
         # (boundary enforcement is the planner + collision_monitor), so this
         # inflates only real LiDAR obstacles, not the boundary edge.
         # This value is OVERWRITTEN at launch by obstacle_inflation_radius
-        # (mowgli_robot.yaml, clamped to [0.58, 1.50] — see
+        # (mowgli_robot.yaml, clamped to [effective floor, 1.50] — the floor
+        # defaults to the live chassis circumscribed radius, or uses the
+        # configured local_inflation_inscribed_radius override; see
         # navigation.launch.py's _inject_dock_pose_and_speeds); it only governs
         # a raw `ros2 launch` of this file with no robot-config injection.
         # Kept in sync with the template default (test_nav2_params.py's
@@ -1040,9 +1042,8 @@ local_costmap:
         # 0.58 (was 1.0, 2026-07-23): the 1.0 m halo smeared a side obstacle's
         # cost across the WHOLE front of a 0.5-1.0 m gap, so RPP transit read
         # "collision ahead" and Nav2 backup/spin recoveries could not escape a
-        # physically-passable pocket (obstacle-wedge). 0.58 == the clamp floor
-        # (chassis circumscribed radius ~0.572) — the smallest inflation that
-        # keeps footprint-cost semantics intact.
+        # physically-passable pocket (obstacle-wedge). 0.58 remains the static
+        # setting default; launch raises it to the effective floor when needed.
         inflation_radius: 0.58
 
 # ---------------------------------------------------------------------------
