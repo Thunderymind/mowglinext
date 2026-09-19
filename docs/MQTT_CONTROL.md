@@ -52,8 +52,8 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
 | `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
-| `<prefix>/command` | **in** | — | → `/behavior_tree_node/high_level_control` | — |
-| `<prefix>/start_area` | **in** | — | → `/behavior_tree_node/start_in_area` | — |
+| `<prefix>/command` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/high_level_control` | — |
+| `<prefix>/start_area` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/start_in_area` | — |
 
 ### `<prefix>/high_level_status` — the primary "is it mowing?" topic
 
@@ -247,8 +247,10 @@ online but silently stuck" — the latter still updates `<prefix>/diagnostics`/`
 
 ### `<prefix>/command` (inbound)
 
-Payload is an **ASCII decimal integer string**, e.g. `"1"` — **not a raw byte**. This is the single
+Payload is an **ASCII decimal integer string**, e.g. `"1"` — **not a raw byte**. The entire payload
+must be digits only: whitespace, signs, and trailing characters are rejected. This is the single
 most common mistake integrating against this topic: publish the string `"1"`, not the byte `0x01`.
+Retained deliveries are rejected: an operator command must be a fresh publish, not broker state.
 
 | Code | Constant | Effect |
 |------|----------|--------|
@@ -305,7 +307,8 @@ final contract — don't build a permanent integration against it without accoun
 ### `<prefix>/start_area` (inbound — start mowing a specific area)
 
 Payload is an **ASCII decimal integer string** matching the `index` field from `<prefix>/areas`
-(same convention as `<prefix>/command` — publish `"2"`, not the byte `0x02`). Relays straight
+(same strict digits-only convention as `<prefix>/command` — publish `"2"`, not the byte `0x02`).
+Retained deliveries are rejected, so this must be a fresh publish. Relays straight
 through to `/behavior_tree_node/start_in_area`, which starts mowing that area now, **ahead of the
 normal area-iteration order** — exactly as consequential as `<prefix>/command`'s `COMMAND_START`
 (it raises that internally too). Same fire-and-forget contract: no ack/result topic, an

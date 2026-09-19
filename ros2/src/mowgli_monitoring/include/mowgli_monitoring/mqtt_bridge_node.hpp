@@ -74,10 +74,12 @@
  *
  * MQTT → ROS2
  *   <prefix>/command    → /behavior_tree_node/high_level_control service call
- *                          (payload: ASCII decimal uint8, e.g. "1" — not a raw byte)
+ *                          (fresh, non-retained payload: ASCII decimal uint8, e.g. "1" — not a
+ *                          raw byte)
  *   <prefix>/start_area → /behavior_tree_node/start_in_area service call — start mowing the given
- *                          area now, ahead of the normal area-iteration order (payload: ASCII
- *                          decimal uint8 area index, same index space as <prefix>/areas above)
+ *                          area now, ahead of the normal area-iteration order (fresh, non-retained
+ *                          payload: ASCII decimal uint8 area index, same index space as
+ *                          <prefix>/areas above)
  *
  * See docs/MQTT_CONTROL.md for the full JSON schema of every topic above.
  *
@@ -160,7 +162,11 @@ namespace mowgli_monitoring
 class IMqttClient
 {
 public:
-  using MessageCallback = std::function<void(const std::string& topic, const std::string& payload)>;
+  /// `retained` is true when the broker delivered its stored last value rather
+  /// than a newly published message. Consumers of control topics must treat
+  /// that as stale intent.
+  using MessageCallback =
+      std::function<void(const std::string& topic, const std::string& payload, bool retained)>;
 
   virtual ~IMqttClient() = default;
 
@@ -189,7 +195,8 @@ public:
   /**
    * @brief Subscribe to a topic pattern.
    * @param topic    MQTT topic filter (may include wildcards + and #).
-   * @param callback Invoked on each received message.
+   * @param callback Invoked on each received message, including whether the
+   *        broker marked that delivery as retained.
    * @return true if the subscription was accepted.
    */
   virtual bool subscribe(const std::string& topic, MessageCallback callback) noexcept = 0;
@@ -372,14 +379,21 @@ public:
    * @brief Parse an MQTT command payload into a HighLevelControl command code.
    *
    * Expected payload: a single ASCII decimal integer, e.g. "1" for
-   * COMMAND_START — NOT a raw byte. Whitespace/garbage after the number
-   * (matched by sscanf's "%d") is tolerated, matching the pre-refactor
-   * behaviour; a fully non-numeric payload, one outside [0, 255], or an
-   * empty string is rejected.
+   * COMMAND_START — NOT a raw byte. The entire payload must be digits in
+   * [0, 255]; leading/trailing whitespace, signs, and trailing characters
+   * are deliberately rejected.
    * @return true and sets out_command on a valid uint8 payload; false
    *         (out_command left unchanged) otherwise.
    */
   static bool parse_command_payload(const std::string& payload, uint8_t& out_command);
+
+  /// Retained control messages are broker state, not fresh operator intent.
+  /// This restriction applies only to inbound control topics; retained
+  /// publishing for status and telemetry remains valid.
+  static bool is_fresh_control_message(bool retained)
+  {
+    return !retained;
+  }
 
   /**
    * @brief True if the <prefix>/high_level_status subscription looks stuck
@@ -445,8 +459,8 @@ private:
 
   // ---- MQTT command callback ------------------------------------------------
 
-  void on_mqtt_command(const std::string& topic, const std::string& payload);
-  void on_mqtt_start_area(const std::string& topic, const std::string& payload);
+  void on_mqtt_command(const std::string& topic, const std::string& payload, bool retained);
+  void on_mqtt_start_area(const std::string& topic, const std::string& payload, bool retained);
 
   // ---- Area list: periodic poll of GetMowingArea + publish ------------------
 

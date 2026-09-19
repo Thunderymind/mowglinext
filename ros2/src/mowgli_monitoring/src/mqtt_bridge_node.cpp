@@ -26,6 +26,7 @@
 
 #include "mowgli_monitoring/mqtt_bridge_node.hpp"
 
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -191,12 +192,13 @@ struct MosquittoMqttClient::Impl
     const std::string topic{msg->topic};
     const std::string payload{static_cast<const char*>(msg->payload),
                               static_cast<std::size_t>(msg->payloadlen)};
+    const bool retained = msg->retain;
 
     std::lock_guard<std::mutex> lock(self->callbacks_mutex);
     auto it = self->callbacks.find(topic);
     if (it != self->callbacks.end())
     {
-      it->second(topic, payload);
+      it->second(topic, payload, retained);
     }
   }
 };
@@ -570,15 +572,19 @@ void MqttBridgeNode::create_subscriptions()
 
   // Subscribe to MQTT command topics.
   mqtt_client_->subscribe(full_topic("command"),
-                          [this](const std::string& topic, const std::string& payload)
+                          [this](const std::string& topic,
+                                 const std::string& payload,
+                                 bool retained)
                           {
-                            on_mqtt_command(topic, payload);
+                            on_mqtt_command(topic, payload, retained);
                           });
 
   mqtt_client_->subscribe(full_topic("start_area"),
-                          [this](const std::string& topic, const std::string& payload)
+                          [this](const std::string& topic,
+                                 const std::string& payload,
+                                 bool retained)
                           {
-                            on_mqtt_start_area(topic, payload);
+                            on_mqtt_start_area(topic, payload, retained);
                           });
 }
 
@@ -674,8 +680,13 @@ void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSha
 
 bool MqttBridgeNode::parse_command_payload(const std::string& payload, uint8_t& out_command)
 {
-  int command_int = -1;
-  if (std::sscanf(payload.c_str(), "%d", &command_int) != 1 || command_int < 0 || command_int > 255)
+  // from_chars neither skips whitespace nor accepts a leading '+'. Checking
+  // that it consumed all bytes makes the accepted grammar exactly [0-9]+.
+  unsigned int command_int = 0;
+  const auto [end, error] =
+      std::from_chars(payload.data(), payload.data() + payload.size(), command_int, 10);
+  if (payload.empty() || error != std::errc{} || end != payload.data() + payload.size() ||
+      command_int > 255)
   {
     return false;
   }
@@ -697,8 +708,16 @@ bool MqttBridgeNode::is_high_level_status_stale(bool received_before,
   return (now - last_received).seconds() > threshold_s;
 }
 
-void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::string& payload)
+void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/,
+                                     const std::string& payload,
+                                     bool retained)
 {
+  if (!is_fresh_control_message(retained))
+  {
+    RCLCPP_WARN(get_logger(), "Retained MQTT command ignored as stale operator intent.");
+    return;
+  }
+
   // Expected payload: a single ASCII decimal integer matching HighLevelControl
   // command codes — NOT a raw byte. E.g.: "1" → COMMAND_START,
   // "2" → COMMAND_HOME, "254" → COMMAND_RESET_EMERGENCY.
@@ -743,8 +762,16 @@ void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/, const std::st
 // MQTT start_area callback → StartInArea service call
 // ---------------------------------------------------------------------------
 
-void MqttBridgeNode::on_mqtt_start_area(const std::string& /*topic*/, const std::string& payload)
+void MqttBridgeNode::on_mqtt_start_area(const std::string& /*topic*/,
+                                        const std::string& payload,
+                                        bool retained)
 {
+  if (!is_fresh_control_message(retained))
+  {
+    RCLCPP_WARN(get_logger(), "Retained MQTT start_area ignored as stale operator intent.");
+    return;
+  }
+
   // Same payload convention as <prefix>/command: ASCII decimal, not a raw
   // byte. Reuses parse_command_payload — StartInArea.area is a uint8, same
   // range and format as the HighLevelControl command codes.

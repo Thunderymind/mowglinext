@@ -44,7 +44,31 @@
 #include "sensor_msgs/msg/nav_sat_status.hpp"
 #include <gtest/gtest.h>
 
+using mowgli_monitoring::IMqttClient;
 using mowgli_monitoring::MqttBridgeNode;
+
+// ===========================================================================
+// MQTT callback metadata
+// ===========================================================================
+
+TEST(MqttMessageCallback, DeliversRetainedMetadata)
+{
+  bool received_retained = false;
+  IMqttClient::MessageCallback callback =
+      [&received_retained](const std::string&, const std::string&, bool retained)
+  {
+    received_retained = retained;
+  };
+
+  callback("mowgli/command", "1", true);
+  EXPECT_TRUE(received_retained);
+}
+
+TEST(MqttControlMessage, RejectsRetainedDelivery)
+{
+  EXPECT_FALSE(MqttBridgeNode::is_fresh_control_message(true));
+  EXPECT_TRUE(MqttBridgeNode::is_fresh_control_message(false));
+}
 
 // ===========================================================================
 // json_escape
@@ -490,15 +514,15 @@ TEST(ParseCommandPayload, RejectsOutOfRangeAndNonNumeric)
   EXPECT_FALSE(MqttBridgeNode::parse_command_payload("", out));
 }
 
-TEST(ParseCommandPayload, TrailingGarbageAfterANumberIsTolerated)
+TEST(ParseCommandPayload, RejectsWhitespaceSignsAndTrailingCharacters)
 {
-  // sscanf("%d") stops at the first non-digit and still reports one
-  // successful conversion — pre-existing behaviour, preserved by the
-  // parse_command_payload refactor rather than tightened, to avoid
-  // silently changing what a real broker's already-flowing commands do.
-  uint8_t out = 0;
-  EXPECT_TRUE(MqttBridgeNode::parse_command_payload("1abc", out));
-  EXPECT_EQ(out, 1);
+  uint8_t out = 42;
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("1abc", out));
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("1 ", out));
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload(" 1", out));
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("+1", out));
+  EXPECT_FALSE(MqttBridgeNode::parse_command_payload("1\n", out));
+  EXPECT_EQ(out, 42);
 }
 
 // ===========================================================================
