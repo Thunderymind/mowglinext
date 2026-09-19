@@ -13,7 +13,7 @@ For the file map, wire-packet table and pitfalls see
 ## Platform.IO - compile and upload
 
 - Start VS Code and open `firmware/stm32/ros_usbnode` in platform.io (or run `pio` from that directory).
-- Make sure you Build and Upload the env that matches your mainboard: `Yardforce500` (STM32F103VC, the `default_envs`) or `Yardforce500B` (STM32F401VC). The `Yardforce500_STLINK_V3` / `Yardforce500B_STLINK_V3` variants upload through OpenOCD instead of PlatformIO's built-in ST-Link protocol. From a shell that is e.g. `pio run -e Yardforce500 -t upload`.
+- Make sure you Build and Upload the env that matches your mainboard: `Yardforce500` (STM32F103VC, the `default_envs`) or `Yardforce500B` (STM32F401VC). `BiltemaRM1000` inherits the complete `Yardforce500B` hardware profile and changes only the panel protocol to Yardforce 900 ECO for the RM-MB V6.1 board. The `Yardforce500_STLINK_V3` / `Yardforce500B_STLINK_V3` variants upload through OpenOCD instead of PlatformIO's built-in ST-Link protocol. From a shell that is e.g. `pio run -e Yardforce500 -t upload`.
 - The "Yardforce 500 (STM32F103 VCT6)" and generic `genericSTM32F103C8` (bluepill) envs belong to the old bring-up firmware in [`../test_code`](../test_code), not to this project.
 - Having your ST-Link hooked up to the J9 connector on the mainboard (the 4-pin GND / SWCL / SWDA / 3V3 header) the firmware should now be flashed
 - The LED (D3) near the STM32 cpu should flash and you should hear a "double" chirp on bootup
