@@ -211,6 +211,9 @@ type Status struct {
 	UiBoardAvailable          bool                           `json:"ui_board_available"`
 	MowEnabled                bool                           `json:"mow_enabled"`
 	FirmwareDebugEnabled      bool                           `json:"firmware_debug_enabled"`
+	DigEscalated              bool                           `json:"dig_escalated"`
+	DigEscalatedDistanceM     float32                        `json:"dig_escalated_distance_m"`
+	DigEscalatedRequiredDistanceM float32                        `json:"dig_escalated_required_distance_m"`
 	MowerEscStatus            uint8                          `json:"mower_esc_status"`
 	MowerEscTemperature       float32                        `json:"mower_esc_temperature"`
 	MowerEscCurrent           float32                        `json:"mower_esc_current"`
