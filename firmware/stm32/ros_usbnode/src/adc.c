@@ -179,6 +179,7 @@ void ADC_Charging_Init(void)
 	ADC_TypeDef *Charging_ADC = ADC1;
 #endif
     __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOC_CLK_ENABLE();
 
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     /**ADC1 GPIO Configuration
