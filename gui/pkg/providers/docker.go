@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	types2 "github.com/mowglinext/mowglinext/pkg/types"
+	"io"
+	"strings"
+	"time"
+
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	docker "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
-	"io"
-	"strings"
-	"time"
 )
 
 type DockerProvider struct {
@@ -128,6 +129,15 @@ func (i *DockerProvider) ContainerRun(ctx context.Context, spec types2.Container
 		return types2.ContainerRunResult{}, errors.New("container command is required")
 	}
 
+	devices := make([]container.DeviceMapping, 0, len(spec.Devices))
+	for _, device := range spec.Devices {
+		devices = append(devices, container.DeviceMapping{
+			PathOnHost:        device.PathOnHost,
+			PathInContainer:   device.PathInContainer,
+			CgroupPermissions: device.CgroupPermissions,
+		})
+	}
+
 	created, err := i.client.ContainerCreate(
 		ctx,
 		&container.Config{
@@ -139,7 +149,11 @@ func (i *DockerProvider) ContainerRun(ctx context.Context, spec types2.Container
 			Tty:          false,
 		},
 		&container.HostConfig{
-			Binds:      append([]string(nil), spec.Binds...),
+			Binds: append([]string(nil), spec.Binds...),
+			Resources: container.Resources{
+				Devices: devices,
+			},
+			GroupAdd:   append([]string(nil), spec.GroupAdd...),
 			Privileged: spec.Privileged,
 			AutoRemove: spec.AutoRemove,
 		},
@@ -179,9 +193,22 @@ func (i *DockerProvider) ContainerRun(ctx context.Context, spec types2.Container
 	statusCh, errCh := i.client.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
 
 	var exitCode int64
+	cleanupTimedOutContainer := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+
+		_ = i.client.ContainerRemove(
+			cleanupCtx,
+			created.ID,
+			types.ContainerRemoveOptions{Force: true},
+		)
+	}
 	select {
 	case waitErr := <-errCh:
 		if waitErr != nil {
+			if ctx.Err() != nil {
+				cleanupTimedOutContainer()
+			}
 			return types2.ContainerRunResult{}, waitErr
 		}
 	case waitResult := <-statusCh:
