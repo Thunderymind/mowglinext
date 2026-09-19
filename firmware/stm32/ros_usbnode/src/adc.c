@@ -469,7 +469,12 @@ void adc_charging_SetChannel(ADC_Charging_channelSelection_e channel)
         break;
 
     case ADC_CHARGING_CHANNEL_NTC:
-        sConfig.Channel = ADC_CHANNEL_13; // PC2
+#if BOARD_YARDFORCE500_VARIANT_B
+        sConfig.Channel = ADC_CHANNEL_12; // PC2 on STM32F401
+#else
+        /* Preserve the legacy F103 selection until it has separate HIL. */
+        sConfig.Channel = ADC_CHANNEL_13;
+#endif
         sConfig.Rank = 1;
         sConfig.SamplingTime = adc_SampleTime;
         if (HAL_ADC_ConfigChannel(&ADC_Charging_Handle, &sConfig) != HAL_OK)
