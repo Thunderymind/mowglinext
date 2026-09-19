@@ -154,30 +154,66 @@ func TestNotifyDetector_EmergencyRisingEdgeOnly(t *testing.T) {
 func TestNotifyDetector_RtkWaitNeedsDwell(t *testing.T) {
 	d := NewNotifyDetector()
 	now := t0
-	d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)
+	var gotAll []NotifyEvent
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)...)
 	now = now.Add(time.Minute)
-	assert.Empty(t, d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds))
+	gotAll = append(gotAll, d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds)...)
 	now = now.Add(notifyRtkDwell - time.Second)
-	assert.Empty(t, d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds))
+	gotAll = append(gotAll, d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds)...)
 	now = now.Add(2 * time.Second)
 	got := d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds)
 	require.Equal(t, []string{NotifyMsgRtkWaiting}, messages(got))
 	assert.Equal(t, "2 min", got[0].Params["minutes"])
+	gotAll = append(gotAll, got...)
 	now = now.Add(time.Second)
 	assert.Empty(t, d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds), "reported once")
+	// A brief non-autonomous recovery tick after WAITING_FOR_RTK is a status
+	// transition inside the same mow, not an operator session boundary.
 	now = now.Add(time.Minute)
-	got = d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)
+	got = d.OnStatus(tick(1, "IDLE", 0, 10), now, allKinds)
 	assert.Equal(t, []string{NotifyMsgRtkRecovered}, messages(got))
+	gotAll = append(gotAll, got...)
+	now = now.Add(time.Second)
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)...)
+	assert.Equal(t,
+		[]string{NotifyMsgMowStarted, NotifyMsgZoneStarted, NotifyMsgRtkWaiting, NotifyMsgRtkRecovered},
+		messages(gotAll),
+	)
 }
 
 func TestNotifyDetector_ShortRtkWaitIsSilent(t *testing.T) {
 	d := NewNotifyDetector()
 	now := t0
-	d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)
+	var gotAll []NotifyEvent
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)...)
 	now = now.Add(time.Minute)
-	d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds)
+	gotAll = append(gotAll, d.OnStatus(tick(2, "WAITING_FOR_RTK", 0, 10), now, allKinds)...)
 	now = now.Add(20 * time.Second)
-	assert.Empty(t, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds))
+	gotAll = append(gotAll, d.OnStatus(tick(1, "IDLE", 0, 10), now, allKinds)...)
+	now = now.Add(time.Second)
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)...)
+	assert.Equal(t, []string{NotifyMsgMowStarted, NotifyMsgZoneStarted}, messages(gotAll))
+}
+
+func TestNotifyDetector_ExplicitStopThenStartCreatesNewSession(t *testing.T) {
+	d := NewNotifyDetector()
+	now := t0
+	var gotAll []NotifyEvent
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)...)
+	now = now.Add(5 * time.Minute)
+	gotAll = append(gotAll, d.OnStatus(tick(1, "IDLE", 0, 10), now, allKinds)...)
+	now = now.Add(time.Second)
+	gotAll = append(gotAll, d.OnStatus(tick(1, "IDLE", 0, 10), now, allKinds)...)
+	now = now.Add(2 * time.Minute)
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 0), now, allKinds)...)
+
+	assert.Equal(t, []string{
+		NotifyMsgMowStarted,
+		NotifyMsgZoneStarted,
+		NotifyMsgMowStopped,
+		NotifyMsgMowStarted,
+		NotifyMsgZoneStarted,
+	}, messages(gotAll))
 }
 
 func TestNotifyDetector_RainEvents(t *testing.T) {
@@ -192,6 +228,30 @@ func TestNotifyDetector_RainEvents(t *testing.T) {
 	assert.Empty(t, d.OnStatus(tick(1, "RAIN_WAITING", 0, 10), now, allKinds))
 	now = now.Add(time.Hour)
 	assert.Equal(t, []string{NotifyMsgRainTimeout}, messages(d.OnStatus(tick(1, "RAIN_TIMEOUT", 0, 10), now, allKinds)))
+}
+
+func TestNotifyDetector_RainPauseResumesSameSession(t *testing.T) {
+	d := NewNotifyDetector()
+	now := t0
+	var gotAll []NotifyEvent
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)...)
+	now = now.Add(time.Minute)
+	gotAll = append(gotAll, d.OnStatus(tick(2, "RAIN_DETECTED_DOCKING", 0, 10), now, allKinds)...)
+	now = now.Add(time.Minute)
+	gotAll = append(gotAll, d.OnStatus(tick(1, "RAIN_WAITING", 0, 10), now, allKinds)...)
+	now = now.Add(time.Minute)
+	gotAll = append(gotAll, d.OnStatus(tick(1, "RAIN_WAITING", 0, 10), now, allKinds)...)
+	now = now.Add(5 * time.Minute)
+	gotAll = append(gotAll, d.OnStatus(tick(2, "RESUMING_AFTER_RAIN", 0, 10), now, allKinds)...)
+	now = now.Add(time.Second)
+	gotAll = append(gotAll, d.OnStatus(tick(2, "MOWING", 0, 10), now, allKinds)...)
+
+	assert.Equal(t, []string{
+		NotifyMsgMowStarted,
+		NotifyMsgZoneStarted,
+		NotifyMsgRainDetected,
+		NotifyMsgRainResumed,
+	}, messages(gotAll))
 }
 
 func TestNotifyDetector_CooldownSuppressesFlapping(t *testing.T) {

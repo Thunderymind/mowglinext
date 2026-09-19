@@ -104,9 +104,6 @@ const notifyRtkDwell = 120 * time.Second
 // (Cyclone rediscovery, a bouncing e-stop switch) must not storm the phone.
 const notifyCooldown = 60 * time.Second
 
-// highLevelStateAutonomous mirrors HighLevelStatus.HIGH_LEVEL_STATE_AUTONOMOUS.
-const highLevelStateAutonomous = 2
-
 // blockedStates are the BT's terminal failure states: the mission stopped
 // somewhere the operator has to go and look.
 var blockedStates = map[string]bool{
@@ -123,14 +120,15 @@ var blockedStates = map[string]bool{
 // notion of a session (a recharge pause keeps the session open) so a mid-mow
 // recharge does not produce a second "mowing started".
 type NotifyDetector struct {
-	prevState   string
-	inSession   bool
-	paused      bool
-	currentArea int
-	areaPeak    float32
-	emergency   bool
-	rtkSince    time.Time
-	rtkNotified bool
+	prevState      string
+	prevMowing     bool
+	inSession      bool
+	rechargePaused bool
+	currentArea    int
+	areaPeak       float32
+	emergency      bool
+	rtkSince       time.Time
+	rtkNotified    bool
 	// lastEventAt is when any event last fired, so the "mowing stopped"
 	// catch-all stays quiet when a specific event just explained the stop
 	// (dig obstruction, emergency, nav failure).
@@ -191,7 +189,9 @@ func (d *NotifyDetector) OnStatus(st NotifyStatus, now time.Time, wantsKind func
 	}
 	d.emergency = st.Emergency
 
-	isMowing := st.State == highLevelStateAutonomous && st.StateName != "MOWING_COMPLETE"
+	isMowing := isActiveMowingSessionStatus(st.State, st.StateName)
+	wasMowing := d.prevMowing
+	d.prevMowing = isMowing
 
 	if isMowing {
 		d.onMowingTick(st, wantsKind, emit)
@@ -205,7 +205,7 @@ func (d *NotifyDetector) OnStatus(st NotifyStatus, now time.Time, wantsKind func
 
 	// Session end: two consecutive non-mowing ticks that are neither a recharge
 	// pause nor the handled completion, mirroring the session tracker.
-	if d.inSession && !isMowing && !isMowingState(prev) && !d.isRechargePause(st) && st.StateName != "MOWING_COMPLETE" {
+	if d.inSession && !isMowing && !wasMowing && !d.isResumablePause(st) && st.StateName != "MOWING_COMPLETE" {
 		d.endSession()
 		if d.lastEventAt.IsZero() || now.Sub(d.lastEventAt) >= notifyCooldown {
 			emit(NotifyEventMowStopped, NotifyMsgMowStopped, notifyPriorityDefault, nil)
@@ -219,12 +219,12 @@ type emitFn func(kind, message string, priority int, params map[string]string)
 func (d *NotifyDetector) onMowingTick(st NotifyStatus, wantsKind func(string) bool, emit emitFn) {
 	if !d.inSession {
 		d.inSession = true
-		d.paused = false
+		d.rechargePaused = false
 		d.currentArea = -1
 		d.areaPeak = 0
 		emit(NotifyEventMowStarted, NotifyMsgMowStarted, notifyPriorityDefault, nil)
-	} else if d.paused {
-		d.paused = false
+	} else if d.rechargePaused {
+		d.rechargePaused = false
 		emit(NotifyEventBattery, NotifyMsgBatteryResumed, notifyPriorityDefault, nil)
 	}
 
@@ -289,9 +289,10 @@ func (d *NotifyDetector) onStateEntered(st NotifyStatus, prev string, emit emitF
 		emit(NotifyEventRain, NotifyMsgRainTimeout, notifyPriorityDefault, nil)
 	}
 
-	// A recharge mid-session keeps the session open (the BT auto-resumes).
-	if d.isRechargePause(st) && prev != "MOWING_COMPLETE" {
-		d.paused = true
+	// A recharge mid-session keeps the session open and gets its own resume
+	// notification. Rain recovery is reported separately by RESUMING_AFTER_RAIN.
+	if d.inSession && isRechargeMowingPause(st.StateName) && prev != "MOWING_COMPLETE" {
+		d.rechargePaused = true
 	}
 }
 
@@ -318,22 +319,18 @@ func (d *NotifyDetector) trackRtkDwell(st NotifyStatus, now time.Time, entered b
 	d.rtkNotified = false
 }
 
-// isRechargePause reports a mid-session state the BT resumes from on its own
+// isResumablePause reports a mid-session state the BT resumes from on its own
 // (recharge or rain wait); the session stays open and no stop is reported.
-func (d *NotifyDetector) isRechargePause(st NotifyStatus) bool {
+func (d *NotifyDetector) isResumablePause(st NotifyStatus) bool {
 	if !d.inSession {
 		return false
 	}
-	switch st.StateName {
-	case "CHARGING", "CRITICAL_BATTERY_CHARGING", "RAIN_WAITING":
-		return true
-	}
-	return false
+	return isResumableMowingPause(st.StateName)
 }
 
 func (d *NotifyDetector) endSession() {
 	d.inSession = false
-	d.paused = false
+	d.rechargePaused = false
 	d.currentArea = -1
 	d.areaPeak = 0
 }
@@ -350,14 +347,4 @@ func (d *NotifyDetector) areaParams(nameKey, indexKey string, index int) map[str
 		nameKey:  d.areaNames[index],
 		indexKey: itoa(index + 1),
 	}
-}
-
-// isMowingState mirrors the session tracker's wasMowing set: states in which
-// a following non-mowing tick could still be a transient flip.
-func isMowingState(name string) bool {
-	switch name {
-	case "MOWING", "TRANSIT", "RECOVERING", "RESUMING_AFTER_RAIN", "RESUMING_UNDOCKING", "UNDOCKING":
-		return true
-	}
-	return false
 }
