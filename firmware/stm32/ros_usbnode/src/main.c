@@ -1263,12 +1263,13 @@ void vprint(const char *fmt, va_list argp)
   {
 #if DEBUG_TYPE == DEBUG_TYPE_SWO
     /* CMSIS ITM_SendChar() waits indefinitely while an enabled stimulus port
-     * is not ready.  OpenOCD may leave ITM enabled across a normal
-     * program/verify/reset cycle even when no SWO consumer is draining it,
-     * which would otherwise stop F401 boot at the first DB_TRACE.  Debug
-     * output must stay best-effort: emit only while port 0 is immediately
-     * writable and drop the rest on backpressure. */
-    if (((ITM->TCR & ITM_TCR_ITMENA_Msk) != 0UL) &&
+     * is not ready.  OpenOCD target examination enables ITM port 0 even when
+     * trace I/O itself is disabled, leaving no path that can drain the port.
+     * Require an explicitly enabled trace pin and keep output best-effort:
+     * emit only while port 0 is immediately writable and drop the rest on
+     * backpressure. */
+    if (((DBGMCU->CR & DBGMCU_CR_TRACE_IOEN) != 0UL) &&
+        ((ITM->TCR & ITM_TCR_ITMENA_Msk) != 0UL) &&
         ((ITM->TER & 1UL) != 0UL))
     {
       const size_t length = strlen(string);
