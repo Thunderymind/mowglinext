@@ -3,6 +3,7 @@
 #include <unity.h>
 
 #include "cmd_vel_safety.hpp"
+#include "imu/imu_mount_transform.h"
 
 using mowgli_cmd_vel::SafetyState;
 using mowgli_cmd_vel::apply_safety;
@@ -65,11 +66,35 @@ static void test_valid_command_after_invalid_is_normal()
   TEST_ASSERT_EQUAL_UINT32(13u, state.last_valid_tick);
 }
 
+static void test_imu_mount_rotation_identity_preserves_all_axes()
+{
+  float x = 1.0f;
+  float y = -2.0f;
+  float z = 3.0f;
+  IMU_ApplyMountRotation(IMU_MOUNT_ROTATION_IDENTITY, &x, &y, &z);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -2.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 3.0f, z);
+}
+
+static void test_imu_mount_rotation_yaw_180_negates_x_y_only()
+{
+  float x = 1.0f;
+  float y = -2.0f;
+  float z = 3.0f;
+  IMU_ApplyMountRotation(IMU_MOUNT_ROTATION_YAW_180, &x, &y, &z);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 2.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 3.0f, z);
+}
+
 int main()
 {
   UNITY_BEGIN();
   RUN_TEST(test_finite_and_zero_are_accepted);
   RUN_TEST(test_nonfinite_commands_clear_targets_without_refresh);
   RUN_TEST(test_valid_command_after_invalid_is_normal);
+  RUN_TEST(test_imu_mount_rotation_identity_preserves_all_axes);
+  RUN_TEST(test_imu_mount_rotation_yaw_180_negates_x_y_only);
   return UNITY_END();
 }
