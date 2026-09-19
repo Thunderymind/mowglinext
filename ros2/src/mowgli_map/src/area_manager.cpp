@@ -495,6 +495,44 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   entry.name = req->area.name;
   entry.polygon = polygon_msg;
   entry.is_navigation_area = req->is_navigation_area;
+  // mowglinext#637: preserve a caller-supplied id when re-adding an area
+  // that already had one — the GUI's edit/delete flow rebuilds the WHOLE
+  // area list (clear_map + add_area per area) even when the operator only
+  // touched ONE of them, so round-tripping every untouched area's existing
+  // id here is what keeps its identity stable across that rebuild. A
+  // genuinely new area (id absent, i.e. 0 — the MapArea.msg default for a
+  // request that never set it) gets a freshly minted one instead.
+  entry.id = (req->area.id != 0) ? req->area.id : next_area_id_++;
+  // A round-tripped id must still be UNIQUE. The rebuild flow above replays one
+  // add_area per area, so a client whose cached list contains the same id twice
+  // — or that replays a stale list against areas this session already minted —
+  // would otherwise create two entries sharing an identity that the resume
+  // cursor, the mow-progress bookkeeping and the GUI all key on. Mint a fresh
+  // id instead of trusting the caller, and say so: silently renaming an area's
+  // identity is exactly the kind of thing that is impossible to debug later.
+  if (req->area.id != 0 && std::any_of(areas_.begin(),
+                                       areas_.end(),
+                                       [&entry](const AreaEntry& existing)
+                                       {
+                                         return existing.id == entry.id;
+                                       }))
+  {
+    RCLCPP_WARN(get_logger(),
+                "AddArea('%s'): id %u is already taken by another area — minting %u instead. "
+                "The caller replayed a duplicate or stale id.",
+                entry.name.c_str(),
+                entry.id,
+                next_area_id_);
+    entry.id = next_area_id_++;
+  }
+  if (entry.id >= next_area_id_)
+  {
+    // A round-tripped id can be >= our current counter (e.g. this session
+    // already minted past it via some other insert before the client's
+    // cached copy was fetched) — advance past it so the NEXT freshly
+    // minted id in this session can never collide with it.
+    next_area_id_ = entry.id + 1;
+  }
 
   // Store obstacle polygons from the MapArea message.
   // Only store in the area entry (static), NOT in obstacle_polygons_
@@ -579,6 +617,7 @@ void MapServerNode::on_get_mowing_area(
     res->area.name = entry.name;
     res->area.area = entry.polygon;
     res->area.is_navigation_area = entry.is_navigation_area;
+    res->area.id = entry.id;  // mowglinext#637 — see MapArea.msg's doc comment
 
     // `obstacles` holds APPLIED keepouts only — it is what PlanCoverageArea
     // turns into coverage holes, so a PENDING proposal must never appear in
@@ -1756,7 +1795,11 @@ void MapServerNode::save_areas_to_file(const std::string& path)
     out << std::setprecision(6);
   }
 
-  out << "area_count: " << areas_.size() << "\n\n";
+  out << "area_count: " << areas_.size() << "\n";
+  // mowglinext#637: next_area_id_ is written unconditionally (never
+  // optional-on-read like the per-area id line below) so a reader always
+  // knows where to resume minting, even for a file with zero areas.
+  out << "next_area_id: " << next_area_id_ << "\n\n";
 
   for (std::size_t i = 0; i < areas_.size(); ++i)
   {
@@ -1764,6 +1807,12 @@ void MapServerNode::save_areas_to_file(const std::string& path)
     out << "area_" << i << "_name: " << area.name << "\n";
     out << "area_" << i << "_polygon: " << polygon_to_string(area.polygon) << "\n";
     out << "area_" << i << "_is_navigation: " << (area.is_navigation_area ? 1 : 0) << "\n";
+    // Always written (unlike the obstacle _name/_source lines above, this
+    // is never legitimately absent by the time save runs — on_add_area and
+    // load's migration below both guarantee area.id != 0 first). The
+    // *reader* still treats it as optional (see load_areas_from_file) so a
+    // pre-#637 file written by an older binary keeps loading.
+    out << "area_" << i << "_id: " << area.id << "\n";
     // PENDING obstacles (wheel-slip dig proposals) are deliberately NOT
     // written: they are inert until the operator accepts them through
     // ~/promote_obstacle. Count only what we actually write, and keep the
@@ -1878,6 +1927,12 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     entry.name = get_str(prefix + "_name");
     entry.polygon = parse_polygon_string(get_str(prefix + "_polygon"));
     entry.is_navigation_area = (get_int(prefix + "_is_navigation", 0) != 0);
+    // Optional on read (mowglinext#637): absent in any file saved before
+    // this field existed. Left at 0 here; the migration block below mints
+    // real ids for every area still at 0 once the whole file is loaded, so
+    // it can recover next_area_id_ from the highest id ACTUALLY present
+    // first, rather than one area at a time.
+    entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));
 
     const int obs_count = get_int(prefix + "_obstacle_count", 0);
     for (int j = 0; j < obs_count; ++j)
@@ -1913,6 +1968,50 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // Dock pose is loaded from mowgli_robot.yaml at construction, never
   // from areas.dat. Old areas.dat files may still contain dock_x/dock_qw
   // keys — they are ignored on purpose.
+
+  // Area-id migration (mowglinext#637): recover next_area_id_ as
+  // max(loaded ids) + 1 — same recovery shape obstacle_tracker_node uses
+  // for its own persisted next_id_ — then mint fresh ids for any area
+  // still at 0: either a pre-#637 file, or (defensively) a legacy in-memory
+  // entry that reached here some other way. Re-save immediately so the
+  // file is stamped from here on, the same "adopt on first load" shape
+  // migrate_areas_datum uses below for the datum stamp.
+  {
+    uint32_t max_id = 0;
+    bool any_unassigned = false;
+    for (const auto& area : areas_)
+    {
+      max_id = std::max(max_id, area.id);
+      any_unassigned = any_unassigned || (area.id == 0);
+    }
+    next_area_id_ = static_cast<uint32_t>(get_int("next_area_id", 0));
+    next_area_id_ = std::max(next_area_id_, max_id + 1);
+    if (any_unassigned)
+    {
+      for (auto& area : areas_)
+      {
+        if (area.id == 0)
+        {
+          area.id = next_area_id_++;
+        }
+      }
+      RCLCPP_INFO(get_logger(),
+                  "areas file %s has area(s) with no stable id (mowglinext#637) — "
+                  "assigning and re-saving.",
+                  path.c_str());
+      try
+      {
+        save_areas_to_file(path);
+      }
+      catch (const std::exception& ex)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Could not re-save %s with area ids: %s",
+                    path.c_str(),
+                    ex.what());
+      }
+    }
+  }
 
   // Datum-change migration (issue #216): if the file was recorded against a
   // different datum than the one this node was launched with, re-project the

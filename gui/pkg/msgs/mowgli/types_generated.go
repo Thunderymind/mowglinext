@@ -169,6 +169,7 @@ type MapArea struct {
 	ObstacleInfo              []MapObstacleInfo              `json:"obstacle_info"`
 	ProposedObstacles         []geometry.Polygon             `json:"proposed_obstacles"`
 	ProposedObstacleInfo      []MapObstacleInfo              `json:"proposed_obstacle_info"`
+	Id                        uint32                         `json:"id"`
 }
 
 // MapObstacleInfo matches mowgli_interfaces/msg/MapObstacleInfo.
