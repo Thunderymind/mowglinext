@@ -1262,9 +1262,24 @@ void vprint(const char *fmt, va_list argp)
   if (0 < vsnprintf(string, sizeof(string), fmt, argp)) // build string
   {
 #if DEBUG_TYPE == DEBUG_TYPE_SWO
-    for (int i = 0; i < strlen(string); i++)
+    /* CMSIS ITM_SendChar() waits indefinitely while an enabled stimulus port
+     * is not ready.  OpenOCD may leave ITM enabled across a normal
+     * program/verify/reset cycle even when no SWO consumer is draining it,
+     * which would otherwise stop F401 boot at the first DB_TRACE.  Debug
+     * output must stay best-effort: emit only while port 0 is immediately
+     * writable and drop the rest on backpressure. */
+    if (((ITM->TCR & ITM_TCR_ITMENA_Msk) != 0UL) &&
+        ((ITM->TER & 1UL) != 0UL))
     {
-      ITM_SendChar(string[i]);
+      const size_t length = strlen(string);
+      for (size_t i = 0; i < length; i++)
+      {
+        if (ITM->PORT[0U].u32 == 0UL)
+        {
+          break;
+        }
+        ITM->PORT[0U].u8 = (uint8_t)string[i];
+      }
     }
 #elif DEBUG_TYPE == DEBUG_TYPE_UART
 #if BOARD_YARDFORCE500_VARIANT_ORIG
