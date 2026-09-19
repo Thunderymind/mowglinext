@@ -1073,7 +1073,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     {mowProgressImage && (
                         <Source type={"image"} id={"mow-progress"} url={mowProgressImage.url} coordinates={mowProgressImage.coordinates}>
                             <Layer type={"raster"} id={"mow-progress-layer"} paint={{
-                                "raster-opacity": 0.7,
+                                "raster-opacity": 1,
                                 "raster-fade-duration": 0,
                             }}/>
                         </Source>
