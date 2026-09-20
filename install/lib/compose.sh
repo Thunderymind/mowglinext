@@ -84,9 +84,17 @@ build_compose_stack() {
   esac
 
   if [[ "$gnss_stack" != "disabled" && "$gnss_backend" != "disabled" ]]; then
+    # A robot updated only through the host updater (never re-ran the
+    # installer) can receive this compose fragment with an .env predating
+    # UNIVERSAL_GNSS_IMAGE — the fragment itself already tolerates that via
+    # its own `${UNIVERSAL_GNSS_IMAGE:-default}`, so this pre-check must too
+    # (install/CLAUDE.md: "a compose fragment must work on a robot that never
+    # ran this installer version"). Falling back here also means the value
+    # gets persisted to .env on the next write_env, instead of the gap
+    # reappearing on every regen.
     if [[ -z "${UNIVERSAL_GNSS_IMAGE:-}" ]]; then
-      error "UNIVERSAL_GNSS_IMAGE is required when GNSS_STACK=universal"
-      return 1
+      UNIVERSAL_GNSS_IMAGE="$UNIVERSAL_GNSS_IMAGE_DEFAULT"
+      warn "UNIVERSAL_GNSS_IMAGE was unset in .env; defaulting to $UNIVERSAL_GNSS_IMAGE_DEFAULT"
     fi
     gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
     case "$gnss_service" in
