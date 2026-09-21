@@ -70,13 +70,13 @@ unless noted otherwise. QoS 1 throughout.
 
 | Topic | Direction | Retained | Source | Rate |
 |-------|-----------|----------|--------|------|
-| `<prefix>/status` | out | yes | `/hardware_bridge/status` | on change |
-| `<prefix>/power` | out | yes | `/hardware_bridge/power` | on change |
-| `<prefix>/emergency` | out | yes | `/hardware_bridge/emergency` | on change |
-| `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | on change |
+| `<prefix>/status` | out | yes | `/hardware_bridge/status` | latest value, at most `publish_rate` Hz |
+| `<prefix>/power` | out | yes | `/hardware_bridge/power` | latest value, at most `publish_rate` Hz |
+| `<prefix>/emergency` | out | yes | `/hardware_bridge/emergency` | every ROS message (not rate-limited) |
+| `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | every ROS message (~1 Hz, not rate-limited) |
 | `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | `publish_rate` Hz |
 | `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | `publish_rate` Hz |
-| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | on change |
+| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | latest value, at most `publish_rate` Hz |
 | `<prefix>/area_boundary` | out | yes | `/map_server_node/get_mowing_area` (polled) | on change, polled every 10 s |
 | `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
@@ -359,4 +359,4 @@ Read once at startup (`ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt
 | `use_ssl` | `false` | `mqtt_use_ssl` |
 | `home_assistant_discovery_enabled` | `false` | `mqtt_home_assistant_discovery_enabled` |
 | `mqtt_client_id` | `mowgli_ros2` | package-share `mqtt_bridge.yaml` only (not on the GUI) |
-| `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — also the position/gps rate limit and the MQTT network-loop tick period |
+| `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — also the rate limit for position/gps/status/power/rtk_status. The MQTT network loop runs on its own fixed 50 ms timer, independent of this |

@@ -722,3 +722,37 @@ TEST(IsHighLevelStatusStale, TrueBeyondThreshold)
   EXPECT_TRUE(MqttBridgeNode::is_high_level_status_stale(
       /*received_before=*/true, now, last_received, /*threshold_s=*/5.0));
 }
+
+// ===========================================================================
+// is_publish_due (rate limiter for status/power/rtk_status/position/gps)
+// ===========================================================================
+
+TEST(IsPublishDue, NeverPublishedBeforeIsDueImmediately)
+{
+  const rclcpp::Time never_published{0, 0, RCL_ROS_TIME};
+  const rclcpp::Time now{1000, 0, RCL_ROS_TIME};
+  EXPECT_TRUE(MqttBridgeNode::is_publish_due(now, never_published, /*min_interval_s=*/1.0));
+}
+
+TEST(IsPublishDue, NotDueWithinInterval)
+{
+  const rclcpp::Time last{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last + rclcpp::Duration::from_seconds(0.4);
+  EXPECT_FALSE(MqttBridgeNode::is_publish_due(now, last, /*min_interval_s=*/1.0));
+}
+
+TEST(IsPublishDue, DueExactlyAtInterval)
+{
+  // '>=' — the boundary tick publishes, so a 1 Hz limiter driven by a 1 Hz
+  // timer does not skip every other tick to timer jitter.
+  const rclcpp::Time last{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last + rclcpp::Duration::from_seconds(1.0);
+  EXPECT_TRUE(MqttBridgeNode::is_publish_due(now, last, /*min_interval_s=*/1.0));
+}
+
+TEST(IsPublishDue, DueBeyondInterval)
+{
+  const rclcpp::Time last{10, 0, RCL_ROS_TIME};
+  const rclcpp::Time now = last + rclcpp::Duration::from_seconds(5.0);
+  EXPECT_TRUE(MqttBridgeNode::is_publish_due(now, last, /*min_interval_s=*/1.0));
+}

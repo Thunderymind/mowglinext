@@ -35,6 +35,7 @@
 #include <utility>
 
 #ifdef MOWGLI_HAS_MOSQUITTO
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -121,6 +122,10 @@ struct MosquittoMqttClient::Impl
   rclcpp::Clock throttle_clock{RCL_STEADY_TIME};
   mosquitto* mosq{nullptr};
   bool connected{false};
+  std::chrono::steady_clock::time_point last_reconnect_attempt{};
+
+  static constexpr int kMaxLoopIterationsPerSpin = 64;
+  static constexpr std::chrono::seconds kReconnectMinInterval{1};
 
   std::mutex callbacks_mutex;
   std::unordered_map<std::string, MessageCallback> callbacks;
@@ -405,8 +410,20 @@ void MosquittoMqttClient::spin_once() noexcept
   {
     return;
   }
-  // Non-blocking loop iteration; timeout=0 means return immediately.
-  const int rc = mosquitto_loop(impl_->mosq, 0, 1);
+  // One non-blocking mosquitto_loop() call moves too little per tick: a field capture
+  // (2026-09-21) showed <prefix>/high_level_status reaching the broker at ~0.57 msg/s
+  // against ~1 msg/s produced, so the lag grew without bound (>9 min after 16 min).
+  // Keep looping while packets are still waiting to be written.
+  int rc = MOSQ_ERR_SUCCESS;
+  for (int i = 0; i < Impl::kMaxLoopIterationsPerSpin; ++i)
+  {
+    rc = mosquitto_loop(impl_->mosq, 0, 1);
+    if (rc != MOSQ_ERR_SUCCESS || !mosquitto_want_write(impl_->mosq))
+    {
+      break;
+    }
+  }
+
   if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN)
   {
     RCLCPP_WARN_THROTTLE(impl_->logger,
@@ -414,7 +431,13 @@ void MosquittoMqttClient::spin_once() noexcept
                          10000,
                          "mosquitto_loop error: %s — attempting reconnect",
                          mosquitto_strerror(rc));
-    mosquitto_reconnect(impl_->mosq);
+    // spin_once() runs at 20 Hz; mosquitto_reconnect() blocks on the TCP connect.
+    const auto now = std::chrono::steady_clock::now();
+    if (now - impl_->last_reconnect_attempt >= Impl::kReconnectMinInterval)
+    {
+      impl_->last_reconnect_attempt = now;
+      mosquitto_reconnect(impl_->mosq);
+    }
   }
 
   // libmosquitto invokes on_message_cb from inside mosquitto_loop(). Queue
@@ -673,6 +696,14 @@ void MqttBridgeNode::create_timer()
                              {
                                on_timer();
                              });
+
+  // The network loop must not share publish_rate's cadence: at 1 Hz it could not
+  // drain the outgoing queue and <prefix>/high_level_status fell minutes behind.
+  net_timer_ = create_wall_timer(std::chrono::milliseconds(kNetworkLoopPeriodMs),
+                                 [this]()
+                                 {
+                                   mqtt_client_->spin_once();
+                                 });
 }
 
 // ---------------------------------------------------------------------------
@@ -681,12 +712,13 @@ void MqttBridgeNode::create_timer()
 
 void MqttBridgeNode::on_status(mowgli_interfaces::msg::Status::ConstSharedPtr msg)
 {
-  mqtt_client_->publish(full_topic("status"), serialise_status(*msg), /*retain=*/true);
+  // Latest value only; on_timer() publishes it at most publish_rate_ times a second.
+  pending_status_ = *msg;
 }
 
 void MqttBridgeNode::on_power(mowgli_interfaces::msg::Power::ConstSharedPtr msg)
 {
-  mqtt_client_->publish(full_topic("power"), serialise_power(*msg), /*retain=*/true);
+  pending_power_ = *msg;
 }
 
 void MqttBridgeNode::on_emergency(mowgli_interfaces::msg::Emergency::ConstSharedPtr msg)
@@ -725,7 +757,7 @@ void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
 
 void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
 {
-  mqtt_client_->publish(full_topic("rtk_status"), serialise_rtk_status(*msg), /*retain=*/true);
+  pending_gnss_status_ = *msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -746,6 +778,13 @@ bool MqttBridgeNode::parse_command_payload(const std::string& payload, uint8_t& 
   }
   out_command = static_cast<uint8_t>(command_int);
   return true;
+}
+
+bool MqttBridgeNode::is_publish_due(const rclcpp::Time& now,
+                                    const rclcpp::Time& last_publish,
+                                    double min_interval_s)
+{
+  return (now - last_publish).seconds() >= min_interval_s;
 }
 
 bool MqttBridgeNode::is_high_level_status_stale(bool received_before,
@@ -969,13 +1008,12 @@ void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& ar
 }
 
 // ---------------------------------------------------------------------------
-// Timer: network loop + rate-limited position publish
+// Timers: rate-limited publishes (on_timer) + network loop (net_timer_)
 // ---------------------------------------------------------------------------
 
 void MqttBridgeNode::on_timer()
 {
-  // Drive the MQTT network loop.
-  mqtt_client_->spin_once();
+  // The MQTT network loop runs on net_timer_, not here.
 
   // Attempt reconnect if disconnected.
   if (!mqtt_client_->is_connected())
@@ -1021,37 +1059,34 @@ void MqttBridgeNode::on_timer()
     }
   }
 
-  // Rate-limited position publish.
-  if (pending_odom_.has_value())
+  // Rate-limited publishes: each topic sends only its latest pending message, at most
+  // once per 1/publish_rate_ seconds. emergency and high_level_status are not limited
+  // (see their callbacks) — they are low-rate and must not be delayed.
+  const rclcpp::Time flush_time = now();
+  const double min_interval = 1.0 / publish_rate_;
+  const auto flush = [&](auto& pending,
+                         rclcpp::Time& last_publish,
+                         const char* suffix,
+                         auto&& serialise,
+                         bool retain)
   {
-    const rclcpp::Time t = now();
-    const double elapsed = (t - last_odom_publish_).seconds();
-    const double min_interval = 1.0 / publish_rate_;
-
-    if (elapsed >= min_interval)
+    if (pending.has_value() && is_publish_due(flush_time, last_publish, min_interval))
     {
-      mqtt_client_->publish(full_topic("position"),
-                            serialise_position(*pending_odom_),
-                            /*retain=*/false);
-      last_odom_publish_ = t;
-      pending_odom_.reset();
+      mqtt_client_->publish(full_topic(suffix), serialise(*pending), retain);
+      last_publish = flush_time;
+      pending.reset();
     }
-  }
+  };
 
-  // Rate-limited GPS publish (same window as position above).
-  if (pending_gps_.has_value())
-  {
-    const rclcpp::Time t = now();
-    const double elapsed = (t - last_gps_publish_).seconds();
-    const double min_interval = 1.0 / publish_rate_;
-
-    if (elapsed >= min_interval)
-    {
-      mqtt_client_->publish(full_topic("gps"), serialise_gps(*pending_gps_), /*retain=*/false);
-      last_gps_publish_ = t;
-      pending_gps_.reset();
-    }
-  }
+  flush(pending_odom_, last_odom_publish_, "position", serialise_position, /*retain=*/false);
+  flush(pending_gps_, last_gps_publish_, "gps", serialise_gps, /*retain=*/false);
+  flush(pending_status_, last_status_publish_, "status", serialise_status, /*retain=*/true);
+  flush(pending_power_, last_power_publish_, "power", serialise_power, /*retain=*/true);
+  flush(pending_gnss_status_,
+        last_gnss_status_publish_,
+        "rtk_status",
+        serialise_rtk_status,
+        /*retain=*/true);
 
   maybe_poll_area_boundaries();
 
