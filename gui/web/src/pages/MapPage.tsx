@@ -612,8 +612,13 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             ...buildFeatures(m.working_area ?? [], "area"),
             ...buildFeatures(m.navigation_areas ?? [], "navigation"),
         };
-        const dockLonLat = transpose(offsetX, offsetY, datum, m.dock_y ?? 0, m.dock_x ?? 0);
-        newFeatures["dock"] = new DockFeatureBase(dockLonLat, m.dock_heading ?? 0);
+        // No dock fields = no dock feature: a missing dock is NOT a dock at
+        // (0, 0, 0) (#704). The restore path keeps the current dock instead.
+        if (m.dock_x === undefined || m.dock_y === undefined || m.dock_heading === undefined) {
+            return newFeatures;
+        }
+        const dockLonLat = transpose(offsetX, offsetY, datum, m.dock_y, m.dock_x);
+        newFeatures["dock"] = new DockFeatureBase(dockLonLat, m.dock_heading);
         return newFeatures;
     }
 

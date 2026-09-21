@@ -1754,6 +1754,7 @@
   "mapFiles": {
     "areaSaved": "Area saved",
     "failedToSaveArea": "Failed to save area",
+    "restoreFailed": "Could not restore this map backup",
     "bagImportComingSoonMessage": "OpenMower .bag import — coming soon",
     "bagImportComingSoonDescription": "Convert your map.bag to map.json on the source robot first (OpenMower 1.x auto-converts at boot), then re-import the .json. See docs/IMPORT_OPENMOWER_MAP.md §6.",
     "openMowerImportFailed": "OpenMower import failed",
