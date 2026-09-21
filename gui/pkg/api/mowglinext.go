@@ -83,7 +83,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
-		"coverageResumeAvailable",
+		"coverageResumeAvailable", "coverageSession",
 		"fusionDiag", "dockCalibrationStatus":
 		return -1, true
 	default:
