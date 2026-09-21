@@ -90,6 +90,12 @@ export default function FleetPage() {
 
     return (
         <div style={{display: "flex", flexDirection: "column", gap: 16}}>
+            <Alert
+                type="info"
+                showIcon
+                message={<Space size={8}><Tag color="purple">{t("fleetPage.betaTag")}</Tag>{t("fleetPage.betaTitle")}</Space>}
+                description={t("fleetPage.betaBody")}
+            />
             {fleet.error && (
                 <Alert type="warning" showIcon message={t("fleetPage.pollError")} description={fleet.error}/>
             )}
