@@ -20,10 +20,21 @@ func storeSchedule(t *testing.T, db *types.MockDBProvider, s schedule) {
 	require.NoError(t, db.Set(schedulerKeyPrefix+s.ID, data))
 }
 
+func acceptStart(_ string, _ any, res any) {
+	if out, ok := res.(*mowgli.HighLevelControlRes); ok {
+		out.Success = true
+	}
+}
+
 // buildScheduler creates a SchedulerProvider backed by mocks without starting
 // the background goroutine. subscribeToStatus is still called so mock
 // subscribers can be driven via Dispatch.
 func buildScheduler(ros *types.MockRosProvider, db *types.MockDBProvider) *SchedulerProvider {
+	// A healthy behavior_tree_node ACCEPTS the start; tests that need a
+	// rejection install their own responder before calling this.
+	if ros.ServiceResponder == nil {
+		ros.ServiceResponder = acceptStart
+	}
 	return &SchedulerProvider{
 		rosProvider: ros,
 		dbProvider:  db,
@@ -368,6 +379,73 @@ func TestCheckSchedules_ServiceErrorDoesNotPersistLastRun(t *testing.T) {
 	var updated schedule
 	require.NoError(t, json.Unmarshal(data, &updated))
 	assert.Nil(t, updated.LastRun, "LastRun must not be persisted after a failed service call")
+}
+
+// behavior_tree_node answers START with success=false while it refuses it
+// (update maintenance): the round-trip worked, nothing was started (#702).
+func TestCheckSchedules_RejectedStartDoesNotPersistLastRun(t *testing.T) {
+	ros := types.NewMockRosProvider()
+	ros.ServiceResponder = func(_ string, _ any, res any) {
+		res.(*mowgli.HighLevelControlRes).Success = false
+	}
+	db := types.NewMockDBProvider()
+	now := time.Now()
+	sched := dueSchedule("sched-rejected", now)
+	storeSchedule(t, db, sched)
+
+	s := buildScheduler(ros, db)
+	s.lastHighLevelState = 1
+	s.checkSchedules()
+
+	require.Len(t, ros.ServiceCalls, 1)
+	assert.Nil(t, readSchedule(t, db, sched.ID).LastRun, "a rejected START is not a run")
+}
+
+// The operator deletes the schedule while its START is in flight: the
+// scheduler must not write its pre-call snapshot back (#702).
+func TestCheckSchedules_DeleteDuringStartStaysDeleted(t *testing.T) {
+	ros := types.NewMockRosProvider()
+	db := types.NewMockDBProvider()
+	now := time.Now()
+	sched := dueSchedule("sched-deleted", now)
+	storeSchedule(t, db, sched)
+	ros.ServiceResponder = func(service string, req any, res any) {
+		require.NoError(t, db.Delete(schedulerKeyPrefix+sched.ID))
+		acceptStart(service, req, res)
+	}
+
+	s := buildScheduler(ros, db)
+	s.lastHighLevelState = 1
+	s.checkSchedules()
+
+	_, err := db.Get(schedulerKeyPrefix + sched.ID)
+	assert.Error(t, err, "a schedule deleted mid-start must stay deleted")
+}
+
+func TestCheckSchedules_EditDuringStartIsPreserved(t *testing.T) {
+	ros := types.NewMockRosProvider()
+	db := types.NewMockDBProvider()
+	now := time.Now()
+	sched := dueSchedule("sched-edited", now)
+	storeSchedule(t, db, sched)
+	edited := sched
+	edited.Enabled = false
+	edited.Time = "23:59"
+	edited.DaysOfWeek = []int{0, 6}
+	ros.ServiceResponder = func(service string, req any, res any) {
+		storeSchedule(t, db, edited)
+		acceptStart(service, req, res)
+	}
+
+	s := buildScheduler(ros, db)
+	s.lastHighLevelState = 1
+	s.checkSchedules()
+
+	got := readSchedule(t, db, sched.ID)
+	assert.False(t, got.Enabled, "a schedule disabled mid-start must stay disabled")
+	assert.Equal(t, "23:59", got.Time)
+	assert.Equal(t, []int{0, 6}, got.DaysOfWeek)
+	require.NotNil(t, got.LastRun, "the accepted START is still recorded")
 }
 
 // --------------------------------------------------------------------------

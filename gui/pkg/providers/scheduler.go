@@ -170,11 +170,12 @@ func (s *SchedulerProvider) checkSchedules() {
 		logrus.Infof("Scheduler: triggering autonomous mowing for schedule %s (area %d)", sched.ID, sched.Area)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var res mowgli.HighLevelControlRes
 		err = s.rosProvider.CallService(
 			ctx,
 			"/behavior_tree_node/high_level_control",
 			&mowgli.HighLevelControlReq{Command: 1}, // 1 = COMMAND_START
-			&mowgli.HighLevelControlRes{},
+			&res,
 		)
 		cancel()
 
@@ -182,14 +183,47 @@ func (s *SchedulerProvider) checkSchedules() {
 			logrus.Errorf("Scheduler: failed to call high_level_control for schedule %s: %v", sched.ID, err)
 			continue
 		}
+		// A delivered call is not an accepted one: behavior_tree_node answers
+		// success=false while it refuses START (update maintenance). Nothing
+		// ran, so LastRun stays untouched and the next tick may retry (#702).
+		if !res.Success {
+			logrus.Warnf("Scheduler: high_level_control rejected START for schedule %s", sched.ID)
+			continue
+		}
 
 		// Persist last-run time so double-execution within the same minute is prevented.
-		sched.LastRun = &now
-		if updated, err := json.Marshal(&sched); err == nil {
-			if putErr := s.dbProvider.Set(schedulerKeyPrefix+sched.ID, updated); putErr != nil {
-				logrus.Warnf("Scheduler: failed to persist last-run for schedule %s: %v", sched.ID, putErr)
-			}
-		}
+		// LastRun means "START was accepted", not "the mow completed".
+		s.updateRunMetadata(sched.ID, func(current *schedule) {
+			current.LastRun = &now
+		})
+	}
+}
+
+// updateRunMetadata applies mutate to the schedule AS STORED NOW, never to
+// the snapshot read at the top of checkSchedules: the START call in between
+// can take up to 30 s, and writing the snapshot back resurrected a schedule
+// deleted meanwhile and reverted an edit or a disable (#702). A record that
+// is gone stays gone. mutate must only touch execution metadata.
+func (s *SchedulerProvider) updateRunMetadata(id string, mutate func(current *schedule)) {
+	key := schedulerKeyPrefix + id
+	data, err := s.dbProvider.Get(key)
+	if err != nil {
+		logrus.Infof("Scheduler: schedule %s no longer exists, not recording run metadata", id)
+		return
+	}
+	var current schedule
+	if err := json.Unmarshal(data, &current); err != nil {
+		logrus.Warnf("Scheduler: failed to parse schedule %s: %v", id, err)
+		return
+	}
+	mutate(&current)
+	updated, err := json.Marshal(&current)
+	if err != nil {
+		logrus.Warnf("Scheduler: failed to encode schedule %s: %v", id, err)
+		return
+	}
+	if err := s.dbProvider.Set(key, updated); err != nil {
+		logrus.Warnf("Scheduler: failed to persist run metadata for schedule %s: %v", id, err)
 	}
 }
 
@@ -209,16 +243,10 @@ func (s *SchedulerProvider) soilBlocksStart() (bool, string) {
 
 // persistSkip records why a due run was not started, so the GUI can show it.
 func (s *SchedulerProvider) persistSkip(sched schedule, reason string, now time.Time) {
-	sched.LastSkipReason = reason
-	sched.LastSkippedAt = &now
-	updated, err := json.Marshal(&sched)
-	if err != nil {
-		logrus.Warnf("Scheduler: failed to encode skip for schedule %s: %v", sched.ID, err)
-		return
-	}
-	if err := s.dbProvider.Set(schedulerKeyPrefix+sched.ID, updated); err != nil {
-		logrus.Warnf("Scheduler: failed to persist skip for schedule %s: %v", sched.ID, err)
-	}
+	s.updateRunMetadata(sched.ID, func(current *schedule) {
+		current.LastSkipReason = reason
+		current.LastSkippedAt = &now
+	})
 }
 
 // safeToStart returns true when it is safe to send COMMAND_START.

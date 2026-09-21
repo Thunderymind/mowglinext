@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -183,13 +184,24 @@ func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 }
 
 // setDockingPointInternal is the ROS-side call shared by the public
-// POST handler and the OpenMower importer. Single service round-trip,
-// no wrapping logic.
+// POST handler and the OpenMower importer. Single service round-trip.
+//
+// CallService only fails on transport/serialization errors. map_server
+// answers a GATED update (not on the dock, GPS not accurate enough, yaw not
+// converged…) with {success:false, message}: the dock pose was NOT
+// committed, so that is an error too, carrying map_server's reason (#703).
 func setDockingPointInternal(ctx context.Context, provider types.IRosProvider, req *mowgli.SetDockingPointReq) error {
 	if req == nil {
 		return errors.New("setDockingPointInternal: nil request")
 	}
-	return provider.CallService(ctx, "/map_server_node/set_docking_point", req, &mowgli.SetDockingPointRes{}, "mowgli_interfaces/srv/SetDockingPoint")
+	var res mowgli.SetDockingPointRes
+	if err := provider.CallService(ctx, "/map_server_node/set_docking_point", req, &res, "mowgli_interfaces/srv/SetDockingPoint"); err != nil {
+		return err
+	}
+	if !res.Success {
+		return fmt.Errorf("dock pose rejected by map_server: %s", res.Message)
+	}
+	return nil
 }
 
 // SetDockingPointRoute set the docking point

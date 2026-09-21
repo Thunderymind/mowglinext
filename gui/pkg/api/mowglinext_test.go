@@ -217,6 +217,9 @@ func TestClearMapRoute_Error(t *testing.T) {
 
 func TestSetDockingPointRoute(t *testing.T) {
 	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		res.(*mowgli.SetDockingPointRes).Success = true
+	}
 	router := setupMowgliNextRouter(mock)
 
 	payload := map[string]any{
@@ -234,6 +237,40 @@ func TestSetDockingPointRoute(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	require.Len(t, mock.ServiceCalls, 1)
 	assert.Equal(t, "/map_server_node/set_docking_point", mock.ServiceCalls[0].Service)
+}
+
+// map_server answers a gated dock update with {success:false, message}: the
+// round-trip worked, the dock pose was NOT committed (#703).
+func TestSetDockingPointRoute_RosRejectionIsAnError(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		out := res.(*mowgli.SetDockingPointRes)
+		out.Success = false
+		out.Message = "robot not detected on dock"
+	}
+	router := setupMowgliNextRouter(mock)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/mowglinext/map/docking", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "robot not detected on dock")
+}
+
+func TestSetDockingPointRoute_TransportErrorStaysDistinct(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceErr = assert.AnError
+	router := setupMowgliNextRouter(mock)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/mowglinext/map/docking", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.NotContains(t, w.Body.String(), "rejected")
 }
 
 // dialMultiplex opens the test server's /multiplex WebSocket. Returns the

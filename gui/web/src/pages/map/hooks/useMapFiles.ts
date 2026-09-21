@@ -14,6 +14,7 @@ import {
     type SerializedMapFeature,
 } from "../../../types/map.ts";
 import type {Api, MowgliMapArea, MowgliReplaceMapReq} from "../../../api/Api.ts";
+import {parseMapBackup} from "../utils/mapBackup.ts";
 import {dedupePoints, getQuaternionFromHeading, isRingInsidePolygon, itranspose} from "../../../utils/map.tsx";
 
 interface UseMapFilesOptions {
@@ -234,27 +235,47 @@ export function useMapFiles({
         input.type = "file";
         input.style.display = "none";
         document.body.appendChild(input);
-        input.addEventListener('change', (event) => {
-            setEditMap(true);
+        input.addEventListener('change', async (event) => {
             const file = (event as unknown as ChangeEvent<HTMLInputElement>).target?.files?.[0];
             if (!file) {
                 return;
             }
-            const reader = new FileReader();
-            reader.addEventListener('load', (event) => {
-                const content = event.target?.result as string;
-                const parts = content.split(",");
-                const newMap = JSON.parse(atob(parts[1])) as MapType;
-                setMap(newMap);
-                // The MapPage effect that turns a Map into editable features
-                // skips while editMap is true (set just above), so build them
-                // here — otherwise handleSaveMap would persist the stale
-                // features and the restored map would be silently discarded.
-                setFeatures(buildFeaturesFromMap(newMap));
-                setHasUnsavedChanges(true);
-                setDockDirty(true);
+            // Validate the whole candidate BEFORE touching any editor state
+            // (#704). file.text() decodes UTF-8; the old data-URL + atob()
+            // path yielded a byte string and corrupted names like "Ängen".
+            const fail = (reason: string) => notification.error({
+                message: t('mapFiles.restoreFailed'),
+                description: reason,
             });
-            reader.readAsDataURL(file);
+            const parsed = parseMapBackup(await file.text());
+            if (!parsed.ok) {
+                fail(parsed.reason);
+                return;
+            }
+            let restoredFeatures: Record<string, MowingFeature>;
+            try {
+                restoredFeatures = buildFeaturesFromMap(parsed.map);
+            } catch (e: any) {
+                fail(e?.message ?? String(e));
+                return;
+            }
+            // A backup without dock fields leaves the current dock alone: it
+            // is neither rebuilt at (0, 0, 0) nor marked dirty for Save.
+            const currentDock = features["dock"];
+            const nextFeatures = parsed.hasDock || !currentDock
+                ? restoredFeatures
+                : {...restoredFeatures, dock: currentDock};
+            setEditMap(true);
+            setMap(parsed.map);
+            // The MapPage effect that turns a Map into editable features
+            // skips while editMap is true (set just above), so build them
+            // here — otherwise handleSaveMap would persist the stale
+            // features and the restored map would be silently discarded.
+            setFeatures(nextFeatures);
+            setHasUnsavedChanges(true);
+            if (parsed.hasDock) {
+                setDockDirty(true);
+            }
         });
         input.click();
     };

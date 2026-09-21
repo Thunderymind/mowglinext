@@ -1750,6 +1750,7 @@
   "mapFiles": {
     "areaSaved": "Zone enregistrée",
     "failedToSaveArea": "Échec de l'enregistrement de la zone",
+    "restoreFailed": "Impossible de restaurer cette sauvegarde de carte",
     "bagImportComingSoonMessage": "Import OpenMower .bag — bientôt disponible",
     "bagImportComingSoonDescription": "Convertissez d'abord votre map.bag en map.json sur le robot source (OpenMower 1.x convertit automatiquement au démarrage), puis réimportez le .json. Voir docs/IMPORT_OPENMOWER_MAP.md §6.",
     "openMowerImportFailed": "Échec de l'import OpenMower",
