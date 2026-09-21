@@ -458,6 +458,8 @@ func TestPostImportOpenMower_ApplyCallsClearAddSaveAndDock(t *testing.T) {
 			out.Success = true
 		case *triggerRes:
 			out.Success = true
+		case *mowgli.SetDockingPointRes:
+			out.Success = true
 		}
 	}
 	router := setupImportRouter(mock, nil)
