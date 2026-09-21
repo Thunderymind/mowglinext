@@ -101,9 +101,10 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       // pure-sweep jump as if it were a phantom translation and
       // rejects every legitimate fix.
       abs_dtheta_since_last_gps_rad_ += std::abs(gz) * dt;
-      // Parallel accumulator for the stuck-receiver gate — see the matching
-      // comment in OnWheelOdom above.
-      abs_dtheta_since_gps_value_changed_rad_ += std::abs(gz) * dt;
+      // Parallel accumulator for the stuck-receiver gate's stand-down check
+      // — see fusion_graph_node.hpp for why this one resets every GPS
+      // message (bounded) while the gate's distance accumulator does not.
+      abs_dtheta_since_last_gps_sample_rad_ += std::abs(gz) * dt;
     }
   }
   if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
@@ -193,14 +194,16 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // Payload-value change tracking for the stuck-receiver gate further below
   // (mowglinext#694 — see gps_stuck_gate.hpp). Runs here, unconditionally,
   // for every sample that reached this point — i.e. since the reported GPS
-  // VALUE last changed — so the accumulators stay correct even though the
-  // wrong-fix/sigma/docking gates below can each return before reaching the
-  // stuck check itself. NaN-initialized last_gps_lat_/lon_ always count the
-  // first real fix as a change.
+  // VALUE last changed — so the distance accumulator stays correct even
+  // though the wrong-fix/sigma/docking gates below can each return before
+  // reaching the stuck check itself. NaN-initialized last_gps_lat_/lon_
+  // always count the first real fix as a change. Only the DISTANCE
+  // accumulator resets here — the rotation stand-down accumulator resets
+  // unconditionally further down (every message, not just on a value
+  // change); see fusion_graph_node.hpp for why the two differ.
   if (GpsValueChanged(msg->latitude, msg->longitude, last_gps_lat_, last_gps_lon_))
   {
     wheel_dist_since_gps_value_changed_m_ = 0.0;
-    abs_dtheta_since_gps_value_changed_rad_ = 0.0;
   }
   last_gps_lat_ = msg->latitude;
   last_gps_lon_ = msg->longitude;
@@ -503,14 +506,22 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   }
   // Direct payload-value comparison — see gps_stuck_gate.hpp. Tracks how far
   // the chassis has travelled since msg->latitude/longitude last actually
-  // differed from the previous sample; the accumulators live alongside (but
-  // are independent of) the wrong-fix gate's, and are updated unconditionally
-  // above (search "since the reported GPS VALUE last changed") so they stay
-  // correct across every earlier return in this function too.
-  if (GpsStuckImplausible(wheel_dist_since_gps_value_changed_m_,
-                          abs_dtheta_since_gps_value_changed_rad_,
-                          gps_stuck_min_wheel_dist_m_,
-                          gps_stuck_max_yaw_rad_))
+  // differed from the previous sample; the distance accumulator is updated
+  // unconditionally above (search "since the reported GPS VALUE last
+  // changed") so it stays correct across every earlier return in this
+  // function too. The rotation stand-down accumulator, by contrast, resets
+  // right below regardless of this gate's verdict — see fusion_graph_node.hpp
+  // for why: it must answer "are we turning right now", not "has there been
+  // any turn since the receiver got stuck" (the latter is what silently
+  // disabled this gate for the rest of a real drive in the field, 2026-09-21
+  // — a single transit turn exceeded the stand-down budget within seconds
+  // and it never got the chance to reset again while /gps/fix stayed stuck).
+  const bool gps_stuck = GpsStuckImplausible(wheel_dist_since_gps_value_changed_m_,
+                                             abs_dtheta_since_last_gps_sample_rad_,
+                                             gps_stuck_min_wheel_dist_m_,
+                                             gps_stuck_max_yaw_rad_);
+  abs_dtheta_since_last_gps_sample_rad_ = 0.0;
+  if (gps_stuck)
   {
     graph_->RecordGpsRejectStuckValue();
     RCLCPP_WARN_THROTTLE(get_logger(),

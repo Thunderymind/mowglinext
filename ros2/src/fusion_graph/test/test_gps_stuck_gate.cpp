@@ -100,17 +100,22 @@ TEST(GpsValueChanged, NanPreviousAlwaysCountsAsChanged)
 
 // ── Field-scale regression: a stuck receiver trips within a few metres,
 // a healthy one (real per-sample jitter) never does ──────────────────────
+//
+// These simulations mirror the ACTUAL OnGnss loop's two-different-resets
+// shape (fusion_graph_node.hpp / fusion_graph_node_callbacks_a.cpp): the
+// distance accumulator resets only when the reported value changes; the
+// rotation accumulator resets every sample, matching rtk_wrongfix_gate.hpp's
+// own per-fix reset. Getting this wrong in either direction is exactly the
+// 2026-09-21 field regression these tests exist to pin.
 
 TEST(GpsStuckGate, StuckReceiverTripsWithinFieldObservedTravel)
 {
-  // Mirrors the actual OnGnss loop shape: accumulate wheel distance every
-  // sample, reset only when the reported value changes.
   const double lat = 53.089172501;
   const double lon = 6.169298185333333;
   double last_lat = lat;
   double last_lon = lon;
   double wheel_dist_since_value_changed_m = 0.0;
-  double abs_dtheta_since_value_changed_rad = 0.0;
+  double abs_dtheta_since_last_sample_rad = 0.0;
   const double per_sample_travel_m = 0.05;  // ~0.5 m/s at 10 Hz.
   const double min_wheel_dist_m = 1.0;
   const double max_yaw_rad = 1.047;
@@ -124,15 +129,16 @@ TEST(GpsStuckGate, StuckReceiverTripsWithinFieldObservedTravel)
     if (fg::GpsValueChanged(lat, lon, last_lat, last_lon))
     {
       wheel_dist_since_value_changed_m = 0.0;
-      abs_dtheta_since_value_changed_rad = 0.0;
     }
     last_lat = lat;
     last_lon = lon;
 
-    if (fg::GpsStuckImplausible(wheel_dist_since_value_changed_m,
-                                abs_dtheta_since_value_changed_rad,
-                                min_wheel_dist_m,
-                                max_yaw_rad))
+    const bool stuck = fg::GpsStuckImplausible(wheel_dist_since_value_changed_m,
+                                               abs_dtheta_since_last_sample_rad,
+                                               min_wheel_dist_m,
+                                               max_yaw_rad);
+    abs_dtheta_since_last_sample_rad = 0.0;  // every sample, per OnGnss.
+    if (stuck)
     {
       tripped = true;
       trip_at_sample = i;
@@ -147,11 +153,11 @@ TEST(GpsStuckGate, StuckReceiverTripsWithinFieldObservedTravel)
 TEST(GpsStuckGate, HealthyReceiverWithPerSampleJitterNeverTrips)
 {
   // A genuinely live receiver updates the value (even by a tiny amount) on
-  // every sample, so the accumulator resets before it can build up.
+  // every sample, so the distance accumulator resets before it can build up.
   double last_lat = 53.089172501;
   double last_lon = 6.169298185333333;
   double wheel_dist_since_value_changed_m = 0.0;
-  double abs_dtheta_since_value_changed_rad = 0.0;
+  double abs_dtheta_since_last_sample_rad = 0.0;
   const double per_sample_travel_m = 0.05;
   const double min_wheel_dist_m = 1.0;
   const double max_yaw_rad = 1.047;
@@ -167,15 +173,147 @@ TEST(GpsStuckGate, HealthyReceiverWithPerSampleJitterNeverTrips)
     if (fg::GpsValueChanged(lat, lon, last_lat, last_lon))
     {
       wheel_dist_since_value_changed_m = 0.0;
-      abs_dtheta_since_value_changed_rad = 0.0;
     }
     last_lat = lat;
     last_lon = lon;
 
-    EXPECT_FALSE(fg::GpsStuckImplausible(wheel_dist_since_value_changed_m,
-                                         abs_dtheta_since_value_changed_rad,
-                                         min_wheel_dist_m,
-                                         max_yaw_rad))
-        << "sample #" << i;
+    const bool stuck = fg::GpsStuckImplausible(wheel_dist_since_value_changed_m,
+                                               abs_dtheta_since_last_sample_rad,
+                                               min_wheel_dist_m,
+                                               max_yaw_rad);
+    abs_dtheta_since_last_sample_rad = 0.0;
+    EXPECT_FALSE(stuck) << "sample #" << i;
   }
+}
+
+// ── 2026-09-21 field regression: cumulative rotation over a stuck period
+// must not permanently disable detection ──────────────────────────────────
+//
+// Field data (session gnss-rc1-test-20260921-0933): /gps/fix froze at t≈1s
+// and stayed frozen for the whole ~47 s session; a transit turn starting at
+// t≈24s integrated a NET yaw past 170° by the end. abs_dtheta accumulates
+// |rate|*dt, so an accumulator that resets only on value-change (the bug)
+// sums EVERY inter-message rotation across the ENTIRE stuck period, not just
+// the turn itself — even a moderate turn accumulates past a 60° stand-down
+// budget within a couple of seconds if nothing ever resets it, and once past
+// it, it can only ever grow further while the value stays stuck. The fix
+// resets it every GPS message instead (one inter-fix interval, matching
+// rtk_wrongfix_gate.hpp), so a REALISTIC single-interval rotation (this
+// session's /gps/fix published at ~1 Hz — 46 distinct stamps over 44.95 s;
+// even at that comparatively low rate a fast turn is degrees, not tens of
+// degrees, per interval) never approaches the stand-down budget on its own,
+// and detection keeps firing continuously through the turn instead of going
+// silent.
+TEST(GpsStuckGate, CumulativeRotationOverStuckPeriodDoesNotDisableDetection)
+{
+  const double lat = 53.089172501;
+  const double lon = 6.169298185333333;
+  double last_lat = lat;
+  double last_lon = lon;
+  double wheel_dist_since_value_changed_m = 0.0;
+  double abs_dtheta_since_last_sample_rad = 0.0;
+  const double min_wheel_dist_m = 1.0;
+  const double max_yaw_rad = 1.047;
+
+  auto tick = [&](double wheel_dist_delta_m, double dtheta_delta_rad) -> bool
+  {
+    wheel_dist_since_value_changed_m += wheel_dist_delta_m;
+    if (fg::GpsValueChanged(lat, lon, last_lat, last_lon))
+    {
+      wheel_dist_since_value_changed_m = 0.0;
+    }
+    last_lat = lat;
+    last_lon = lon;
+    abs_dtheta_since_last_sample_rad += dtheta_delta_rad;
+
+    const bool stuck = fg::GpsStuckImplausible(wheel_dist_since_value_changed_m,
+                                               abs_dtheta_since_last_sample_rad,
+                                               min_wheel_dist_m,
+                                               max_yaw_rad);
+    abs_dtheta_since_last_sample_rad = 0.0;
+    return stuck;
+  };
+
+  // Straight driving crosses the distance threshold first (6 messages @
+  // 0.2 m each = 1.2 m, strictly over the 1.0 m min_wheel_dist_m threshold;
+  // well under the field's 2.7-4.5 m).
+  bool tripped_before_turn = false;
+  for (int i = 0; i < 6; ++i)
+  {
+    if (tick(0.2, 0.0))
+    {
+      tripped_before_turn = true;
+    }
+  }
+  EXPECT_TRUE(tripped_before_turn);
+
+  // ~171 deg net turn over 20 GPS messages — the field magnitude — but
+  // spread per-message, matching how the accumulator is actually fed.
+  // 171/20 ≈ 8.6 deg per message, nowhere near the 60 deg stand-down
+  // budget for any SINGLE message (even at this session's field-confirmed
+  // ~1 Hz publish rate, a 20-message turn spans ~20 s, well within the
+  // ~23 s the field turn actually took).
+  int stuck_count_during_turn = 0;
+  for (int i = 0; i < 20; ++i)
+  {
+    if (tick(0.0, 0.15))  // ~8.6 deg this message; cumulative total ~171 deg.
+    {
+      ++stuck_count_during_turn;
+    }
+  }
+  // Every message during the turn should still correctly detect the stuck
+  // value — the whole point of the fix. The pre-fix accumulator would have
+  // stood down for the entire turn (and everything after it).
+  EXPECT_EQ(stuck_count_during_turn, 20);
+
+  // Straight driving resumes; value is STILL stuck. Detection must keep
+  // firing — this is what the field regression broke (it never fired again
+  // after the turn began).
+  EXPECT_TRUE(tick(0.2, 0.0));
+}
+
+TEST(GpsStuckGate, ASingleViolentSingleMessageRotationStandsDownThatMessageOnly)
+{
+  // The stand-down's actual purpose: one message whose OWN inter-fix
+  // rotation is implausibly large (a genuine in-place spin between two GPS
+  // messages) stands down for that message, but does not linger — the very
+  // next message, with normal rotation, evaluates normally again.
+  const double lat = 53.089172501;
+  const double lon = 6.169298185333333;
+  double last_lat = lat;
+  double last_lon = lon;
+  double wheel_dist_since_value_changed_m = 0.0;
+  double abs_dtheta_since_last_sample_rad = 0.0;
+  const double min_wheel_dist_m = 1.0;
+  const double max_yaw_rad = 1.047;
+
+  auto tick = [&](double wheel_dist_delta_m, double dtheta_delta_rad) -> bool
+  {
+    wheel_dist_since_value_changed_m += wheel_dist_delta_m;
+    if (fg::GpsValueChanged(lat, lon, last_lat, last_lon))
+    {
+      wheel_dist_since_value_changed_m = 0.0;
+    }
+    last_lat = lat;
+    last_lon = lon;
+    abs_dtheta_since_last_sample_rad += dtheta_delta_rad;
+    const bool stuck = fg::GpsStuckImplausible(wheel_dist_since_value_changed_m,
+                                               abs_dtheta_since_last_sample_rad,
+                                               min_wheel_dist_m,
+                                               max_yaw_rad);
+    abs_dtheta_since_last_sample_rad = 0.0;
+    return stuck;
+  };
+
+  // Cross the distance threshold first (6 x 0.2 m = 1.2 m, strictly over
+  // the 1.0 m min_wheel_dist_m threshold).
+  for (int i = 0; i < 6; ++i)
+  {
+    tick(0.2, 0.0);
+  }
+  // One message with an implausibly large single-interval rotation (90 deg
+  // between two GPS messages) stands down for that message only.
+  EXPECT_FALSE(tick(0.0, 1.6));
+  // The next message, normal rotation, evaluates normally — still stuck.
+  EXPECT_TRUE(tick(0.0, 0.0));
 }

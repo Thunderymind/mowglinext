@@ -686,16 +686,34 @@ private:
   // legitimate motion. See rtk_wrongfix_gate.hpp for the decision function.
   double rtk_wrongfix_max_jump_m_ = 0.05;
   // Stuck-receiver payload-value gate state (mowglinext#694,
-  // gps_stuck_gate.hpp). Independent of the wrong-fix accumulators above:
-  // those reset on every fix (accept or reject); these reset ONLY when
-  // msg->latitude/longitude actually differs from the previous sample —
-  // see gps_stuck_gate.hpp's header comment for why that distinction is
-  // load-bearing. NaN-initialized so the very first fix always counts as a
-  // change (NaN != NaN).
+  // gps_stuck_gate.hpp). NaN-initialized last_gps_lat_/lon_ so the very
+  // first fix always counts as a change (NaN != NaN).
+  //
+  // The two accumulators below have DELIBERATELY DIFFERENT reset semantics —
+  // this is not an inconsistency, each answers a different question:
+  //   - wheel_dist_since_gps_value_changed_m_ resets ONLY when
+  //     msg->latitude/longitude actually differs from the previous sample —
+  //     unbounded for as long as the receiver stays stuck. This is the
+  //     "how far has the chassis moved while GPS reported nothing new"
+  //     signal and MUST stay unbounded (see gps_stuck_gate.hpp and root
+  //     CLAUDE.md's "What NOT to Do" entry on this gate).
+  //   - abs_dtheta_since_last_gps_sample_rad_ resets on EVERY GPS message,
+  //     accept or reject — mirroring rtk_wrongfix_gate.hpp's own per-fix
+  //     reset philosophy. This is the "are we turning RIGHT NOW" stand-down
+  //     signal (GpsStuckImplausible's max_yaw_rad parameter). Field-confirmed
+  //     2026-09-21: an EARLIER version reset this only on value-change too —
+  //     during any real drive a single transit turn (one field session
+  //     integrated past 170°) blew past the stand-down threshold within
+  //     seconds and never recovered for the rest of the stuck period (the
+  //     accumulator can only grow while the receiver stays stuck), silently
+  //     disabling the whole gate for the remainder of the outage — exactly
+  //     the window where it mattered. A per-message reset keeps the
+  //     stand-down answering "is a turn happening close to *this* sample",
+  //     which is what mid-turn unreliability actually depends on.
   double last_gps_lat_ = std::numeric_limits<double>::quiet_NaN();
   double last_gps_lon_ = std::numeric_limits<double>::quiet_NaN();
   double wheel_dist_since_gps_value_changed_m_ = 0.0;
-  double abs_dtheta_since_gps_value_changed_rad_ = 0.0;
+  double abs_dtheta_since_last_gps_sample_rad_ = 0.0;
   double gps_stuck_min_wheel_dist_m_ = 1.0;
   double gps_stuck_max_yaw_rad_ = 1.047;
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the FULL
