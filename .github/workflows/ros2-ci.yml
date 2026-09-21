@@ -6,6 +6,7 @@ on:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'ros2/**'
+      - '.devcontainer/**'
       - 'tools/motor/**'
       - 'install/config/mowgli/**'
       - 'firmware/stm32/ros_usbnode/include/heartbeat_emergency_policy.hpp'
@@ -75,7 +76,7 @@ jobs:
             exit 0
           fi
           CHANGED=$(git diff --name-only "$BASE" HEAD -- \
-            'ros2/**' 'tools/motor/**' 'install/config/mowgli/**' \
+            'ros2/**' '.devcontainer/**' 'tools/motor/**' 'install/config/mowgli/**' \
             'firmware/stm32/ros_usbnode/include/heartbeat_emergency_policy.hpp' \
             '.github/workflows/ros2-ci.yml')
           if [ -n "$CHANGED" ]; then
@@ -391,6 +392,12 @@ jobs:
             -DMOWGLI_REQUIRE_MOSQUITTO=ON \
             --parallel-workers $(nproc) \
             --event-handlers console_cohesion+
+
+      - name: Test workspace package scripts
+        run: |
+          source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
+          source /opt/lyrical_vendor/local_setup.bash
+          python3 -m pytest -q scripts/test_workspace_package_scripts.py
 
       - name: Run tests
         run: |

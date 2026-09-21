@@ -714,25 +714,55 @@ TEST_F(GetNextUnmowedAreaTest, CrossHatchPhaseReachesPlannerAndEndSessionAdvance
   executor.add_node(ctx->node);
   factory.registerNodeType<mowgli_behavior::PlanCoverageArea>("PlanCoverageArea");
   areas[0] = {"lawn", false};
-  waitForService();
   ctx->mow_cross_hatch = true;
   auto plan = factory.createTreeFromText(
       "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Test\"><PlanCoverageArea/>"
       "</BehaviorTree></root>",
       blackboard);
+
+  auto dispatchNewRejectedPlannerGoal = [&]() -> bool
+  {
+    const size_t previous_goal_count = goals.size();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    BT::NodeStatus status = BT::NodeStatus::IDLE;
+    bool planner_started = false;
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      status = plan.tickOnce();
+      // PlanCoverageArea reaches RUNNING only after its own lazily-created
+      // get_mowing_area client sees the service and sends the request. A
+      // discovery miss returns FAILURE, so retry it while spinning instead
+      // of assuming a separate probe client's readiness applies to it.
+      planner_started = planner_started || status == BT::NodeStatus::RUNNING;
+      executor.spin_some();
+      if (planner_started && status == BT::NodeStatus::FAILURE &&
+          goals.size() > previous_goal_count)
+      {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    EXPECT_TRUE(planner_started);
+    EXPECT_EQ(status, BT::NodeStatus::FAILURE);  // fake action server rejects
+    EXPECT_EQ(goals.size(), previous_goal_count + 1);
+    return planner_started && status == BT::NodeStatus::FAILURE &&
+           goals.size() == previous_goal_count + 1;
+  };
+
   for (double angle : {-1.0, 25.0})
   {
     blackboard->set("mow_angle_deg", angle);
-    EXPECT_EQ(tickToCompletion(plan), BT::NodeStatus::FAILURE);  // fake server rejects
-    ASSERT_FALSE(goals.empty());
+    ASSERT_TRUE(dispatchNewRejectedPlannerGoal());
     EXPECT_DOUBLE_EQ(goals.back().mow_angle_deg, angle);
     EXPECT_FALSE(goals.back().perpendicular);
     ctx->cross_hatch[0].used = true;  // simulate coverage having started
     auto end = makeEndSessionTree();
     EXPECT_EQ(end.tickOnce(), BT::NodeStatus::SUCCESS);
-    EXPECT_EQ(tickToCompletion(plan), BT::NodeStatus::FAILURE);
+    ASSERT_TRUE(dispatchNewRejectedPlannerGoal());
     EXPECT_TRUE(goals.back().perpendicular);
-    EXPECT_EQ(tickToCompletion(plan), BT::NodeStatus::FAILURE);  // same-session replan
+    ASSERT_TRUE(dispatchNewRejectedPlannerGoal());  // same-session replan
     EXPECT_TRUE(goals.back().perpendicular);
     ctx->cross_hatch[0].used = true;
     EXPECT_EQ(end.tickOnce(), BT::NodeStatus::SUCCESS);
@@ -762,7 +792,10 @@ TEST_F(GetNextUnmowedAreaTest, SelectedAreaOnlyAdvancesThatArea)
 TEST_F(GetNextUnmowedAreaTest, OrientationServiceEditsNextWithoutChangingActivePlan)
 {
   using Service = mowgli_interfaces::srv::CoverageOrientation;
-  ctx->coverage_resume_path = ::testing::TempDir() + "/cross_hatch_service.txt";
+  const auto path = std::string(::testing::TempDir()) + "/cross_hatch_service.txt";
+  std::filesystem::remove_all(path);
+  std::filesystem::remove_all(path + ".tmp");
+  ctx->coverage_resume_path = path;
   ctx->mow_cross_hatch = true;
   ctx->node->declare_parameter<double>("mow_angle_deg", 25.0);
   ctx->cross_hatch[2].begin(true);
@@ -788,13 +821,13 @@ TEST_F(GetNextUnmowedAreaTest, OrientationServiceEditsNextWithoutChangingActiveP
     return future.get();
   };
   auto status = call();
-  ASSERT_TRUE(status->success);
+  ASSERT_TRUE(status->success) << status->message;
   EXPECT_TRUE(status->next_perpendicular);
   EXPECT_DOUBLE_EQ(status->base_angle_deg, 25.0);
   req->set_next = true;
   req->perpendicular = false;
   status = call();
-  ASSERT_TRUE(status->success);
+  ASSERT_TRUE(status->success) << status->message;
   EXPECT_TRUE(status->current_active);
   EXPECT_FALSE(status->current_perpendicular);
   EXPECT_FALSE(status->next_perpendicular);
@@ -803,8 +836,7 @@ TEST_F(GetNextUnmowedAreaTest, OrientationServiceEditsNextWithoutChangingActiveP
   EXPECT_FALSE(ctx->cross_hatch[2].begin(true));
   // Persistence failure must not pretend the requested change was saved.
   req->perpendicular = true;
-  const auto path = ctx->coverage_resume_path;
-  std::filesystem::create_directory(path + ".tmp");
+  ASSERT_TRUE(std::filesystem::create_directory(path + ".tmp"));
   EXPECT_FALSE(call()->success);
   EXPECT_FALSE(ctx->cross_hatch[2].next());
   BTContext disk;
