@@ -287,6 +287,8 @@ GraphStats GraphManager::Stats() const
   GraphStats s;
   s.total_nodes = next_index_;
   s.gps_rejects_wrongfix = stats_gps_rejects_wrongfix_;
+  s.gps_rejects_dead_reckoning = stats_gps_rejects_dead_reckoning_;
+  s.gps_rejects_stuck_value = stats_gps_rejects_stuck_value_;
   s.stationary_hand_push = stats_hand_push_;
   s.slip_veto = stats_slip_veto_;
   s.residual_ema_rad = residual_ema_;
@@ -300,6 +302,18 @@ void GraphManager::RecordGpsRejectWrongFix()
 {
   std::lock_guard<std::mutex> lock(mu_);
   ++stats_gps_rejects_wrongfix_;
+}
+
+void GraphManager::RecordGpsRejectDeadReckoning()
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  ++stats_gps_rejects_dead_reckoning_;
+}
+
+void GraphManager::RecordGpsRejectStuckValue()
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  ++stats_gps_rejects_stuck_value_;
 }
 
 // ─────────────────────────────────────────────────────────────────────

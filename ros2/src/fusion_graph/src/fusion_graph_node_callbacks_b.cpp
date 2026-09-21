@@ -397,4 +397,12 @@ void FusionGraphNode::OnHardwareStatus(mowgli_interfaces::msg::Status::ConstShar
   last_is_charging_valid_ = true;
 }
 
+void FusionGraphNode::OnLocalizationMode(std_msgs::msg::Int32::ConstSharedPtr msg)
+{
+  // LocalizationMode::DEAD_RECKONING == 0
+  // (mowgli_localization/localization_monitor_policy.hpp).
+  last_position_dead_reckoning_ = (msg->data == 0);
+  last_position_dead_reckoning_valid_ = true;
+}
+
 }  // namespace fusion_graph

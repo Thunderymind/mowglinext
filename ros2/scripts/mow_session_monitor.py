@@ -57,6 +57,7 @@ from tf2_ros import Buffer, TransformListener, TransformException
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import BatteryState, Imu, LaserScan, NavSatFix
+from std_msgs.msg import Int32
 
 
 # -----------------------------------------------------------------------------
@@ -111,6 +112,16 @@ QOS_RELIABLE = QoSProfile(
     durability=DurabilityPolicy.VOLATILE,
     history=HistoryPolicy.KEEP_LAST,
     depth=10,
+)
+
+# Matches localization_monitor_node's mode/mode_id publishers (rclcpp::QoS(1)
+# .transient_local()) — a VOLATILE subscriber is QoS-incompatible with a
+# TRANSIENT_LOCAL publisher and silently never connects.
+QOS_LATCHED = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
 )
 
 
@@ -203,7 +214,14 @@ class LatestState:
     fg_cov_yawyaw: Optional[float] = None
     fg_gyro_bias_z: Optional[float] = None
     fg_gps_rejects_wrongfix: Optional[int] = None
+    fg_gps_rejects_dead_reckoning: Optional[int] = None
+    fg_gps_rejects_stuck_value: Optional[int] = None
     fg_cog_flip_recoveries: Optional[int] = None
+    # localization_monitor_node's verdict on /mowgli/localization/mode_id
+    # (mowglinext#694) — LocalizationMode::DEAD_RECKONING == 0. The signal
+    # both fusion_graph's payload-staleness gate and the BT's LocalizationGuard
+    # pause on; captured directly instead of inferred from rtk_cov_check.
+    localization_mode_id: Optional[int] = None
 
     # --- BT / status ---
     bt_state: Optional[int] = None
@@ -277,6 +295,9 @@ class MowSessionMonitor(Node):
         self.peak_fusion_gps_err = 0.0
         self.peak_wheel_gyro_yaw_drift = 0.0
         self.peak_cog_fusion_yaw_gap = 0.0
+        # Ticks where localization_monitor_node reported DEAD_RECKONING (mode_id
+        # 0) — divide by rate_hz for wall-clock seconds spent untrusted.
+        self.dead_reckoning_ticks = 0
 
         # --- RTK covariance-drop check state ---
         # See the comment block above RTK_FIXED_GPS_COV_THRESHOLD for why this
@@ -328,6 +349,11 @@ class MowSessionMonitor(Node):
             sub("/fusion_graph/diagnostics", DiagnosticArray, self._fg_diag_cb, QOS_RELIABLE)
         except ImportError as exc:
             self.get_logger().warn(f"diagnostic_msgs not available: {exc} — fg diagnostics will be missing.")
+
+        # LocalizationMonitorNode's DEAD_RECKONING verdict (mowglinext#694) —
+        # QOS_LATCHED to match its transient_local publisher, so a monitor
+        # started mid-session still gets the current mode immediately.
+        sub("/mowgli/localization/mode_id", Int32, self._localization_mode_cb, QOS_LATCHED)
 
         # BT + hardware state — imported lazily so we only require the
         # mowgli_interfaces package when those topics are available
@@ -526,8 +552,16 @@ class MowSessionMonitor(Node):
                         self.state.fg_gyro_bias_z = _safe_float(kv.value)
                     elif kv.key == "gps_rejects_wrongfix":
                         self.state.fg_gps_rejects_wrongfix = _safe_int(kv.value)
+                    elif kv.key == "gps_rejects_dead_reckoning":
+                        self.state.fg_gps_rejects_dead_reckoning = _safe_int(kv.value)
+                    elif kv.key == "gps_rejects_stuck_value":
+                        self.state.fg_gps_rejects_stuck_value = _safe_int(kv.value)
                     elif kv.key == "cog_flip_recoveries":
                         self.state.fg_cog_flip_recoveries = _safe_int(kv.value)
+
+    def _localization_mode_cb(self, msg: Int32) -> None:
+        with self.state_lock:
+            self.state.localization_mode_id = int(msg.data)
 
     def _bt_cb(self, msg) -> None:
         with self.state_lock:
@@ -617,6 +651,9 @@ class MowSessionMonitor(Node):
         now_ros = self.get_clock().now().nanoseconds / 1e9
         with self.state_lock:
             s = self.state
+
+            if s.localization_mode_id == 0:
+                self.dead_reckoning_ticks += 1
 
             # --- TF snapshots (cartographer + fusion composition) ---
             carto = self._tf_lookup("map", "base_footprint")
@@ -742,8 +779,13 @@ class MowSessionMonitor(Node):
                     "cov_yawyaw": s.fg_cov_yawyaw,
                     "gyro_bias_z": s.fg_gyro_bias_z,
                     "gps_rejects_wrongfix": s.fg_gps_rejects_wrongfix,
+                    "gps_rejects_dead_reckoning": s.fg_gps_rejects_dead_reckoning,
+                    "gps_rejects_stuck_value": s.fg_gps_rejects_stuck_value,
                     "cog_flip_recoveries": s.fg_cog_flip_recoveries,
                 },
+                # LocalizationMode: 0=DEAD_RECKONING, 1=GPS_ONLY, 2=RTK_FLOAT,
+                # 3=RTK_FIXED (mowgli_localization/localization_monitor_policy.hpp).
+                "localization_mode_id": s.localization_mode_id,
                 "slam": {
                     # /slam/pose_cov, already in GPS map frame
                     "pose": {
@@ -930,6 +972,10 @@ class MowSessionMonitor(Node):
                 },
                 "final_battery_voltage": s.battery_voltage,
                 "final_bt_state_name": s.bt_state_name,
+                "dead_reckoning_sec": self.dead_reckoning_ticks / self.args.rate,
+                "final_gps_rejects_dead_reckoning": s.fg_gps_rejects_dead_reckoning,
+                "final_gps_rejects_stuck_value": s.fg_gps_rejects_stuck_value,
+                "final_localization_mode_id": s.localization_mode_id,
             }
         try:
             self.file.write(json.dumps(summary, default=_json_default) + "\n")

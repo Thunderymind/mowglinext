@@ -454,6 +454,91 @@ TEST(LocalizationHealthTest, MissingSigmaNeverLatchesTheBackstop)
   EXPECT_FALSE(degraded);
 }
 
+// ── Position-payload freshness backstop (mowglinext#694) ───────────────────
+//
+// Field 2026-09-20: a receiver reporting RTK-Fixed at 2.3 cm accuracy the
+// entire time, on a live on-schedule /gps/status feed, while /gps/fix's
+// lat/lon payload had frozen solid for minutes. gnss_fresh/gnss_accuracy_m
+// never saw anything wrong because neither is fed by the position topic.
+// LocalizationMonitorNode's own ObservationTracker on /gps/absolute_pose
+// already caught it in the field log; these tests pin that this guard now
+// actually acts on that signal instead of only logging it.
+
+TEST(LocalizationHealthTest, PositionStaleDegradesEvenWithHealthyGnssStatus)
+{
+  LocalizationHealthMonitor mon{LocalizationHealthCfg{}};
+
+  const bool degraded = RunFor(&mon,
+                               0.0,
+                               10.0,
+                               []()
+                               {
+                                 // Exactly the field trace: perfect GNSS
+                                 // status, but the position monitor reports
+                                 // DEAD_RECKONING.
+                                 auto obs = HealthyFix();
+                                 obs.position_mode_seen = true;
+                                 obs.position_dead_reckoning = true;
+                                 return obs;
+                               });
+
+  EXPECT_TRUE(degraded) << "a stale position payload must pause mowing even while "
+                           "GNSS status/accuracy looks perfectly healthy";
+  EXPECT_TRUE(mon.degraded());
+  EXPECT_EQ(mon.fault(), LocalizationFault::kPositionStale);
+}
+
+TEST(LocalizationHealthTest, PositionModeUnseenStaysInert)
+{
+  LocalizationHealthMonitor mon{LocalizationHealthCfg{}};
+
+  // A bring-up without LocalizationMonitorNode wired up (position_mode_seen
+  // stays false, the struct default) must not be blocked by a field it never
+  // receives — same reasoning as gnss_seen/MonitorIsInertBeforeAnyGnssStatus.
+  const bool degraded = RunFor(&mon,
+                               0.0,
+                               10.0,
+                               []()
+                               {
+                                 return HealthyFix();
+                               });
+
+  EXPECT_FALSE(degraded);
+  EXPECT_EQ(mon.fault(), LocalizationFault::kNone);
+}
+
+TEST(LocalizationHealthTest, PositionFreshRecoveryReleasesTheLatch)
+{
+  LocalizationHealthMonitor mon{LocalizationHealthCfg{}};
+
+  ASSERT_TRUE(RunFor(&mon,
+                     0.0,
+                     10.0,
+                     []()
+                     {
+                       auto obs = HealthyFix();
+                       obs.position_mode_seen = true;
+                       obs.position_dead_reckoning = true;
+                       return obs;
+                     }));
+
+  // The position monitor reports a genuinely fresh observation again; the
+  // default gnss_resume_persist_s (2 s) governs how long it must hold.
+  RunFor(&mon,
+         20.0,
+         10.0,
+         []()
+         {
+           auto obs = HealthyFix();
+           obs.position_mode_seen = true;
+           obs.position_dead_reckoning = false;
+           return obs;
+         });
+
+  EXPECT_FALSE(mon.degraded());
+  EXPECT_EQ(mon.fault(), LocalizationFault::kNone);
+}
+
 // ── PersistentLatch itself ─────────────────────────────────────────────────
 
 TEST(PersistentLatchTest, RequiresSustainedConditionInBothDirections)

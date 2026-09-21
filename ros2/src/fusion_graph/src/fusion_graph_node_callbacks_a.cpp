@@ -20,6 +20,7 @@
 #include "fusion_graph/dr_slip_veto.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include "fusion_graph/gps_stuck_gate.hpp"
 #include "fusion_graph/rtk_wrongfix_gate.hpp"
 
 namespace fusion_graph
@@ -48,6 +49,11 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
       // test, only how far the chassis travelled.
       const double speed = std::hypot(msg->twist.twist.linear.x, msg->twist.twist.linear.y);
       wheel_dist_since_last_gps_m_ += speed * dt;
+      // Parallel accumulator for the stuck-receiver gate (mowglinext#694) —
+      // see gps_stuck_gate.hpp. Independent of wheel_dist_since_last_gps_m_
+      // above: that one resets on every fix (accept or reject); this one
+      // resets only when the reported GPS VALUE actually changes.
+      wheel_dist_since_gps_value_changed_m_ += speed * dt;
     }
   }
   last_wheel_stamp_ = stamp;
@@ -95,6 +101,9 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       // pure-sweep jump as if it were a phantom translation and
       // rejects every legitimate fix.
       abs_dtheta_since_last_gps_rad_ += std::abs(gz) * dt;
+      // Parallel accumulator for the stuck-receiver gate — see the matching
+      // comment in OnWheelOdom above.
+      abs_dtheta_since_gps_value_changed_rad_ += std::abs(gz) * dt;
     }
   }
   if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
@@ -180,6 +189,21 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
 
   double mx, my;
   LatLonToMap(msg->latitude, msg->longitude, mx, my);
+
+  // Payload-value change tracking for the stuck-receiver gate further below
+  // (mowglinext#694 — see gps_stuck_gate.hpp). Runs here, unconditionally,
+  // for every sample that reached this point — i.e. since the reported GPS
+  // VALUE last changed — so the accumulators stay correct even though the
+  // wrong-fix/sigma/docking gates below can each return before reaching the
+  // stuck check itself. NaN-initialized last_gps_lat_/lon_ always count the
+  // first real fix as a change.
+  if (GpsValueChanged(msg->latitude, msg->longitude, last_gps_lat_, last_gps_lon_))
+  {
+    wheel_dist_since_gps_value_changed_m_ = 0.0;
+    abs_dtheta_since_gps_value_changed_rad_ = 0.0;
+  }
+  last_gps_lat_ = msg->latitude;
+  last_gps_lon_ = msg->longitude;
 
   // RTK wrong-fix detection — fires before any QueueGnss so a bad
   // sample never reaches iSAM2. F9P can re-solve the carrier-phase
@@ -439,6 +463,64 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     dock_gps_disagreement_m_ = 0.0;
   }
   const bool docked_gps_override = last_is_charging_valid_ && last_is_charging_;
+
+  // Payload-staleness backstops (mowglinext#694). gnss_observation_tracker_
+  // above only rejects a REPUBLISHED sample (identical receipt stamp); it
+  // cannot see a receiver whose receipt stamp keeps genuinely advancing while
+  // the position it reports has stopped moving.
+  //
+  // Two independent checks, in order, because field data (two full sessions,
+  // 2026-09-20) DISPROVED the assumption that the first one alone would
+  // catch this: LocalizationMonitorNode's DEAD_RECKONING verdict was meant
+  // to cover it (it pairs /gps/fix with /gps/status's typed
+  // position_observation_sequence, a check deliberately not duplicated
+  // inside this node — see the MGNSS-002 comment above), but in both
+  // recorded sessions /gps/fix stayed bit-for-bit frozen at one lat/lon for
+  // the ENTIRE session (49 s and 70 s) while the robot demonstrably moved,
+  // and LocalizationMonitorNode never once reported DEAD_RECKONING —
+  // apparently the receiver's own position_observation_sequence advances on
+  // its internal acceptance cadence, not on the solved position actually
+  // changing, so sequence-based pairing is blind to this specific failure.
+  // Kept anyway (cheap, and catches genuine cached-republication cases);
+  // the second check is what actually catches the observed bug.
+  //
+  // Placed AFTER the docking block on purpose: while genuinely docked (not
+  // yielding), dock_pose is authoritative regardless of receiver health —
+  // Invariant 6 — so that branch's periodic re-anchor must not be gated on
+  // GPS trust it does not need. Both DO apply to the "yielding" docked case
+  // just below (a confident RTK-Fixed sample overriding the dock prior),
+  // where a stuck receiver must not be allowed to win that override.
+  if (last_position_dead_reckoning_valid_ && last_position_dead_reckoning_)
+  {
+    graph_->RecordGpsRejectDeadReckoning();
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "fusion_graph: LocalizationMonitorNode reports DEAD_RECKONING "
+                         "(position payload stale under a live receipt stamp) — "
+                         "GNSS sample withheld");
+    return;
+  }
+  // Direct payload-value comparison — see gps_stuck_gate.hpp. Tracks how far
+  // the chassis has travelled since msg->latitude/longitude last actually
+  // differed from the previous sample; the accumulators live alongside (but
+  // are independent of) the wrong-fix gate's, and are updated unconditionally
+  // above (search "since the reported GPS VALUE last changed") so they stay
+  // correct across every earlier return in this function too.
+  if (GpsStuckImplausible(wheel_dist_since_gps_value_changed_m_,
+                          abs_dtheta_since_gps_value_changed_rad_,
+                          gps_stuck_min_wheel_dist_m_,
+                          gps_stuck_max_yaw_rad_))
+  {
+    graph_->RecordGpsRejectStuckValue();
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "fusion_graph: /gps/fix value unchanged for %.2f m of wheel travel "
+                         "(receipt stamp still advancing) — sample dropped as stuck",
+                         wheel_dist_since_gps_value_changed_m_);
+    return;
+  }
   // GNSS bridges preserve the receiver measurement epoch in header.stamp,
   // which may precede callback delivery by hundreds of milliseconds or more.
   // Resolve that epoch only after the quality/docking gates above so the

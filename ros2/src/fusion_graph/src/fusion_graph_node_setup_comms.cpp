@@ -180,6 +180,16 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       10,
       std::bind(&FusionGraphNode::OnHighLevelStatus, this, std::placeholders::_1));
 
+  // LocalizationMonitorNode's DEAD_RECKONING verdict (mowglinext#694) — see
+  // last_position_dead_reckoning_ for why OnGnss needs this independent of its
+  // own receipt-stamp dedup. transient_local depth 1 to match the publisher (a
+  // "latched" mode topic), so this node sees the current mode immediately on
+  // startup rather than only the next transition.
+  sub_localization_mode_ = create_subscription<std_msgs::msg::Int32>(
+      "/mowgli/localization/mode_id",
+      rclcpp::QoS(1).transient_local(),
+      std::bind(&FusionGraphNode::OnLocalizationMode, this, std::placeholders::_1));
+
   if (auto_save_enabled_)
   {
     if (periodic_save_period_s > 0.0)
@@ -482,6 +492,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         // to get a rate. A spike on any of these is
         // worth surfacing — see PR notes.
         add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
+        add("gps_rejects_dead_reckoning", std::to_string(stats.gps_rejects_dead_reckoning));
+        add("gps_rejects_stuck_value", std::to_string(stats.gps_rejects_stuck_value));
         add("stationary_hand_push", std::to_string(stats.stationary_hand_push));
         add("slip_veto", std::to_string(stats.slip_veto));
         add("live_nodes", std::to_string(graph_->LiveNodeCount()));

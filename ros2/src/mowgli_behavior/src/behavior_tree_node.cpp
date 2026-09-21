@@ -58,6 +58,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/int32.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
@@ -579,6 +580,31 @@ private:
           }
           updateLocalizationHealthLocked();
         });
+
+    // LocalizationGuard's position-payload freshness backstop (mowglinext#694):
+    // /gps/status staying live only proves the RECEIVER's own health/status
+    // feed is alive, not that the POSITION it reports is still updating —
+    // field-confirmed 2026-09-20, an RTK-Fixed receiver with a perfectly live
+    // /gps/status kept /gps/fix's lat/lon frozen for minutes. LocalizationMonitorNode
+    // (mowgli_localization) already computes the right answer for this from
+    // /gps/absolute_pose; reuse it here instead of re-deriving position
+    // freshness a second time. transient_local depth 1 to match the
+    // publisher (a "latched" mode topic), so a late-starting BT sees the
+    // current mode immediately rather than only the next transition.
+    localization_mode_sub_ =
+        create_subscription<std_msgs::msg::Int32>("/mowgli/localization/mode_id",
+                                                  rclcpp::QoS(1).transient_local(),
+                                                  [this](std_msgs::msg::Int32::ConstSharedPtr msg)
+                                                  {
+                                                    std::lock_guard<std::mutex> lock(
+                                                        context_->context_mutex);
+                                                    loc_obs_.position_mode_seen = true;
+                                                    // LocalizationMode::DEAD_RECKONING == 0
+                                                    // (mowgli_localization/localization_monitor_policy.hpp).
+                                                    loc_obs_.position_dead_reckoning =
+                                                        (msg->data == 0);
+                                                    updateLocalizationHealthLocked();
+                                                  });
 
     // collision_monitor state — used by IsObstacleStuck to detect when
     // the robot is wedged on an obstacle (PolygonStop active for ≥5 s).
@@ -1321,6 +1347,7 @@ private:
       gnss_observation_freshness_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr gnss_status_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr localization_mode_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_liveness_sub_;
 
