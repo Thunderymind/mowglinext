@@ -140,7 +140,7 @@ TEST(HighLevelStatusSnapshot, GuiRatioPairMirrorsSwathCounts)
   EXPECT_EQ(refreshed.current_path_index, 6);
 }
 
-// ctx.transiting is the one deliberate exception to "sub_state_name is
+// ctx.transiting is one deliberate exception to "sub_state_name is
 // tree-owned, carried through untouched": FollowStrip's transit begins/ends
 // mid-invocation, between tree ticks, so only this live projection (ticked
 // every onRunning() cycle and by the 1 Hz republish) can track it.
@@ -154,15 +154,47 @@ TEST(HighLevelStatusSnapshot, TransitingOverridesSubStateName)
   EXPECT_EQ(refreshed.sub_state_name, "TRANSIT");
 }
 
-// The common case: not transiting must leave sub_state_name exactly as
-// PublishHighLevelStatus cached it (today always "", but the projection must
-// not assume that — it should carry whatever is there, not blank it).
-TEST(HighLevelStatusSnapshot, NotTransitingCarriesCachedSubStateName)
+// ctx.coverage_plausibility_warning is the other deliberate exception:
+// issue #680's completion cross-check (FollowStrip::checkCoveragePlausibility,
+// coverage_nodes.cpp) can flip it mid-session, between tree ticks, so only
+// this live projection can track it and keep it visible through to the
+// final report rather than only flash at the instant it was set.
+TEST(HighLevelStatusSnapshot, CoveragePlausibilityWarningOverridesSubStateName)
+{
+  BTContext ctx;
+  ctx.coverage_plausibility_warning = true;
+
+  const HighLevelStatus refreshed = withLiveStatusFields(chargingSnapshot(), ctx);
+
+  EXPECT_EQ(refreshed.sub_state_name, "COVERAGE_INCOMPLETE");
+}
+
+// TRANSIT wins when both happen to be true in the same tick (a later area
+// still mowing after an earlier one was flagged) — cosmetic only, the
+// warning reappears on the next non-transiting tick, but the priority order
+// itself must be deliberate, not accidental.
+TEST(HighLevelStatusSnapshot, TransitingTakesPriorityOverThePlausibilityWarning)
+{
+  BTContext ctx;
+  ctx.transiting = true;
+  ctx.coverage_plausibility_warning = true;
+
+  const HighLevelStatus refreshed = withLiveStatusFields(chargingSnapshot(), ctx);
+
+  EXPECT_EQ(refreshed.sub_state_name, "TRANSIT");
+}
+
+// The common case: neither exception active must leave sub_state_name
+// exactly as PublishHighLevelStatus cached it (today always "", but the
+// projection must not assume that — it should carry whatever is there, not
+// blank it).
+TEST(HighLevelStatusSnapshot, NeitherOverrideCarriesCachedSubStateName)
 {
   HighLevelStatus cached = chargingSnapshot();
   cached.sub_state_name = "SOME_FUTURE_SUB_STATE";
   BTContext ctx;
   ctx.transiting = false;
+  ctx.coverage_plausibility_warning = false;
 
   const HighLevelStatus refreshed = withLiveStatusFields(cached, ctx);
 

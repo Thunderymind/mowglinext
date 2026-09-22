@@ -32,16 +32,23 @@ mowgli_interfaces::msg::HighLevelStatus withLiveStatusFields(
   msg.state = base.state;
   msg.state_name = base.state_name;
   msg.sub_state_name = base.sub_state_name;
-  // EXCEPTION: sub_state_name also carries FollowStrip's live transit flag,
-  // which changes mid-FollowStrip while the tree isn't re-ticking
-  // PublishHighLevelStatus (that node only ticks on a tree transition, per
-  // its own comment) — so only this per-tick/1 Hz-republish projection can
-  // track it accurately. Overridden, not appended: a transit is orthogonal
-  // to which AUTONOMOUS sub-branch is active, and nothing else currently
-  // populates this field (PublishHighLevelStatus always writes "").
+  // EXCEPTION: sub_state_name also carries two live overrides that change
+  // mid-invocation, between tree ticks, so only this per-tick/1 Hz-republish
+  // projection can track them accurately. Overridden, not appended: nothing
+  // else currently populates this field (PublishHighLevelStatus always
+  // writes ""). TRANSIT wins if both happen to be true on the same tick (a
+  // later area still mowing after an earlier one was flagged) — cosmetic
+  // only, the warning reappears the next non-transiting tick.
   if (ctx.transiting)
   {
     msg.sub_state_name = "TRANSIT";
+  }
+  else if (ctx.coverage_plausibility_warning)
+  {
+    // Issue #680: FollowStrip::checkCoveragePlausibility (coverage_nodes.cpp)
+    // can flip this mid-session; it must stay visible through to the final
+    // report rather than only flash at the instant it was set.
+    msg.sub_state_name = "COVERAGE_INCOMPLETE";
   }
 
   msg.current_area = static_cast<int16_t>(ctx.current_area);
