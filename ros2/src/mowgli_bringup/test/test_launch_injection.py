@@ -547,3 +547,20 @@ def test_full_system_launches_fleet_peer_obstacles_unconditionally() -> None:
         assert "scripts/fleet_peer_obstacles.py" in fh.read(), (
             "fleet_peer_obstacles.py is launched but not installed by CMakeLists.txt"
         )
+
+
+def test_dock_pose_reaches_mqtt_bridge() -> None:
+    """<prefix>/area_boundary carries the dock pose, so the bridge must be given it.
+
+    mqtt_bridge_node declares dock_pose_x/y/yaw with a 0.0 default, which it treats
+    as "no dock calibrated" and then publishes no dock at all.
+    """
+    call = _find_node_call(_parse("full_system.launch.py"), "mqtt_bridge_node")
+    assert call is not None
+    for key in ("dock_pose_x", "dock_pose_y", "dock_pose_yaw"):
+        values = _node_parameter_values(call, key)
+        assert len(values) == 1, key
+        expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+        scope = {"__builtins__": {}, "float": float}
+        assert eval(expression, scope, {"robot_params": {key: 1.25}}) == 1.25, key
+        assert eval(expression, scope, {"robot_params": {}}) == 0.0, key

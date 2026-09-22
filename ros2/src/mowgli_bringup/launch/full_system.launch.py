@@ -714,6 +714,14 @@ def generate_launch_description() -> LaunchDescription:
                 "datum_lat": datum_lat,
                 "datum_lon": datum_lon,
             },
+            # Charging dock pose (map frame), shown on <prefix>/area_boundary. Same
+            # robot_params source as hardware_bridge / map_server; read at startup,
+            # like they do (a dock re-calibration takes effect after a restart).
+            {
+                "dock_pose_x": float(robot_params.get("dock_pose_x", 0.0)),
+                "dock_pose_y": float(robot_params.get("dock_pose_y", 0.0)),
+                "dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0)),
+            },
         ],
     )
 
