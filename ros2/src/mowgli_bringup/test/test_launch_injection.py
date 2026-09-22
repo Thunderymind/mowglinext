@@ -440,6 +440,30 @@ def test_home_assistant_discovery_setting_reaches_mqtt_bridge() -> None:
                     {"robot_params": config}) is expected
 
 
+def test_datum_reaches_mqtt_bridge() -> None:
+    """<prefix>/area_boundary carries the datum its metre coordinates are relative to.
+
+    mqtt_bridge_node declares datum_lat/datum_lon with a 0.0 default, so if the
+    launch file stops injecting them every consumer that projects a real GPS
+    fix through the published datum places the mower thousands of km away
+    (found through the Home Assistant map camera, 2026-09-21).
+    """
+    tree = _parse("full_system.launch.py")
+    call = _find_node_call(tree, "mqtt_bridge_node")
+    assert call is not None
+    for key in ("datum_lat", "datum_lon"):
+        values = _node_parameter_values(call, key)
+        assert len(values) == 1, key
+        # It must be the variable the localizer / map_server are fed from (read once
+        # from robot_params near the WGS84 datum block), not a literal.
+        assert isinstance(values[0], ast.Name) and values[0].id == key, key
+        assert any(
+            isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == key for t in n.targets)
+            for n in ast.walk(tree)
+        ), key
+
+
 @pytest.mark.parametrize(
     "launch_file", ["navigation.launch.py", "full_system.launch.py"])
 def test_no_closure_rebinds_a_name_of_its_enclosing_function(
