@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -153,6 +154,11 @@ func TestFleet_SnapshotMirrorsPeerTopicsAndLiveness(t *testing.T) {
 func TestFleet_CommandsProxyToPeerAndRunLocallyForSelf(t *testing.T) {
 	a := newFleetRobot(t, "alpha")
 	b := newFleetRobot(t, "bravo")
+	for _, ros := range []*types.MockRosProvider{a.ros, b.ros} {
+		ros.ServiceResponder = func(_ string, _ any, res any) {
+			res.(*mowgli.HighLevelControlRes).Success = true
+		}
+	}
 	resp, body := a.post(t, "/api/fleet/peers", map[string]string{"address": b.addr})
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 
