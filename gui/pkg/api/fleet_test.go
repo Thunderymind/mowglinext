@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -92,6 +93,8 @@ func TestFleet_AddPeerIsSymmetric(t *testing.T) {
 	require.Len(t, bPeers, 1)
 	assert.Equal(t, b.id, aPeers[0].ID)
 	assert.Equal(t, a.id, bPeers[0].ID)
+	assert.Equal(t, providers.FleetAPIVersion, aPeers[0].APIVersion)
+	assert.Equal(t, providers.FleetAPIVersion, bPeers[0].APIVersion)
 	assert.Equal(t, a.addr, bPeers[0].Address, "peer stored our source IP + API port")
 
 	raw, err := a.db.Get("fleet.peers")
@@ -142,6 +145,7 @@ func TestFleet_SnapshotMirrorsPeerTopicsAndLiveness(t *testing.T) {
 	assert.False(t, peer.Self)
 	assert.Equal(t, "bravo", peer.Identity.Name)
 	assert.Equal(t, b.addr, peer.Address)
+	assert.Equal(t, providers.FleetAPIVersion, peer.Identity.APIVersion)
 	assert.JSONEq(t, `{"state":2,"state_name":"MOWING","current_area":1}`, string(peer.Topics["highLevelStatus"]))
 	assert.NotNil(t, peer.LastSeen)
 }
@@ -174,11 +178,31 @@ func TestFleet_CommandToOfflinePeerIs502(t *testing.T) {
 	b := newFleetRobot(t, "bravo")
 	resp, body := a.post(t, "/api/fleet/peers", map[string]string{"address": b.addr})
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	require.Eventually(t, func() bool {
+		b.ros.Dispatch("highLevelStatus", []byte(`{"state":1,"state_name":"IDLE"}`))
+		rows, err := a.fleet.Robots()
+		return err == nil && len(rows) == 2 && rows[1].Online && rows[1].Identity.APIVersion == providers.FleetAPIVersion
+	}, 3*time.Second, 10*time.Millisecond, "peer identity refresh completes before simulating an outage")
 	b.srv.Close()
 
 	resp, body = a.post(t, "/api/fleet/robots/"+b.id+"/call/high_level_control", map[string]any{"Command": 1})
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode, string(body))
 	assert.Contains(t, string(body), "unreachable")
+}
+
+func TestFleet_CommandToIncompatiblePeerIs409(t *testing.T) {
+	a := newFleetRobot(t, "alpha")
+	host, portString, err := net.SplitHostPort(a.addr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portString)
+	require.NoError(t, err)
+	_, err = a.fleet.RegisterPeer("peer-id", "bravo", host, port, providers.FleetAPIVersion+1)
+	require.NoError(t, err)
+
+	resp, body := a.post(t, "/api/fleet/robots/peer-id/call/high_level_control", map[string]any{"Command": 1})
+	assert.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	assert.Contains(t, string(body), "incompatible")
+	assert.Empty(t, a.ros.ServiceCalls, "an incompatible peer command is rejected before reaching ROS")
 }
 
 func TestFleet_RemovePeerForgetsBothSides(t *testing.T) {
