@@ -29,6 +29,10 @@ export function useTeleopControl() {
     const [uri, setUri] = useState<string | null>(null);
     const [controlState, setControlState] = useState<TeleopControlState>("disconnected");
     const pendingAcquireRef = useRef(false);
+    // Keep the active operator's intent across transient WebSocket drops.
+    // The backend zeros motion and releases the lease on disconnect, so a
+    // reconnect may reacquire only if the session is still available.
+    const wantsControlRef = useRef(false);
     const revisionRef = useRef(-1);
 
     const socket = useWebSocket(uri, {
@@ -38,9 +42,13 @@ export function useTeleopControl() {
         reconnectInterval: (attempt: number) => Math.min(1000 * Math.pow(2, attempt), 30000),
         onClose: () => {
             revisionRef.current = -1;
+            pendingAcquireRef.current = wantsControlRef.current;
             setControlState("disconnected");
         },
-        onError: () => setControlState("disconnected"),
+        onError: () => {
+            pendingAcquireRef.current = wantsControlRef.current;
+            setControlState("disconnected");
+        },
         onMessage: (event: MessageEvent) => {
             let message: unknown;
             try {
@@ -51,15 +59,27 @@ export function useTeleopControl() {
             }
             if (!isTeleopStateMessage(message) || message.revision < revisionRef.current) return;
             revisionRef.current = message.revision;
-            if (message.state === "stopped") pendingAcquireRef.current = false;
+            if (message.state === "stopped" || message.state === "busy") {
+                // STOP is authoritative; a conflicting owner is also not
+                // silently displaced when this socket reconnects.
+                pendingAcquireRef.current = false;
+                wantsControlRef.current = false;
+            } else if (message.state === "owner") {
+                pendingAcquireRef.current = false;
+                wantsControlRef.current = true;
+            } else if (message.state === "available" && wantsControlRef.current) {
+                // Reacquire after lease expiry or a transient disconnect.
+                // handleJoyMove clears the held stick when ownership drops,
+                // so this never resumes stale non-zero motion.
+                pendingAcquireRef.current = true;
+            }
             setControlState(message.state);
         },
     });
 
-    // An acquire requested before the high-level state opened the socket waits
-    // until the backend confirms that the new manual/recording session is
-    // available. STOP clears this pending intent, so an old owner is never
-    // automatically restored after a stop or disconnect.
+    // Acquisition waits until the backend confirms the session is available.
+    // A transient disconnect preserves intent; STOP and another active owner
+    // clear it, preventing stale or conflicting automatic takeovers.
     useEffect(() => {
         if (socket.readyState !== ReadyState.OPEN || controlState !== "available" || !pendingAcquireRef.current) return;
         pendingAcquireRef.current = false;
@@ -80,6 +100,7 @@ export function useTeleopControl() {
 
     const stop = useCallback(() => {
         pendingAcquireRef.current = false;
+        wantsControlRef.current = false;
         if (controlState === "owner") socket.sendJsonMessage({type: "release"});
         setUri(null);
         setControlState("disconnected");
@@ -87,6 +108,8 @@ export function useTeleopControl() {
     }, [controlState, socket]);
 
     const requestControl = useCallback(() => {
+        if (controlState === "busy") return;
+        wantsControlRef.current = true;
         pendingAcquireRef.current = true;
         // Setting the same state does not re-render, so send immediately when
         // the socket is already known to be available.
@@ -98,11 +121,13 @@ export function useTeleopControl() {
 
     const releaseControl = useCallback(() => {
         pendingAcquireRef.current = false;
+        wantsControlRef.current = false;
         socket.sendJsonMessage({type: "release"});
     }, [socket]);
 
     const globalStop = useCallback(() => {
         pendingAcquireRef.current = false;
+        wantsControlRef.current = false;
         socket.sendJsonMessage({type: "stop"});
     }, [socket]);
 

@@ -45,6 +45,26 @@ describe('useManualMode', () => {
         expect(result.current.manualMode).toBe(true);
     });
 
+    it('requests teleop control only after the manual-mode request succeeds', async () => {
+        let completeAction!: () => void;
+        mowerAction = vi.fn(() => () => new Promise<void>((resolve) => {
+            completeAction = resolve;
+        }));
+        const {result} = renderManualMode();
+
+        let pending!: Promise<void>;
+        act(() => {
+            pending = result.current.handleManualMode();
+        });
+        expect(requestControl).not.toHaveBeenCalled();
+
+        await act(async () => {
+            completeAction();
+            await pending;
+        });
+        expect(requestControl).toHaveBeenCalledTimes(1);
+    });
+
     it('stops in place, disables the blade, and deactivates manual mode', async () => {
         const {result} = renderManualMode();
         await act(async () => {

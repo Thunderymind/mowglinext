@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,18 +22,23 @@ func teleopTestServer(t *testing.T, lease time.Duration) (*httptest.Server, *typ
 	provider := types.NewMockRosProvider()
 	controller := newTeleopController(provider)
 	controller.lease = lease
+	controller.enable()
 	router := gin.New()
 	PublisherRoute(router.Group("/api/mowglinext"), controller)
 	return httptest.NewServer(router), provider, controller
 }
 
 func connectTeleop(t *testing.T, server *httptest.Server) *websocket.Conn {
+	return connectTeleopExpect(t, server, "available")
+}
+
+func connectTeleopExpect(t *testing.T, server *httptest.Server, initialState string) *websocket.Conn {
 	t.Helper()
 	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/mowglinext/publish/joy"
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	assertTeleopState(t, conn, "available")
+	assertTeleopState(t, conn, initialState)
 	return conn
 }
 
@@ -105,6 +111,132 @@ func TestTeleopOnlyOwnerCanPublishAndAnyClientCanStop(t *testing.T) {
 		return len(provider.GetPublishes()) == 3
 	}, time.Second, 10*time.Millisecond)
 	assert.Equal(t, -0.1, provider.GetPublishes()[2].Msg.(*geometry.TwistStamped).Twist.Linear.X)
+}
+
+type pausedPublishProvider struct {
+	*types.MockRosProvider
+	entered chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func (p *pausedPublishProvider) Publish(topic string, msgType string, msg interface{}) error {
+	if command, ok := msg.(*geometry.TwistStamped); ok && command.Twist.Linear.X != 0 {
+		p.once.Do(func() {
+			close(p.entered)
+			<-p.resume
+		})
+	}
+	return p.MockRosProvider.Publish(topic, msgType, msg)
+}
+
+func TestTeleopGlobalStopSerializesBehindAnInFlightMotionPublish(t *testing.T) {
+	base := types.NewMockRosProvider()
+	provider := &pausedPublishProvider{
+		MockRosProvider: base,
+		entered:         make(chan struct{}),
+		resume:          make(chan struct{}),
+	}
+	controller := newTeleopController(provider)
+	controller.lease = time.Hour
+	controller.enable()
+	owner := &teleopClient{}
+	controller.acquire(owner)
+
+	commandDone := make(chan struct{})
+	go func() {
+		controller.command(owner, twist(0.2))
+		close(commandDone)
+	}()
+	select {
+	case <-provider.entered:
+	case <-time.After(time.Second):
+		t.Fatal("non-zero publish did not reach the pause point")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		controller.globalStop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+		t.Fatal("STOP completed while an earlier motion publish was still in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(provider.resume)
+	select {
+	case <-commandDone:
+	case <-time.After(time.Second):
+		t.Fatal("motion publish did not finish")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("STOP did not finish after the motion publish")
+	}
+
+	published := base.GetPublishes()
+	require.Len(t, published, 2)
+	assert.Equal(t, 0.2, published[0].Msg.(*geometry.TwistStamped).Twist.Linear.X)
+	assert.Equal(t, float64(0), published[1].Msg.(*geometry.TwistStamped).Twist.Linear.X)
+}
+
+func TestTeleopStartsBlockedUntilAnExplicitSessionIsEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	provider := types.NewMockRosProvider()
+	controller := newTeleopController(provider)
+	router := gin.New()
+	PublisherRoute(router.Group("/api/mowglinext"), controller)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn := connectTeleopExpect(t, server, "stopped")
+	sendTeleop(t, conn, map[string]any{"type": "acquire"})
+	assertTeleopState(t, conn, "stopped")
+	require.Empty(t, provider.GetPublishes())
+
+	controller.enable()
+	assertTeleopState(t, conn, "available")
+	sendTeleop(t, conn, map[string]any{"type": "acquire"})
+	assertTeleopState(t, conn, "owner")
+}
+
+func TestHighLevelStopCannotBeUndoneByAnOlderManualTransition(t *testing.T) {
+	controller := newTeleopController(types.NewMockRosProvider())
+	manualCallStarted := make(chan struct{})
+	finishManualCall := make(chan struct{})
+	manualDone := make(chan struct{})
+	go func() {
+		_ = controller.highLevelTransition(7, func() error {
+			close(manualCallStarted)
+			<-finishManualCall
+			return nil
+		})
+		close(manualDone)
+	}()
+	select {
+	case <-manualCallStarted:
+	case <-time.After(time.Second):
+		t.Fatal("manual transition did not start")
+	}
+
+	controller.globalStop()
+	controller.mu.Lock()
+	assert.True(t, controller.blocked, "STOP must block teleop immediately")
+	controller.mu.Unlock()
+
+	close(finishManualCall)
+	select {
+	case <-manualDone:
+	case <-time.After(time.Second):
+		t.Fatal("manual transition did not finish")
+	}
+	controller.mu.Lock()
+	assert.True(t, controller.blocked, "the late manual response must not undo STOP")
+	assert.Nil(t, controller.owner)
+	controller.mu.Unlock()
 }
 
 func TestTeleopLeaseExpiryStopsAndReleasesControl(t *testing.T) {

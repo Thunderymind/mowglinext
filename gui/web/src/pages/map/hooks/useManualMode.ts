@@ -87,13 +87,15 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
     }, []);
 
     const handleManualMode = async () => {
-        // Remember the operator's intent before the BT transition opens the
-        // teleop socket. Other tabs observe the mode but never acquire.
-        joyStream.requestControl();
         // Joy stream is auto-started by useMapStreams when state becomes MANUAL_MOWING.
         // Send the command first — the BT will transition to MANUAL_MOWING state.
         try {
             await mowerAction("high_level_control", {Command: 7})();
+            // The API opens the teleop session before this request resolves.
+            // Requesting earlier can race the websocket's initial `stopped`
+            // snapshot, which clears pending intent and leaves the operator
+            // needing an extra Take Control click even when nobody owns it.
+            joyStream.requestControl();
         } catch (error) {
             joyStream.releaseControl();
             throw error;

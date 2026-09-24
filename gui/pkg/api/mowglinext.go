@@ -520,23 +520,17 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider, teleop *t
 				return
 			}
 			// Every high-level transition except entering a teleop mode revokes
-			// browser drive ownership. COMMAND_STOP is therefore accepted from
-			// every client and stale owner frames cannot restart motion.
-			teleopMode := CallReq.Command == 3 || CallReq.Command == 7
-			if !teleopMode {
-				teleop.globalStop()
-			}
-			err = provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &CallRes, "mowgli_interfaces/srv/HighLevelControl")
-			if err == nil && !CallRes.Success {
-				err = errors.New("high_level_control rejected the command")
-			}
-			if teleopMode {
-				if err == nil {
-					teleop.enable()
-				} else {
-					teleop.globalStop()
+			// browser drive ownership. Keep the ROS call and teleop gate update
+			// ordered with every other transition, including global STOP.
+			err = teleop.highLevelTransition(CallReq.Command, func() error {
+				if callErr := provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &CallRes, "mowgli_interfaces/srv/HighLevelControl"); callErr != nil {
+					return callErr
 				}
-			}
+				if !CallRes.Success {
+					return errors.New("high_level_control rejected the command")
+				}
+				return nil
+			})
 		case "emergency":
 			var CallReq mowgli.EmergencyStopReq
 			err = c.BindJSON(&CallReq)

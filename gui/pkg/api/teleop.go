@@ -40,20 +40,31 @@ func (c *teleopClient) writeState(state teleopState) error {
 // every browser. A connection must own the lease before velocity commands are
 // accepted. Global stop deliberately has no ownership check.
 type teleopController struct {
-	mu       sync.Mutex
-	provider types.IRosProvider
-	clients  map[*teleopClient]struct{}
-	owner    *teleopClient
-	blocked  bool
-	timer    *time.Timer
-	lease    time.Duration
-	revision uint64
+	// transitionMu and transitionGeneration order high-level mode changes with
+	// global STOP without holding a lock across a potentially slow ROS call.
+	transitionMu         sync.Mutex
+	transitionGeneration uint64
+	// motionMu serializes ownership transitions with their ROS writes. In
+	// particular, a previously authorized non-zero command must finish before
+	// STOP's zero is published, and an old owner's zero must not land after a
+	// new owner's command.
+	motionMu        sync.Mutex
+	mu              sync.Mutex
+	provider        types.IRosProvider
+	clients         map[*teleopClient]struct{}
+	owner           *teleopClient
+	blocked         bool
+	timer           *time.Timer
+	lease           time.Duration
+	revision        uint64
+	leaseGeneration uint64
 }
 
 func newTeleopController(provider types.IRosProvider) *teleopController {
 	return &teleopController{
 		provider: provider,
 		clients:  make(map[*teleopClient]struct{}),
+		blocked:  true,
 		lease:    teleopLeaseDuration,
 	}
 }
@@ -69,6 +80,8 @@ func (t *teleopController) register(client *teleopClient) {
 }
 
 func (t *teleopController) unregister(client *teleopClient) {
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
 	delete(t.clients, client)
 	wasOwner := t.owner == client
@@ -78,12 +91,14 @@ func (t *teleopController) unregister(client *teleopClient) {
 	}
 	t.mu.Unlock()
 	if wasOwner {
-		t.publishZero()
+		t.publishZeroLocked()
 		t.broadcast()
 	}
 }
 
 func (t *teleopController) acquire(client *teleopClient) {
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
 	if t.blocked || (t.owner != nil && t.owner != client) {
 		state := t.stateForLocked(client)
@@ -106,6 +121,15 @@ func (t *teleopController) acquire(client *teleopClient) {
 // enable starts a new explicit teleop session after a previous global stop.
 // A release, disconnect, or lease expiry does not block takeover; STOP does.
 func (t *teleopController) enable() {
+	t.transitionMu.Lock()
+	defer t.transitionMu.Unlock()
+	t.enableTransitionLocked()
+}
+
+// enableTransitionLocked must be called with transitionMu held.
+func (t *teleopController) enableTransitionLocked() {
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
 	if !t.blocked {
 		t.mu.Unlock()
@@ -117,13 +141,44 @@ func (t *teleopController) enable() {
 	t.broadcast()
 }
 
+// highLevelTransition orders the ROS state change together with its teleop
+// gate update. command is a manual/recording transition only for 3 and 7.
+func (t *teleopController) highLevelTransition(command uint8, call func() error) error {
+	teleopMode := command == 3 || command == 7
+	if !teleopMode {
+		t.globalStop()
+		return call()
+	}
+
+	t.transitionMu.Lock()
+	generation := t.transitionGeneration
+	t.transitionMu.Unlock()
+	err := call()
+
+	t.transitionMu.Lock()
+	defer t.transitionMu.Unlock()
+	if generation != t.transitionGeneration {
+		return err
+	}
+	if err == nil {
+		t.enableTransitionLocked()
+	} else {
+		t.globalStopTransitionLocked()
+	}
+	return err
+}
+
 func (t *teleopController) heartbeat(client *teleopClient) {
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
 	t.refreshLeaseLocked(client)
 	t.mu.Unlock()
 }
 
 func (t *teleopController) release(client *teleopClient) {
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
 	if t.owner != client {
 		t.mu.Unlock()
@@ -132,11 +187,13 @@ func (t *teleopController) release(client *teleopClient) {
 	t.clearOwnerLocked()
 	t.revision++
 	t.mu.Unlock()
-	t.publishZero()
+	t.publishZeroLocked()
 	t.broadcast()
 }
 
 func (t *teleopController) command(client *teleopClient, command geometry.TwistStamped) {
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
 	if t.owner != client {
 		t.mu.Unlock()
@@ -153,12 +210,22 @@ func (t *teleopController) command(client *teleopClient, command geometry.TwistS
 // zero velocity and revokes the current owner, so stale commands from that
 // connection cannot restart motion without a new acquire.
 func (t *teleopController) globalStop() {
+	t.transitionMu.Lock()
+	defer t.transitionMu.Unlock()
+	t.globalStopTransitionLocked()
+}
+
+// globalStopTransitionLocked must be called with transitionMu held.
+func (t *teleopController) globalStopTransitionLocked() {
+	t.transitionGeneration++
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
 	t.clearOwnerLocked()
 	t.blocked = true
 	t.revision++
 	t.mu.Unlock()
-	t.publishZero()
+	t.publishZeroLocked()
 	t.broadcast()
 }
 
@@ -169,25 +236,30 @@ func (t *teleopController) refreshLeaseLocked(client *teleopClient) {
 	if t.timer != nil {
 		t.timer.Stop()
 	}
+	t.leaseGeneration++
+	generation := t.leaseGeneration
 	t.timer = time.AfterFunc(t.lease, func() {
-		t.expire(client)
+		t.expire(client, generation)
 	})
 }
 
-func (t *teleopController) expire(client *teleopClient) {
+func (t *teleopController) expire(client *teleopClient, generation uint64) {
+	t.motionMu.Lock()
+	defer t.motionMu.Unlock()
 	t.mu.Lock()
-	if t.owner != client {
+	if t.owner != client || t.leaseGeneration != generation {
 		t.mu.Unlock()
 		return
 	}
 	t.clearOwnerLocked()
 	t.revision++
 	t.mu.Unlock()
-	t.publishZero()
+	t.publishZeroLocked()
 	t.broadcast()
 }
 
 func (t *teleopController) clearOwnerLocked() {
+	t.leaseGeneration++
 	if t.timer != nil {
 		t.timer.Stop()
 		t.timer = nil
@@ -223,7 +295,8 @@ func (t *teleopController) broadcast() {
 	}
 }
 
-func (t *teleopController) publishZero() {
+// publishZeroLocked must be called while motionMu is held.
+func (t *teleopController) publishZeroLocked() {
 	zero := geometry.TwistStamped{}
 	if err := t.provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", &zero); err != nil {
 		log.Printf("teleopController: stop publish error: %v", err)
