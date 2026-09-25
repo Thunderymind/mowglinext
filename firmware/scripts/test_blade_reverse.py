@@ -34,6 +34,8 @@ static uint32_t HAL_GetTick(void) { return test_tick; }
 static uint32_t __get_PRIMASK(void) { return test_primask; }
 static void __disable_irq(void) { test_primask = 1; }
 static void __set_PRIMASK(uint32_t value) { test_primask = value; }
+static void MOTORLINK_ForceInhibit(void) {}
+static uint8_t MOTORLINK_OutputInhibited(void) { return 0u; }
 static int HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, unsigned n) {
     (void)h;
     if (!test_tx_result) { memcpy(test_frame, p, n); ++test_tx_count; }
@@ -67,6 +69,12 @@ static void reset(void) {
     blademotor_stop_since = blademotor_zero_since = blademotor_last_feedback_seq = 0;
     blademotor_zero_epoch = 0;
     blademotor_pending_since = blademotor_pending_report_tick = 0;
+    /* Start with a currently healthy feedback link; individual tests advance
+     * the clock or inject malformed frames to cover later loss/fault paths. */
+    blademotor_last_valid_tick = test_tick;
+    blademotor_fault_sequence = 0;
+    blademotor_seen_valid = 1;
+    blademotor_last_error = 0;
 #if BLADEMOTOR_COASTDOWN_VALIDATION
     blademotor_trace_seq = blademotor_trace_tx_tick = blademotor_trace_command = 0;
 #endif
@@ -302,8 +310,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix='blade-reverse-') as directory:
         out = Path(directory)
         (out / 'main.h').write_text('#pragma once\n' + SHIM + main_source[start:end], encoding='utf-8')
-        for name in ['stm32f_board_hal.h', 'blademotor.h']:
-            (out / name).write_text('', encoding='utf-8')
+        (out / 'stm32f_board_hal.h').write_text('', encoding='utf-8')
+        (out / 'blademotor.h').write_text(
+            '#pragma once\n#include <stdbool.h>\nbool BLADEMOTOR_FeedbackHealthy(void);\n',
+            encoding='utf-8')
         (out / 'blade_under_test.c').write_text(source, encoding='utf-8')
         (out / 'test.c').write_text(TEST, encoding='utf-8')
         binary = out / ('test.exe' if os.name == 'nt' else 'test')
