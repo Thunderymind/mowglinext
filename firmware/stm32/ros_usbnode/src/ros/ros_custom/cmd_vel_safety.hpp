@@ -16,6 +16,14 @@ struct SafetyState
   bool yaw_inhibited = true;
 };
 
+/// IDLE permits only an exact-zero re-arm observation; emergency always blocks
+/// authorization. Physical output gates remain authoritative after this check.
+inline bool authorization_boundary_active(bool idle, bool zero_motion,
+                                         bool emergency_active)
+{
+  return emergency_active || (idle && !zero_motion);
+}
+
 /// Accept only finite wire values; invalid input clears targets but preserves
 /// the last-valid timestamp so it cannot refresh the motion watchdog.
 inline bool apply_safety(float vx, float wz, uint32_t tick, SafetyState &state)
@@ -35,9 +43,9 @@ inline bool apply_safety(float vx, float wz, uint32_t tick, SafetyState &state)
   return true;
 }
 
-/// Ignore CMD_VEL while the host explicitly places the robot in IDLE. In
-/// particular, do not let an IDLE packet clear the yaw/motor stop gates before
-/// a later MOWING state; a fresh post-IDLE command must do that.
+/// Ignore motion CMD_VEL while the host explicitly places the robot in IDLE.
+/// A finite, exact zero may be observed as a re-arm phase, but it must not
+/// refresh the motion watchdog. The output path still hard-gates IDLE.
 inline bool apply_safety_for_mode(float vx, float wz, uint32_t tick,
                                   bool idle, SafetyState &state)
 {
@@ -47,7 +55,9 @@ inline bool apply_safety_for_mode(float vx, float wz, uint32_t tick,
     state.right_target_mps = 0.0f;
     state.zero_motion_intent = true;
     state.yaw_inhibited = true;
-    return false;
+    /* An IDLE zero is only a re-arm observation. on_cmd_vel deliberately does
+     * not update last_valid_tick or valid_cmd_vel_seen for this path. */
+    return std::isfinite(vx) && std::isfinite(wz) && vx == 0.0f && wz == 0.0f;
   }
   return apply_safety(vx, wz, tick, state);
 }

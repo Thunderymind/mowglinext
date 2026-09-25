@@ -444,12 +444,13 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
   }
 
   const bool zero_motion = safety_state.zero_motion_intent;
+  const bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
   uint32_t accepted_authorization_epoch = 0u;
   const uint32_t authorization_primask = __get_PRIMASK();
   __disable_irq();
   const bool safety_boundary_active =
-      Emergency_State() != 0u ||
-      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+      mowgli_cmd_vel::authorization_boundary_active(
+          idle, zero_motion, Emergency_State() != 0u);
   const bool drive_command_accepted =
       ActuatorAuthorization_AcceptDriveCommand(
           zero_motion, safety_boundary_active,
@@ -463,6 +464,24 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
     host_yaw_inhibit = 1u;
     valid_cmd_vel_seen = 0u;
     DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    return;
+  }
+
+  if (idle) {
+    /* A zero observed in IDLE satisfies only the fresh-zero re-arm phase.
+     * The IDLE/emergency gates still hold the physical output at zero, and
+     * this path must not make blade commands look fresh or extend motion TTL. */
+    cmd_vel_authorization_epoch = accepted_authorization_epoch;
+    cmd_wz = 0.0f;
+    left_target_mps = 0.0f;
+    right_target_mps = 0.0f;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    if (target_blade_on_off == 0u) {
+      ++host_zero_phase_sequence;
+    }
     return;
   }
 
@@ -922,7 +941,9 @@ extern "C" void motors_handler() {
           host_zero_phase_sequence == snap_zero_phase &&
           host_zero_motion_intent != 0u && target_blade_on_off == 0u &&
           left_target_mps == 0.0f && right_target_mps == 0.0f &&
-          main_eOpenmowerStatus != OPENMOWER_STATUS_IDLE;
+          Emergency_State() == 0u &&
+          ActuatorAuthorization_DriveRequestIsCurrent(
+              cmd_vel_authorization_epoch);
       if (still_healthy) {
         MOTORLINK_ClearInhibit();
       } else {

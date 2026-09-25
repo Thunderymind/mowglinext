@@ -94,6 +94,17 @@ static void test_motor_link_requires_fresh_zero_after_recovery()
       state, true, 4u, true, true, 0u, 0u, true));
 }
 
+static void test_idle_zero_can_complete_safe_motor_link_rearm()
+{
+  mowgli_motor_safety::LinkRearmState state{};
+  TEST_ASSERT_TRUE(mowgli_motor_safety::update_link_rearm(
+      state, false, 0u, true, true, 0u, 0u, true));
+  /* A verified zero/off phase may arrive while IDLE. It can clear the inhibit
+   * because IDLE independently hard-gates both physical actuator outputs. */
+  TEST_ASSERT_FALSE(mowgli_motor_safety::update_link_rearm(
+      state, true, 1u, true, true, 0u, 0u, true));
+}
+
 static void test_motor_link_fault_requires_new_zero_and_blade_off()
 {
   mowgli_motor_safety::LinkRearmState state{false, 5u, 2u, 9u};
@@ -303,6 +314,50 @@ static void test_cmd_vel_in_idle_cannot_reopen_motion_or_yaw_after_mowing()
   TEST_ASSERT_EQUAL_UINT32(120u, state.last_valid_tick);
 }
 
+static void test_idle_zero_is_rearm_only_and_final_drive_gate_stays_closed()
+{
+  SafetyState state{0.4f, 0.35f, 0.25f, 77u, false, false};
+  TEST_ASSERT_TRUE(mowgli_cmd_vel::apply_safety_for_mode(
+      0.0f, 0.0f, 99u, true, state));
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, state.cmd_wz);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, state.left_target_mps);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, state.right_target_mps);
+  TEST_ASSERT_EQUAL_UINT32(77u, state.last_valid_tick);
+  TEST_ASSERT_TRUE(state.zero_motion_intent);
+  TEST_ASSERT_TRUE(state.yaw_inhibited);
+
+  ActuatorAuthorizationState auth{1u, 0u};
+  const bool boundary_active = mowgli_cmd_vel::authorization_boundary_active(
+      true, state.zero_motion_intent, false);
+  TEST_ASSERT_FALSE(boundary_active);
+  TEST_ASSERT_TRUE(
+      actuator_authorization_accept_drive(&auth, true, boundary_active));
+  const uint32_t accepted_epoch = auth.epoch;
+  TEST_ASSERT_EQUAL_UINT32(1u, accepted_epoch);
+  const bool authorized =
+      actuator_authorization_drive_request_is_current(&auth, accepted_epoch);
+  TEST_ASSERT_TRUE(authorized);
+  const Pac5210DriveRequest candidate =
+      pac5210_request_from_signed_pwm(100, 100);
+  const bool stop = pac5210_should_stop_output(
+      false, true, false, true, true, authorized);
+  TEST_ASSERT_TRUE(stop);
+  const Pac5210DriveRequest final_request =
+      pac5210_apply_final_output_gate(candidate, stop);
+  TEST_ASSERT_EQUAL_UINT8(0u, final_request.left_speed);
+  TEST_ASSERT_EQUAL_UINT8(0u, final_request.right_speed);
+
+  /* An IDLE zero does not make blade ON look like a fresh host motion session. */
+  TEST_ASSERT_FALSE(blade_on_command_is_fresh(
+      100u, 99u, false, 200u, 100u, true, 2000u));
+  TEST_ASSERT_FALSE(mowgli_cmd_vel::apply_safety_for_mode(
+      0.1f, 0.0f, 120u, true, state));
+  TEST_ASSERT_TRUE(mowgli_cmd_vel::authorization_boundary_active(
+      true, false, false));
+  TEST_ASSERT_TRUE(mowgli_cmd_vel::authorization_boundary_active(
+      true, true, true));
+}
+
 static void test_nonfinite_commands_clear_targets_without_refresh()
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();
@@ -427,6 +482,7 @@ int main()
   RUN_TEST(test_blade_on_received_during_latch_is_not_deferred);
   RUN_TEST(test_blade_on_during_link_rearm_is_not_deferred);
   RUN_TEST(test_motor_link_requires_fresh_zero_after_recovery);
+  RUN_TEST(test_idle_zero_can_complete_safe_motor_link_rearm);
   RUN_TEST(test_motor_link_fault_requires_new_zero_and_blade_off);
   RUN_TEST(test_zero_host_intent_suppresses_yaw_invented_targets);
   RUN_TEST(test_zero_host_intent_preserves_braking_but_not_stationary_pwm);
@@ -437,6 +493,7 @@ int main()
   RUN_TEST(test_nonfinite_commands_clear_targets_without_refresh);
   RUN_TEST(test_valid_command_after_invalid_is_normal);
   RUN_TEST(test_cmd_vel_in_idle_cannot_reopen_motion_or_yaw_after_mowing);
+  RUN_TEST(test_idle_zero_is_rearm_only_and_final_drive_gate_stays_closed);
   RUN_TEST(test_imu_mount_rotation_identity_preserves_all_axes);
   RUN_TEST(test_imu_mount_rotation_yaw_180_negates_x_y_only);
   RUN_TEST(test_configured_mount_maps_accel_and_gyro_basis_vectors);
