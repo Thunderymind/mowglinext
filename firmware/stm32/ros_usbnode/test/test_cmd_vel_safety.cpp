@@ -221,6 +221,37 @@ static void test_finite_and_zero_are_accepted()
   TEST_ASSERT_TRUE(state.yaw_inhibited);
 }
 
+static void test_cmd_vel_in_idle_cannot_reopen_motion_or_yaw_after_mowing()
+{
+  SafetyState state{0.4f, 0.35f, 0.25f, 77u, false, false};
+  TEST_ASSERT_FALSE(
+      mowgli_cmd_vel::apply_safety_for_mode(0.6f, 0.2f, 99u, true, state));
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, state.cmd_wz);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, state.left_target_mps);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, state.right_target_mps);
+  TEST_ASSERT_EQUAL_UINT32(77u, state.last_valid_tick);
+  TEST_ASSERT_TRUE(state.zero_motion_intent);
+  TEST_ASSERT_TRUE(state.yaw_inhibited);
+
+  // Returning to MOWING does not change that state. The driver gate stays
+  // closed and yaw cannot invent a differential until a fresh command arrives.
+  TEST_ASSERT_FALSE(mowgli_motor_safety::yaw_loop_active(
+      true, false, state.zero_motion_intent));
+  const Pac5210DriveRequest cached_old_request =
+      pac5210_request_from_signed_pwm(80, 60);
+  const Pac5210DriveRequest gated = pac5210_apply_final_output_gate(
+      cached_old_request, state.zero_motion_intent);
+  TEST_ASSERT_EQUAL_UINT8(0xa0u, gated.direction);
+  TEST_ASSERT_EQUAL_UINT8(0u, gated.left_speed);
+  TEST_ASSERT_EQUAL_UINT8(0u, gated.right_speed);
+
+  TEST_ASSERT_TRUE(
+      mowgli_cmd_vel::apply_safety_for_mode(0.3f, 0.0f, 120u, false, state));
+  TEST_ASSERT_FALSE(state.zero_motion_intent);
+  TEST_ASSERT_FALSE(state.yaw_inhibited);
+  TEST_ASSERT_EQUAL_UINT32(120u, state.last_valid_tick);
+}
+
 static void test_nonfinite_commands_clear_targets_without_refresh()
 {
   const float nan = std::numeric_limits<float>::quiet_NaN();
@@ -353,6 +384,7 @@ int main()
   RUN_TEST(test_finite_and_zero_are_accepted);
   RUN_TEST(test_nonfinite_commands_clear_targets_without_refresh);
   RUN_TEST(test_valid_command_after_invalid_is_normal);
+  RUN_TEST(test_cmd_vel_in_idle_cannot_reopen_motion_or_yaw_after_mowing);
   RUN_TEST(test_imu_mount_rotation_identity_preserves_all_axes);
   RUN_TEST(test_imu_mount_rotation_yaw_180_negates_x_y_only);
   RUN_TEST(test_configured_mount_maps_accel_and_gyro_basis_vectors);

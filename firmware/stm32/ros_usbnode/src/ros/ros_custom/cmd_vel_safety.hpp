@@ -35,4 +35,21 @@ inline bool apply_safety(float vx, float wz, uint32_t tick, SafetyState &state)
   return true;
 }
 
+/// Ignore CMD_VEL while the host explicitly places the robot in IDLE. In
+/// particular, do not let an IDLE packet clear the yaw/motor stop gates before
+/// a later MOWING state; a fresh post-IDLE command must do that.
+inline bool apply_safety_for_mode(float vx, float wz, uint32_t tick,
+                                  bool idle, SafetyState &state)
+{
+  if (idle) {
+    state.cmd_wz = 0.0f;
+    state.left_target_mps = 0.0f;
+    state.right_target_mps = 0.0f;
+    state.zero_motion_intent = true;
+    state.yaw_inhibited = true;
+    return false;
+  }
+  return apply_safety(vx, wz, tick, state);
+}
+
 }  // namespace mowgli_cmd_vel

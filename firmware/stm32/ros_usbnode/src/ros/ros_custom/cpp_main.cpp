@@ -428,11 +428,13 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
    * malformed packet deterministically stops the next motor cycle. */
   mowgli_cmd_vel::SafetyState safety_state{
       cmd_wz, left_target_mps, right_target_mps, last_cmd_vel_tick};
-  if (!mowgli_cmd_vel::apply_safety(vx, wz, HAL_GetTick(), safety_state)) {
+  if (!mowgli_cmd_vel::apply_safety_for_mode(
+          vx, wz, HAL_GetTick(),
+          main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, safety_state)) {
     cmd_wz = safety_state.cmd_wz;
     left_target_mps = safety_state.left_target_mps;
     right_target_mps = safety_state.right_target_mps;
-    host_zero_motion_intent = 0u;
+    host_zero_motion_intent = safety_state.zero_motion_intent ? 1u : 0u;
     host_yaw_inhibit = 1u;
     valid_cmd_vel_seen = 0u;
     DRIVEMOTOR_SetHostZeroMotionIntent(1u);
@@ -446,10 +448,6 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
   host_zero_motion_intent = zero_motion ? 1u : 0u;
   host_yaw_inhibit = safety_state.yaw_inhibited ? 1u : 0u;
   DRIVEMOTOR_SetHostZeroMotionIntent(zero_motion ? 1u : 0u);
-
-  if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
-    return;
-  }
 
   /* Commanded yaw rate for the firmware yaw-rate loop (Option C), read in the
    * motor timebase by motors_handler. Stored raw (pre-IK) so the loop tracks
@@ -655,6 +653,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
     target_blade_emergency_generation = Emergency_Generation();
+    valid_cmd_vel_seen = 0u;
     host_zero_motion_intent = 1u;
     host_yaw_inhibit = 1u;
     break;
