@@ -13,6 +13,9 @@
 #ifndef __DRIVEMOTOR_H
 #define __DRIVEMOTOR_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -79,6 +82,8 @@ float DRIVEMOTOR_GetTicksPerMeter(void);
  * the wire (PKT_ID_SET_KINEMATICS) can only LOWER the cap, never raise it. */
 void DRIVEMOTOR_SetMaxMps(float max_mps);
 float DRIVEMOTOR_GetMaxMps(void);
+bool DRIVEMOTOR_FeedbackHealthy(void);
+uint32_t DRIVEMOTOR_FaultSequence(void);
 
 /** Legacy 4-arg API kept as a shim over DRIVEMOTOR_SetSpeedSigned. */
 void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,

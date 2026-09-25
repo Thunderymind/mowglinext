@@ -23,6 +23,7 @@
 #include "board.h"
 #include "emergency.h"
 #include "main.h"
+#include "pac5210_drive_request.h"
 #include "ros/ros_custom/cpp_main.h"
 
 #include "drivemotor.h"
@@ -34,6 +35,7 @@
 #define DRIVEMOTOR_LENGTH_INIT_MSG 38
 #define DRIVEMOTOR_LENGTH_RQST_MSG 12
 #define DRIVEMOTOR_LENGTH_RECEIVED_MSG 20
+#define DRIVEMOTOR_FEEDBACK_TIMEOUT_MS 75u
 
 /* Kinematic ceiling on per-frame encoder motion. cmd_vel is capped to the runtime max_mps,
  * so in one ~20 ms controller frame a wheel advances at most
@@ -97,6 +99,10 @@ DMA_HandleTypeDef hdma_usart2_tx;
 
 static DRIVEMOTOR_STATE_e drivemotor_eState = DRIVEMOTOR_INIT_1;
 static rx_status_e drivemotors_eRxFlag = RX_WAIT;
+static volatile uint32_t drivemotor_last_valid_tick = 0u;
+static volatile uint32_t drivemotor_fault_sequence = 0u;
+static volatile uint8_t drivemotor_seen_valid = 0u;
+static volatile uint8_t drivemotor_last_error = 0u;
 
 static DRIVEMOTORS_data_t drivemotor_psReceivedData = {0};
 static uint8_t drivemotor_pu8RqstMessage[DRIVEMOTOR_LENGTH_RQST_MSG] = {
@@ -338,13 +344,21 @@ void DRIVEMOTOR_App_10ms(void) {
 
   case DRIVEMOTOR_RUN:
 
+    if (!DRIVEMOTOR_FeedbackHealthy()) {
+      MOTORLINK_ForceInhibit();
+    }
+
     /* prepare to receive the message before to launch the command */
     HAL_UART_Receive_DMA(&DRIVEMOTORS_USART_Handler,
                          (uint8_t *)&drivemotor_psReceivedData,
                          sizeof(DRIVEMOTORS_data_t));
 
-    drivemotor_prepareMsg(left_speed_req, right_speed_req, left_dir_req,
-                          right_dir_req);
+    if (MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy()) {
+      drivemotor_prepareMsg(0, 0, 0, 0);
+    } else {
+      drivemotor_prepareMsg(left_speed_req, right_speed_req, left_dir_req,
+                            right_dir_req);
+    }
     /* error State*/
     if (drivemotor_psReceivedData.u8_error != 0) {
       drivemotor_prepareMsg(0, 0, 0, 0);
@@ -398,7 +412,9 @@ void DRIVEMOTOR_App_10ms(void) {
      * fires mid-reverse, hard-stop the wheels this frame and abandon the
      * maneuver back to RUN (where cmd_vel drive is itself gated to 0 by the
      * hard_stop path in cpp_main). */
-    if (Emergency_State() != 0) {
+    if (Emergency_State() != 0 || MOTORLINK_OutputInhibited() ||
+        !DRIVEMOTOR_FeedbackHealthy()) {
+      MOTORLINK_ForceInhibit();
       drivemotor_prepareMsg(0, 0, 0, 0);
       drivemotor_eState = DRIVEMOTOR_RUN;
     } else {
@@ -644,26 +660,12 @@ float DRIVEMOTOR_GetMaxMps(void) { return drivemotor_clamp_max_mps(g_max_mps); }
  */
 void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
                                int16_t right_pwm_signed) {
-  /* Saturate to the 8-bit motor-controller magnitude. */
-  if (left_pwm_signed > 255)
-    left_pwm_signed = 255;
-  if (left_pwm_signed < -255)
-    left_pwm_signed = -255;
-  if (right_pwm_signed > 255)
-    right_pwm_signed = 255;
-  if (right_pwm_signed < -255)
-    right_pwm_signed = -255;
-
-  left_speed_req =
-      (uint8_t)(left_pwm_signed < 0 ? -left_pwm_signed : left_pwm_signed);
-  right_speed_req =
-      (uint8_t)(right_pwm_signed < 0 ? -right_pwm_signed : right_pwm_signed);
-
-  /* Motor-controller convention: dir=1 → forward at |speed|, dir=0 →
-   * reverse at |speed| (or stop when |speed|=0). Only forward maps to
-   * a non-zero dir byte. */
-  left_dir_req = (left_pwm_signed > 0) ? 1 : 0;
-  right_dir_req = (right_pwm_signed > 0) ? 1 : 0;
+  const Pac5210DriveRequest request =
+      pac5210_request_from_signed_pwm(left_pwm_signed, right_pwm_signed);
+  left_speed_req = request.left_speed;
+  right_speed_req = request.right_speed;
+  left_dir_req = (request.direction & 0xc0u) == 0xc0u ? 1u : 0u;
+  right_dir_req = (request.direction & 0x30u) == 0x30u ? 1u : 0u;
 }
 
 /**
@@ -686,6 +688,7 @@ void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,
 /// @brief drive motor receive interrupt handler
 /// @param
 void DRIVEMOTOR_ReceiveIT(void) {
+  const uint32_t now = HAL_GetTick();
   /* decode the frame */
   if (memcmp(drivemotor_pcu8Preamble, (uint8_t *)&drivemotor_psReceivedData,
              5) == 0) {
@@ -693,13 +696,38 @@ void DRIVEMOTOR_ReceiveIT(void) {
                               DRIVEMOTOR_LENGTH_RECEIVED_MSG - 1);
     if (drivemotor_psReceivedData.u8_CRC == l_u8crc) {
       drivemotors_eRxFlag = RX_VALID;
+      if (drivemotor_seen_valid != 0u &&
+          (uint32_t)(now - drivemotor_last_valid_tick) >
+              DRIVEMOTOR_FEEDBACK_TIMEOUT_MS) {
+        ++drivemotor_fault_sequence;
+        MOTORLINK_ForceInhibit();
+      }
+      drivemotor_seen_valid = 1u;
+      drivemotor_last_valid_tick = now;
+      drivemotor_last_error = drivemotor_psReceivedData.u8_error != 0u;
+      if (drivemotor_last_error != 0u) {
+        ++drivemotor_fault_sequence;
+        MOTORLINK_ForceInhibit();
+      }
     } else {
       drivemotors_eRxFlag = RX_CRC_ERROR;
+      ++drivemotor_fault_sequence;
+      MOTORLINK_ForceInhibit();
     }
   } else {
     drivemotors_eRxFlag = RX_INVALID_ERROR;
+    ++drivemotor_fault_sequence;
+    MOTORLINK_ForceInhibit();
   }
 }
+
+bool DRIVEMOTOR_FeedbackHealthy(void) {
+  return drivemotor_seen_valid != 0u && drivemotor_last_error == 0u &&
+         (uint32_t)(HAL_GetTick() - drivemotor_last_valid_tick) <=
+             DRIVEMOTOR_FEEDBACK_TIMEOUT_MS;
+}
+
+uint32_t DRIVEMOTOR_FaultSequence(void) { return drivemotor_fault_sequence; }
 
 /******************************************************************************
  *  Private Functions
@@ -710,31 +738,10 @@ __STATIC_INLINE void drivemotor_prepareMsg(uint8_t left_speed,
                                            uint8_t left_dir,
                                            uint8_t right_dir) {
 
-  uint8_t direction = 0x0;
-
-  // calc direction bits
-  if (right_dir == 1) {
-    direction |= (0x20 + 0x10);
-  } else {
-    direction |= 0x20;
-  }
-  if (left_dir == 1) {
-    direction |= (0x40 + 0x80);
-  } else {
-    direction |= 0x80;
-  }
-
-  drivemotor_pu8RqstMessage[0] = 0x55;
-  drivemotor_pu8RqstMessage[1] = 0xaa;
-  drivemotor_pu8RqstMessage[2] = 0x08;
-  drivemotor_pu8RqstMessage[3] = 0x10;
-  drivemotor_pu8RqstMessage[4] = 0x80;
-  drivemotor_pu8RqstMessage[5] = direction;
-  drivemotor_pu8RqstMessage[6] = left_speed;
-  drivemotor_pu8RqstMessage[7] = right_speed;
-  drivemotor_pu8RqstMessage[9] = 0;
-  drivemotor_pu8RqstMessage[8] = 0;
-  drivemotor_pu8RqstMessage[10] = 0;
-  drivemotor_pu8RqstMessage[11] =
-      crcCalc(drivemotor_pu8RqstMessage, DRIVEMOTOR_LENGTH_RQST_MSG - 1);
+  const Pac5210DriveRequest request = {
+      (uint8_t)((right_dir ? 0x30u : 0x20u) |
+                (left_dir ? 0xc0u : 0x80u)),
+      left_speed,
+      right_speed};
+  pac5210_encode_drive_packet(drivemotor_pu8RqstMessage, request);
 }

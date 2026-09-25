@@ -21,7 +21,8 @@ constexpr BladeIntentDecision decide_blade_intent(
     const std::uint32_t previous_generation, const bool command_received,
     const std::uint8_t command_request,
     const std::uint32_t command_generation, const bool idle,
-    const bool emergency_active, const std::uint32_t current_generation) {
+    const bool emergency_active, const bool motor_link_rearm_required,
+    const std::uint32_t current_generation) {
   const std::uint8_t requested = command_received
                                      ? (command_request != 0u ? 1u : 0u)
                                      : previous_request;
@@ -30,7 +31,9 @@ constexpr BladeIntentDecision decide_blade_intent(
   const bool stale_request =
       requested != 0u && request_generation != current_generation;
   const std::uint8_t safe_request =
-      (idle || emergency_active || stale_request) ? 0u : requested;
+      (idle || emergency_active || motor_link_rearm_required || stale_request)
+          ? 0u
+          : requested;
   return {safe_request, safe_request,
           safe_request != 0u ? request_generation : current_generation};
 }

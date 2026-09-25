@@ -12,6 +12,8 @@ struct SafetyState
   float left_target_mps;
   float right_target_mps;
   uint32_t last_valid_tick;
+  bool zero_motion_intent = false;
+  bool yaw_inhibited = true;
 };
 
 /// Accept only finite wire values; invalid input clears targets but preserves
@@ -22,10 +24,14 @@ inline bool apply_safety(float vx, float wz, uint32_t tick, SafetyState &state)
     state.cmd_wz = 0.0f;
     state.left_target_mps = 0.0f;
     state.right_target_mps = 0.0f;
+    state.zero_motion_intent = false;
+    state.yaw_inhibited = true;
     return false;
   }
   state.cmd_wz = wz;
   state.last_valid_tick = tick;
+  state.zero_motion_intent = vx == 0.0f && wz == 0.0f;
+  state.yaw_inhibited = state.zero_motion_intent;
   return true;
 }
 

@@ -28,6 +28,7 @@
 #include "emergency.h"
 #include "blade_emergency_policy.hpp"
 #include "heartbeat_emergency_policy.hpp"
+#include "motor_output_safety.hpp"
 #include "nbt.h"
 #include "panel.h"
 #include "pid.hpp"
@@ -252,6 +253,11 @@ static volatile float g_yaw_gyro_bias = 0.0f;
  * ---------------------------------------------------------------------------*/
 static volatile uint8_t target_blade_on_off = 0;
 static volatile uint32_t target_blade_emergency_generation = 0;
+static volatile uint32_t host_zero_phase_sequence = 0u;
+static volatile uint8_t host_zero_motion_intent = 0u;
+static volatile uint8_t host_yaw_inhibit = 1u;
+static mowgli_motor_safety::LinkRearmState motor_link_rearm_state{};
+static volatile uint8_t motor_link_rearm_required = 1u;
 static uint8_t blade_on_off = 0;
 static uint8_t blade_direction = 0;
 
@@ -422,11 +428,16 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
     cmd_wz = safety_state.cmd_wz;
     left_target_mps = safety_state.left_target_mps;
     right_target_mps = safety_state.right_target_mps;
+    host_zero_motion_intent = 0u;
+    host_yaw_inhibit = 1u;
     return;
   }
 
   /* Only a validated command is a new cmd_vel heartbeat. */
   last_cmd_vel_tick = safety_state.last_valid_tick;
+  const bool zero_motion = safety_state.zero_motion_intent;
+  host_zero_motion_intent = zero_motion ? 1u : 0u;
+  host_yaw_inhibit = safety_state.yaw_inhibited ? 1u : 0u;
 
   if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
     return;
@@ -461,6 +472,9 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
    * deadband on sub-deadband commands. */
   left_target_mps = left_mps;
   right_target_mps = right_mps;
+  if (zero_motion && target_blade_on_off == 0u) {
+    ++host_zero_phase_sequence;
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -629,6 +643,8 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
     target_blade_emergency_generation = Emergency_Generation();
+    host_zero_motion_intent = 0u;
+    host_yaw_inhibit = 1u;
     break;
   }
 
@@ -651,10 +667,16 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
       target_blade_on_off, target_blade_emergency_generation, true,
       pkt->blade_on, emergency_generation,
       main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, emergency_active,
+      motor_link_rearm_required != 0u,
       emergency_generation);
   target_blade_on_off = decision.retained_request;
   target_blade_emergency_generation = decision.request_generation;
   blade_direction = pkt->blade_dir;
+  if (pkt->blade_on == 0u && host_zero_motion_intent != 0u &&
+      left_target_mps == 0.0f && right_target_mps == 0.0f &&
+      main_eOpenmowerStatus != OPENMOWER_STATUS_IDLE) {
+    ++host_zero_phase_sequence;
+  }
   __set_PRIMASK(primask);
 }
 
@@ -813,11 +835,50 @@ extern "C" void motors_handler() {
     uint8_t snap_target_blade = target_blade_on_off;
     uint32_t snap_blade_generation = target_blade_emergency_generation;
     uint32_t snap_cmd_vel = last_cmd_vel_tick;
+    uint32_t snap_zero_phase = host_zero_phase_sequence;
+    bool snap_zero_intent = host_zero_motion_intent != 0u;
+    bool snap_yaw_inhibit = host_yaw_inhibit != 0u;
     float snap_ticks_per_meter = DRIVEMOTOR_GetTicksPerMeter();
     uint32_t snap_emergency_generation = Emergency_Generation();
     bool emergency_active = Emergency_State() != 0u;
     bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+    bool links_healthy = DRIVEMOTOR_FeedbackHealthy() &&
+                         BLADEMOTOR_FeedbackHealthy();
+    uint32_t drive_fault_sequence = DRIVEMOTOR_FaultSequence();
+    uint32_t blade_fault_sequence = BLADEMOTOR_FaultSequence();
+    bool link_inhibited = MOTORLINK_OutputInhibited() != 0u;
     __enable_irq();
+
+    motor_link_rearm_required = mowgli_motor_safety::update_link_rearm(
+        motor_link_rearm_state, links_healthy, snap_zero_phase,
+        snap_zero_intent, snap_target_blade == 0u, drive_fault_sequence,
+        blade_fault_sequence, link_inhibited);
+    if (motor_link_rearm_required != 0u) {
+      MOTORLINK_ForceInhibit();
+    } else {
+      /* Close the race with a UART fault or a host update between the snapshot
+       * and inhibit clear. The source links must still be healthy and no newer
+       * zero/off intent may have arrived. */
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      const bool still_healthy = DRIVEMOTOR_FeedbackHealthy() &&
+                                 BLADEMOTOR_FeedbackHealthy() &&
+          DRIVEMOTOR_FaultSequence() == drive_fault_sequence &&
+          BLADEMOTOR_FaultSequence() == blade_fault_sequence &&
+          host_zero_phase_sequence == snap_zero_phase &&
+          host_zero_motion_intent != 0u && target_blade_on_off == 0u &&
+          left_target_mps == 0.0f && right_target_mps == 0.0f &&
+          main_eOpenmowerStatus != OPENMOWER_STATUS_IDLE;
+      if (still_healthy) {
+        MOTORLINK_ClearInhibit();
+      } else {
+        motor_link_rearm_required = 1u;
+        motor_link_rearm_state.required = true;
+        motor_link_rearm_state.zero_phase_baseline = host_zero_phase_sequence;
+        MOTORLINK_ForceInhibit();
+      }
+      __set_PRIMASK(primask);
+    }
 
     /* Emergency and IDLE gates discard retained blade intent as well as
      * forcing the output OFF, so clearing a gate cannot revive an older
@@ -825,7 +886,7 @@ extern "C" void motors_handler() {
     const BladeIntentDecision blade_decision = decide_blade_intent(
         snap_target_blade, snap_blade_generation, false, 0u,
         snap_emergency_generation, idle, emergency_active,
-        snap_emergency_generation);
+        motor_link_rearm_required != 0u, snap_emergency_generation);
     blade_on_off = blade_decision.effective_output;
     if (blade_decision.retained_request != snap_target_blade ||
         blade_decision.request_generation != snap_blade_generation) {
@@ -836,6 +897,7 @@ extern "C" void motors_handler() {
       const bool idle_now = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
       if (target_blade_on_off != 0u &&
           (emergency_active_now || idle_now ||
+           motor_link_rearm_required != 0u ||
            target_blade_emergency_generation != current_generation)) {
         target_blade_on_off = 0;
         target_blade_emergency_generation = current_generation;
@@ -846,7 +908,10 @@ extern "C" void motors_handler() {
     /* --- decide effective drive target ---
      * Emergency or cmd_vel watchdog timeout overrides the drive output. */
     bool hard_stop = false;
-    if (emergency_active) {
+    if (motor_link_rearm_required != 0u) {
+      hard_stop = true;
+      blade_on_off = 0;
+    } else if (emergency_active) {
       hard_stop = true;
     } else if (idle) {
       /* Re-assert the IDLE gate HERE — in the one place that actually
@@ -878,7 +943,11 @@ extern "C" void motors_handler() {
      * setpoint. See the block comment at the yaw-loop globals for rationale and
      * the bounded-failure argument. */
     float yaw_trim_mps = 0.0f;
-    const bool yaw_loop_active = (g_yaw_loop_enabled != 0u) && !hard_stop;
+    const bool zero_host_motion = snap_yaw_inhibit &&
+                                  snap_left_target == 0.0f &&
+                                  snap_right_target == 0.0f;
+    const bool yaw_loop_active = mowgli_motor_safety::yaw_loop_active(
+        g_yaw_loop_enabled != 0u, hard_stop, zero_host_motion);
     /* Reset the yaw integrator on stop / yaw-direction reversal (mirrors the
      * per-wheel resets) AND at turn-exit — a sharp drop in |commanded wz| from
      * turning to straight (task #37). Dumping the wind-up here is what kills the
@@ -983,12 +1052,12 @@ extern "C" void motors_handler() {
     /* Apply the symmetric differential trim to the per-wheel setpoints
      * (+right / −left increases yaw rate, matching the IK in on_cmd_vel), then
      * re-clamp to the physical wheel-speed limit. hard_stop forces 0. */
-    float l_target = snap_left_target - yaw_trim_mps;
-    float r_target = snap_right_target + yaw_trim_mps;
-    if (hard_stop) {
-      l_target = 0.0f;
-      r_target = 0.0f;
-    }
+    const mowgli_motor_safety::WheelTargets adjusted_targets =
+        mowgli_motor_safety::apply_yaw_trim(
+            snap_left_target, snap_right_target, yaw_trim_mps,
+            zero_host_motion, hard_stop);
+    float l_target = adjusted_targets.left_mps;
+    float r_target = adjusted_targets.right_mps;
     const float max_mps = DRIVEMOTOR_GetMaxMps();
     if (l_target > max_mps)
       l_target = max_mps;
@@ -1085,12 +1154,10 @@ extern "C" void motors_handler() {
     /* When the target is exactly zero AND we're not braking from a
      * larger speed, force PWM to zero outright — avoids the residual
      * "hum" from a non-zero integral applied to a stopped wheel. */
-    left_pwm_signed = (l_target == 0.0f && fabsf(l_actual_mps) < 0.02f)
-                          ? 0
-                          : (int16_t)l_pwm_f;
-    right_pwm_signed = (r_target == 0.0f && fabsf(r_actual_mps) < 0.02f)
-                           ? 0
-                           : (int16_t)r_pwm_f;
+    left_pwm_signed = mowgli_motor_safety::suppress_stationary_zero_output(
+        l_target, l_actual_mps, (int16_t)l_pwm_f);
+    right_pwm_signed = mowgli_motor_safety::suppress_stationary_zero_output(
+        r_target, r_actual_mps, (int16_t)r_pwm_f);
 
     /* Anti-dig cutout (always active, all modes). The step compares actual
      * travel to the travel the commanded speed implies, using the live
@@ -1115,12 +1182,6 @@ extern "C" void motors_handler() {
     left_pwm_signed = (int16_t)(l_target * g_pwm_per_mps);
     right_pwm_signed = (int16_t)(r_target * g_pwm_per_mps);
 #endif
-
-    if (hard_stop) {
-      DRIVEMOTOR_SetSpeedSigned(0, 0);
-    } else {
-      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed);
-    }
 
     // Heartbeat watchdog: if no heartbeat for HEARTBEAT_TIMEOUT_MS, emergency
     // stop. Tag a PURE comms-loss latch (no physical sensor asserted) so it can
@@ -1150,11 +1211,36 @@ extern "C" void motors_handler() {
     const uint32_t output_primask = __get_PRIMASK();
     __disable_irq();
     const uint32_t output_generation = Emergency_Generation();
+    const bool output_links_healthy =
+        DRIVEMOTOR_FeedbackHealthy() && BLADEMOTOR_FeedbackHealthy() &&
+        DRIVEMOTOR_FaultSequence() == drive_fault_sequence &&
+        BLADEMOTOR_FaultSequence() == blade_fault_sequence &&
+        MOTORLINK_OutputInhibited() == 0u;
+    if (!output_links_healthy) {
+      MOTORLINK_ForceInhibit();
+      motor_link_rearm_required = 1u;
+      motor_link_rearm_state.required = true;
+      motor_link_rearm_state.zero_phase_baseline = host_zero_phase_sequence;
+      target_blade_on_off = 0u;
+      target_blade_emergency_generation = output_generation;
+      blade_on_off = 0u;
+      hard_stop = true;
+    }
     if (Emergency_State() != 0u ||
         main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+        motor_link_rearm_required != 0u ||
         target_blade_on_off == 0u ||
         target_blade_emergency_generation != output_generation) {
       blade_on_off = 0;
+    }
+    const bool final_drive_stop = hard_stop || !output_links_healthy ||
+                                  Emergency_State() != 0u ||
+                                  main_eOpenmowerStatus ==
+                                      OPENMOWER_STATUS_IDLE;
+    if (final_drive_stop) {
+      DRIVEMOTOR_SetSpeedSigned(0, 0);
+    } else {
+      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed);
     }
     BLADEMOTOR_Set(blade_on_off, blade_direction);
     __set_PRIMASK(output_primask);

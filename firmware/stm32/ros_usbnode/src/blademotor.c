@@ -74,6 +74,10 @@ static uint8_t blademotor_pu8RqstMessage[BLADEMOTOR_LENGTH_RQST_MSG]  = {0x55, 0
 static uint8_t blademotor_u8OnOff = 0;
 static uint8_t blademotor_u8Direction = 0;
 static uint8_t blademotor_u8RunDirection = 0;
+static volatile uint32_t blademotor_last_valid_tick = 0u;
+static volatile uint32_t blademotor_fault_sequence = 0u;
+static volatile uint8_t blademotor_seen_valid = 0u;
+static volatile uint8_t blademotor_last_error = 0u;
 static bool blademotor_reverse_pending = false;
 static bool blademotor_off_sent = false;
 static bool blademotor_zero_seen = false;
@@ -151,6 +155,10 @@ static bool blademotor_feedback_qualified_for_reverse(uint32_t now)
 void blademotor_prepareMsg(void)
 {
     uint8_t command = 0;
+    if (!BLADEMOTOR_FeedbackHealthy())
+    {
+        MOTORLINK_ForceInhibit();
+    }
     if (!blademotor_u8OnOff)
     {
         /* OFF from the existing emergency/idle/heartbeat gates cancels a
@@ -158,7 +166,7 @@ void blademotor_prepareMsg(void)
         blademotor_reverse_pending = false;
         blademotor_off_sent = blademotor_zero_seen = false;
     }
-    else
+    else if (!MOTORLINK_OutputInhibited() && BLADEMOTOR_FeedbackHealthy())
     {
         if (!blademotor_reverse_pending &&
             blademotor_u8Direction != blademotor_u8RunDirection)
@@ -204,7 +212,7 @@ void BLADEMOTOR_Init(void)
 #elif BOARD_YARDFORCE500_VARIANT_B
 	__HAL_RCC_USART6_CLK_ENABLE();
 #endif
-    
+
 #if BOARD_YARDFORCE500_VARIANT_ORIG
     // RX
     GPIO_InitStruct.Pin = BLADEMOTOR_USART_RX_PIN;
@@ -239,7 +247,7 @@ void BLADEMOTOR_Init(void)
     BLADEMOTOR_USART_Handler.Init.Parity = UART_PARITY_NONE;       // No parity bit
     BLADEMOTOR_USART_Handler.Init.HwFlowCtl = UART_HWCONTROL_NONE; // No hardware flow control
     BLADEMOTOR_USART_Handler.Init.Mode = USART_MODE_TX_RX;         // Transceiver mode
-    
+
     HAL_UART_Init(&BLADEMOTOR_USART_Handler); 
 
     DB_TRACE(" * Blade Motor UART initialized\r\n");
@@ -307,6 +315,8 @@ void BLADEMOTOR_Init(void)
 /// @brief handle drive motor messages
 /// @param  
 void  BLADEMOTOR_App(void){
+    if (!BLADEMOTOR_FeedbackHealthy())
+        MOTORLINK_ForceInhibit();
     switch (blademotor_eState)
     {
     case BLADEMOTOR_INIT_1:
@@ -407,6 +417,7 @@ void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction)
 /// @param  
 void BLADEMOTOR_ReceiveIT(void)
 {
+    const uint32_t now = HAL_GetTick();
     blademotor_feedback.valid = 0;
     /* decode the frame */    
     if(memcmp(blademotor_pcu8Preamble, blademotor_pu8ReceivedData, 2) == 0){        
@@ -427,16 +438,52 @@ void BLADEMOTOR_ReceiveIT(void)
             blademotor_feedback.activated = BLADEMOTOR_bActivated;
             blademotor_feedback.error = blademotor_pu8ReceivedData[6];
             blademotor_feedback.valid = 1;
+            if (blademotor_seen_valid != 0u &&
+                (uint32_t)(now - blademotor_last_valid_tick) >
+                    BLADEMOTOR_FEEDBACK_MAX_AGE_MS)
+            {
+                ++blademotor_fault_sequence;
+                MOTORLINK_ForceInhibit();
+            }
+            blademotor_seen_valid = 1u;
+            blademotor_last_valid_tick = now;
+            blademotor_last_error = blademotor_pu8ReceivedData[6] != 0u;
+            if (blademotor_last_error != 0u)
+            {
+                ++blademotor_fault_sequence;
+                MOTORLINK_ForceInhibit();
+            }
         }
-  
+        else
+        {
+            ++blademotor_fault_sequence;
+            MOTORLINK_ForceInhibit();
+        }
+
     }
-    uint32_t now = HAL_GetTick();
+    else
+    {
+        ++blademotor_fault_sequence;
+        MOTORLINK_ForceInhibit();
+    }
     if (!blademotor_feedback.valid || blademotor_feedback.activated ||
         blademotor_feedback.error || blademotor_feedback.reported_speed != 0 ||
         (uint32_t)(now - blademotor_feedback.tick) > BLADEMOTOR_FEEDBACK_MAX_AGE_MS)
         blademotor_feedback.zero_epoch++;
     blademotor_feedback.tick = now;
     blademotor_feedback.seq++;
+}
+
+bool BLADEMOTOR_FeedbackHealthy(void)
+{
+    return blademotor_seen_valid != 0u && blademotor_last_error == 0u &&
+        (uint32_t)(HAL_GetTick() - blademotor_last_valid_tick) <=
+            BLADEMOTOR_FEEDBACK_MAX_AGE_MS;
+}
+
+uint32_t BLADEMOTOR_FaultSequence(void)
+{
+    return blademotor_fault_sequence;
 }
 
 /******************************************************************************
