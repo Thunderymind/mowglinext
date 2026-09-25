@@ -21,6 +21,7 @@
 // stm32 custom
 #include "board.h"
 #include "main.h"
+#include "emergency.h"
 #include "i2c.h"
 #include "emergency_clear_policy.h"
 #include "fw_param_catalog.h"
