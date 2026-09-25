@@ -21,6 +21,7 @@
 #include "main.h"
 #include "board.h"
 #include "emergency.h"
+#include "actuator_authorization.h"
 
 #include "blademotor.h" 
 
@@ -84,6 +85,7 @@ static uint8_t blademotor_pu8RqstMessage[BLADEMOTOR_LENGTH_RQST_MSG]  = {0x55, 0
 static uint8_t blademotor_u8OnOff = 0;
 static uint8_t blademotor_u8Direction = 0;
 static uint8_t blademotor_u8RunDirection = 0;
+static uint32_t blademotor_u32OnAuthorizationEpoch = 0u;
 #if defined(BLADEMOTOR_SEQUENCED_POWER)
 static uint32_t blademotor_state_started_tick = 0u;
 static bool blademotor_startup_retry_pending = false;
@@ -116,6 +118,24 @@ typedef struct {
  * ESC. Never infer deceleration from a held word or use public cached RPM alone.
  * Invalid replies break qualification. Hardware evidence is in BLADE-REVERSE.md. */
 static volatile blademotor_feedback_t blademotor_feedback;
+
+static void blademotor_cancel_on_request(void)
+{
+    blademotor_u8OnOff = 0u;
+    blademotor_u32OnAuthorizationEpoch = 0u;
+    blademotor_reverse_pending = false;
+    blademotor_off_sent = blademotor_zero_seen = false;
+}
+
+static bool blademotor_on_request_is_authorized(void)
+{
+    return blademotor_u8OnOff != 0u &&
+        Emergency_State() == 0u &&
+        main_eOpenmowerStatus != OPENMOWER_STATUS_IDLE &&
+        MOTORLINK_OutputInhibited() == 0u &&
+        ActuatorAuthorization_DriveRequestIsCurrent(
+            blademotor_u32OnAuthorizationEpoch);
+}
 
 const uint8_t blademotor_pcu8Preamble[5]  = {0x55,0xAA,0x0A,0x2,0xD0};
 const uint8_t blademotor_pcu8VersionMsg[BLADEMOTOR_LENGTH_VERSION_MSG] =
@@ -173,17 +193,17 @@ static bool blademotor_feedback_qualified_for_reverse(uint32_t now)
 void blademotor_prepareMsg(void)
 {
     uint8_t command = BLADEMOTOR_STOP_COMMAND_VALUE;
-    /* Recheck the system-level actuator gates where the final packet is built.
-     * This catches emergency/IDLE events that arrive after cpp_main selected
-     * the cached blade request. BLADEMOTOR_App holds IRQs through DMA start. */
-    if (Emergency_State() != 0u ||
-        main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE)
-    {
-        blademotor_u8OnOff = 0u;
-    }
     if (!BLADEMOTOR_FeedbackHealthy())
     {
         MOTORLINK_ForceInhibit();
+    }
+    /* Recheck the request token and system-level actuator gates where the
+     * final packet is built. Emergency assert+release, IDLE->MOWING, or link
+     * inhibit can invalidate a cached ON before the upper loop runs again.
+     * BLADEMOTOR_App holds IRQs through packet construction and DMA start. */
+    if (blademotor_u8OnOff && !blademotor_on_request_is_authorized())
+    {
+        blademotor_cancel_on_request();
     }
     if (!blademotor_u8OnOff)
     {
@@ -580,16 +600,34 @@ void  BLADEMOTOR_App(void){
 
 /// @brief control blade motor (there is no speed control for this motor)
 /// @param on_off 1 to turn on, 0 to turn off
-void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction)
+void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction,
+                    uint32_t authorization_epoch)
 {
-    /* Latch the gated request; never modify the DMA-owned message here. */
-    blademotor_u8OnOff = on_off != 0;
-    blademotor_u8Direction = direction != 0;
-    if (!blademotor_u8OnOff)
+    /* Keep the cached request and its token atomic with respect to safety
+     * interrupts. The caller's snapshot must still be current when accepted. */
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    blademotor_u8Direction = direction != 0u;
+    if (on_off == 0u)
     {
-        blademotor_reverse_pending = false;
-        blademotor_off_sent = blademotor_zero_seen = false;
+        blademotor_cancel_on_request();
     }
+    else if (Emergency_State() != 0u ||
+             main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+             MOTORLINK_OutputInhibited() != 0u ||
+             !ActuatorAuthorization_DriveRequestIsCurrent(
+                 authorization_epoch))
+    {
+        blademotor_cancel_on_request();
+    }
+    else
+    {
+        /* Latch ON and its caller authorization token; never modify the
+         * DMA-owned message here. The token is checked again before TX. */
+        blademotor_u32OnAuthorizationEpoch = authorization_epoch;
+        blademotor_u8OnOff = 1u;
+    }
+    __set_PRIMASK(primask);
 }
 
 /// @brief drive motor receive interrupt handler

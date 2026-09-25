@@ -9,6 +9,7 @@
 #include "heartbeat_emergency_policy.hpp"
 #include "motor_output_safety.hpp"
 #include "pac5210_drive_request.h"
+#include "actuator_authorization.h"
 
 using mowgli_cmd_vel::SafetyState;
 using mowgli_cmd_vel::apply_safety;
@@ -166,21 +167,22 @@ static void test_signed_zero_and_braking_reach_pac5210_frame()
 static void test_final_drive_gate_keeps_packet_zero_for_safety_events()
 {
   const Pac5210DriveRequest reverse{0xb0u, 100u, 100u};
-  const bool stop_cases[][5] = {
-      {true, false, false, true, false},
-      {false, true, false, true, false},
-      {false, false, true, true, false},
-      {false, false, false, false, false},
-      {false, false, false, true, true},
+  const bool stop_cases[][6] = {
+      {true, false, false, true, false, true},
+      {false, true, false, true, false, true},
+      {false, false, true, true, false, true},
+      {false, false, false, false, false, true},
+      {false, false, false, true, true, true},
+      {false, false, false, true, false, false},
   };
   std::uint8_t packet[12]{};
   for (const auto &stop_case : stop_cases) {
     TEST_ASSERT_TRUE(pac5210_should_stop_output(
         stop_case[0], stop_case[1], stop_case[2], stop_case[3],
-        stop_case[4]));
+        stop_case[4], stop_case[5]));
   }
   TEST_ASSERT_FALSE(
-      pac5210_should_stop_output(false, false, false, true, false));
+      pac5210_should_stop_output(false, false, false, true, false, true));
   const Pac5210DriveRequest gated =
       pac5210_apply_final_output_gate(reverse, true);
   pac5210_encode_drive_packet(packet, gated);
@@ -197,6 +199,55 @@ static void test_final_drive_gate_keeps_packet_zero_for_safety_events()
       pac5210_apply_final_output_gate(reverse, false);
   TEST_ASSERT_EQUAL_UINT8(100u, allowed.left_speed);
   TEST_ASSERT_EQUAL_UINT8(100u, allowed.right_speed);
+}
+
+static void test_authorization_epoch_requires_fresh_zero_after_boundary()
+{
+  ActuatorAuthorizationState auth{1u, 1u};
+  const Pac5210DriveRequest moving =
+      pac5210_request_from_signed_pwm(100, 100);
+  std::uint8_t packet[12]{};
+
+  /* An emergency assert and release between motor ticks still invalidates
+   * the cached request epoch. */
+  actuator_authorization_invalidate(&auth);
+  TEST_ASSERT_FALSE(
+      actuator_authorization_drive_request_is_current(&auth, 1u));
+  TEST_ASSERT_FALSE(actuator_authorization_accept_drive(&auth, false, false));
+  Pac5210DriveRequest gated = pac5210_apply_final_output_gate(
+      moving,
+      pac5210_should_stop_output(false, false, false, true, false,
+                                 actuator_authorization_drive_request_is_current(
+                                     &auth, 1u)));
+  pac5210_encode_drive_packet(packet, gated);
+  TEST_ASSERT_EQUAL_HEX8(0xa0u, packet[5]);
+  TEST_ASSERT_EQUAL_UINT8(0u, packet[6]);
+  TEST_ASSERT_EQUAL_UINT8(0u, packet[7]);
+
+  uint32_t accepted_epoch = 0u;
+  TEST_ASSERT_FALSE(
+      actuator_authorization_accept_drive(&auth, true, true));
+  TEST_ASSERT_TRUE(
+      actuator_authorization_accept_drive(&auth, true, false));
+  accepted_epoch = auth.epoch;
+  TEST_ASSERT_TRUE(
+      actuator_authorization_drive_request_is_current(&auth,
+                                                       accepted_epoch));
+  TEST_ASSERT_TRUE(
+      actuator_authorization_accept_drive(&auth, false, false));
+  gated = pac5210_apply_final_output_gate(
+      moving,
+      pac5210_should_stop_output(false, false, false, true, false,
+                                 actuator_authorization_drive_request_is_current(
+                                     &auth, accepted_epoch)));
+  pac5210_encode_drive_packet(packet, gated);
+  TEST_ASSERT_EQUAL_UINT8(100u, packet[6]);
+  TEST_ASSERT_EQUAL_UINT8(100u, packet[7]);
+
+  actuator_authorization_invalidate(&auth); /* IDLE or link inhibition */
+  TEST_ASSERT_FALSE(
+      actuator_authorization_drive_request_is_current(&auth,
+                                                       accepted_epoch));
 }
 
 static void test_finite_and_zero_are_accepted()
@@ -381,6 +432,7 @@ int main()
   RUN_TEST(test_zero_host_intent_preserves_braking_but_not_stationary_pwm);
   RUN_TEST(test_signed_zero_and_braking_reach_pac5210_frame);
   RUN_TEST(test_final_drive_gate_keeps_packet_zero_for_safety_events);
+  RUN_TEST(test_authorization_epoch_requires_fresh_zero_after_boundary);
   RUN_TEST(test_finite_and_zero_are_accepted);
   RUN_TEST(test_nonfinite_commands_clear_targets_without_refresh);
   RUN_TEST(test_valid_command_after_invalid_is_normal);

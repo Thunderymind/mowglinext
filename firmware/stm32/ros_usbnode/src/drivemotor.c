@@ -21,6 +21,7 @@
 
 #include "adc.h"
 #include "board.h"
+#include "actuator_authorization.h"
 #include "emergency.h"
 #include "main.h"
 #include "pac5210_drive_request.h"
@@ -104,6 +105,7 @@ static volatile uint32_t drivemotor_fault_sequence = 0u;
 static volatile uint8_t drivemotor_seen_valid = 0u;
 static volatile uint8_t drivemotor_last_error = 0u;
 static volatile uint8_t drivemotor_host_zero_intent = 1u;
+static volatile uint32_t drivemotor_authorization_epoch = 0u;
 
 static DRIVEMOTORS_data_t drivemotor_psReceivedData = {0};
 static uint8_t drivemotor_pu8RqstMessage[DRIVEMOTOR_LENGTH_RQST_MSG] = {
@@ -404,7 +406,9 @@ void DRIVEMOTOR_App_10ms(void) {
       if (Emergency_State() != 0u ||
           main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
           MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy() ||
-          drivemotor_host_zero_intent != 0u) {
+          drivemotor_host_zero_intent != 0u ||
+          !ActuatorAuthorization_DriveRequestIsCurrent(
+              drivemotor_authorization_epoch)) {
         drivemotor_prepareMsg(0, 0, 0, 0);
       }
       HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
@@ -445,7 +449,9 @@ void DRIVEMOTOR_App_10ms(void) {
       if (Emergency_State() != 0u ||
           main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
           MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy() ||
-          drivemotor_host_zero_intent != 0u) {
+          drivemotor_host_zero_intent != 0u ||
+          !ActuatorAuthorization_DriveRequestIsCurrent(
+              drivemotor_authorization_epoch)) {
         drivemotor_prepareMsg(0, 0, 0, 0);
         drivemotor_eState = DRIVEMOTOR_RUN;
       }
@@ -690,13 +696,18 @@ float DRIVEMOTOR_GetMaxMps(void) { return drivemotor_clamp_max_mps(g_max_mps); }
  * @param  right_pwm_signed  signed PWM command for the right wheel
  */
 void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
-                               int16_t right_pwm_signed) {
+                               int16_t right_pwm_signed,
+                               uint32_t authorization_epoch) {
   const Pac5210DriveRequest request =
       pac5210_request_from_signed_pwm(left_pwm_signed, right_pwm_signed);
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
   left_speed_req = request.left_speed;
   right_speed_req = request.right_speed;
   left_dir_req = (request.direction & 0xc0u) == 0xc0u ? 1u : 0u;
   right_dir_req = (request.direction & 0x30u) == 0x30u ? 1u : 0u;
+  drivemotor_authorization_epoch = authorization_epoch;
+  __set_PRIMASK(primask);
 }
 
 /**
@@ -705,7 +716,8 @@ void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
  *         working. New code should call DRIVEMOTOR_SetSpeedSigned directly.
  */
 void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,
-                         uint8_t left_dir, uint8_t right_dir) {
+                         uint8_t left_dir, uint8_t right_dir,
+                         uint32_t authorization_epoch) {
   const int16_t l_signed =
       left_dir ? (int16_t)left_speed : -(int16_t)left_speed;
   const int16_t r_signed =
@@ -713,7 +725,8 @@ void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,
   /* If both speeds are 0, the deadband path passes 0 through unchanged,
    * matching the old "0,0,0,0 == stop" contract. */
   DRIVEMOTOR_SetSpeedSigned((left_speed == 0) ? 0 : l_signed,
-                            (right_speed == 0) ? 0 : r_signed);
+                            (right_speed == 0) ? 0 : r_signed,
+                            authorization_epoch);
 }
 
 /// @brief drive motor receive interrupt handler
@@ -778,7 +791,9 @@ __STATIC_INLINE void drivemotor_prepareMsg(uint8_t left_speed,
       Emergency_State() != 0u,
       main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE,
       MOTORLINK_OutputInhibited() != 0u, DRIVEMOTOR_FeedbackHealthy(),
-      drivemotor_host_zero_intent != 0u);
+      drivemotor_host_zero_intent != 0u,
+      ActuatorAuthorization_DriveRequestIsCurrent(
+          drivemotor_authorization_epoch));
   request = pac5210_apply_final_output_gate(request, stop);
   pac5210_encode_drive_packet(drivemotor_pu8RqstMessage, request);
 }

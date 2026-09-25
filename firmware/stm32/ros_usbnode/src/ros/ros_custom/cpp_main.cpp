@@ -23,6 +23,7 @@
 #include "main.h"
 
 #include "blademotor.h"
+#include "actuator_authorization.h"
 #include "charger.h"
 #include "drivemotor.h"
 #include "emergency.h"
@@ -252,7 +253,8 @@ static volatile float g_yaw_gyro_bias = 0.0f;
  * Blade motor control state
  * ---------------------------------------------------------------------------*/
 static volatile uint8_t target_blade_on_off = 0;
-static volatile uint32_t target_blade_emergency_generation = 0;
+static volatile uint32_t target_blade_authorization_epoch = 0;
+static volatile uint32_t cmd_vel_authorization_epoch = 0;
 static volatile uint32_t host_zero_phase_sequence = 0u;
 static volatile uint8_t host_zero_motion_intent = 0u;
 static volatile uint8_t host_yaw_inhibit = 1u;
@@ -441,10 +443,34 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
     return;
   }
 
-  /* Only a validated command is a new cmd_vel heartbeat. */
+  const bool zero_motion = safety_state.zero_motion_intent;
+  uint32_t accepted_authorization_epoch = 0u;
+  const uint32_t authorization_primask = __get_PRIMASK();
+  __disable_irq();
+  const bool safety_boundary_active =
+      Emergency_State() != 0u ||
+      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+  const bool drive_command_accepted =
+      ActuatorAuthorization_AcceptDriveCommand(
+          zero_motion, safety_boundary_active,
+          &accepted_authorization_epoch);
+  __set_PRIMASK(authorization_primask);
+  if (!drive_command_accepted) {
+    cmd_wz = 0.0f;
+    left_target_mps = 0.0f;
+    right_target_mps = 0.0f;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    return;
+  }
+
+  /* Only a validated, currently authorized command is a new cmd_vel
+   * heartbeat. The epoch is captured atomically with the zero re-arm. */
+  cmd_vel_authorization_epoch = accepted_authorization_epoch;
   last_cmd_vel_tick = safety_state.last_valid_tick;
   valid_cmd_vel_seen = 1u;
-  const bool zero_motion = safety_state.zero_motion_intent;
   host_zero_motion_intent = zero_motion ? 1u : 0u;
   host_yaw_inhibit = safety_state.yaw_inhibited ? 1u : 0u;
   DRIVEMOTOR_SetHostZeroMotionIntent(zero_motion ? 1u : 0u);
@@ -606,6 +632,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
   }
 
   const pkt_hl_state_t *pkt = reinterpret_cast<const pkt_hl_state_t *>(data);
+  const bool was_idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
 
   hl_current_mode = pkt->current_mode;
   hl_gps_quality = pkt->gps_quality;
@@ -644,15 +671,18 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     PANEL_Set_LED(PANEL_LED_4H, PANEL_LED_OFF);
     PANEL_Set_LED(PANEL_LED_6H, PANEL_LED_OFF);
     PANEL_Set_LED(PANEL_LED_8H, PANEL_LED_OFF);
+    if (!was_idle) {
+      ActuatorAuthorization_Invalidate();
+    }
     main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
     left_target_mps = right_target_mps = 0.0f;
     /* IDLE invalidates the controller's already prepared UART speeds too. A
      * rapid later mode change still needs a fresh post-IDLE cmd_vel. */
     DRIVEMOTOR_SetHostZeroMotionIntent(1u);
-    DRIVEMOTOR_SetSpeedSigned(0, 0);
+    DRIVEMOTOR_SetSpeedSigned(0, 0, ActuatorAuthorization_Epoch());
     cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
-    target_blade_emergency_generation = Emergency_Generation();
+    target_blade_authorization_epoch = ActuatorAuthorization_Epoch();
     valid_cmd_vel_seen = 0u;
     host_zero_motion_intent = 1u;
     host_yaw_inhibit = 1u;
@@ -672,22 +702,24 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
    * Commands received during an emergency are rejected by the shared policy. */
   const uint32_t primask = __get_PRIMASK();
   __disable_irq();
-  const uint32_t emergency_generation = Emergency_Generation();
+  const uint32_t emergency_generation = ActuatorAuthorization_Epoch();
   const bool emergency_active = Emergency_State() != 0u;
   const bool blade_command_fresh = blade_on_command_is_fresh(
       HAL_GetTick(), last_cmd_vel_tick, valid_cmd_vel_seen != 0u,
       CMD_VEL_TIMEOUT_MS, last_heartbeat_tick, heartbeat_seen != 0u,
-      HEARTBEAT_TIMEOUT_MS);
+      HEARTBEAT_TIMEOUT_MS) &&
+      ActuatorAuthorization_DriveRequestIsCurrent(
+          cmd_vel_authorization_epoch);
   const std::uint8_t accepted_blade_request =
       pkt->blade_on != 0u && !blade_command_fresh ? 0u : pkt->blade_on;
   const BladeIntentDecision decision = decide_blade_intent(
-      target_blade_on_off, target_blade_emergency_generation, true,
+      target_blade_on_off, target_blade_authorization_epoch, true,
       accepted_blade_request, emergency_generation,
       main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, emergency_active,
       motor_link_rearm_required != 0u,
       emergency_generation);
   target_blade_on_off = decision.retained_request;
-  target_blade_emergency_generation = decision.request_generation;
+  target_blade_authorization_epoch = decision.request_generation;
   blade_direction = pkt->blade_dir;
   if (pkt->blade_on == 0u && host_zero_motion_intent != 0u &&
       left_target_mps == 0.0f && right_target_mps == 0.0f &&
@@ -850,13 +882,14 @@ extern "C" void motors_handler() {
     float snap_right_target = right_target_mps;
     float snap_cmd_wz = cmd_wz;
     uint8_t snap_target_blade = target_blade_on_off;
-    uint32_t snap_blade_generation = target_blade_emergency_generation;
+    uint32_t snap_blade_generation = target_blade_authorization_epoch;
     uint32_t snap_cmd_vel = last_cmd_vel_tick;
+    uint32_t snap_cmd_vel_authorization_epoch = cmd_vel_authorization_epoch;
     uint32_t snap_zero_phase = host_zero_phase_sequence;
     bool snap_zero_intent = host_zero_motion_intent != 0u;
     bool snap_yaw_inhibit = host_yaw_inhibit != 0u;
     float snap_ticks_per_meter = DRIVEMOTOR_GetTicksPerMeter();
-    uint32_t snap_emergency_generation = Emergency_Generation();
+    uint32_t snap_emergency_generation = ActuatorAuthorization_Epoch();
     bool emergency_active = Emergency_State() != 0u;
     bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
     bool links_healthy = DRIVEMOTOR_FeedbackHealthy() &&
@@ -865,6 +898,10 @@ extern "C" void motors_handler() {
     uint32_t blade_fault_sequence = BLADEMOTOR_FaultSequence();
     bool link_inhibited = MOTORLINK_OutputInhibited() != 0u;
     __enable_irq();
+
+    const bool cmd_vel_authorization_current =
+        ActuatorAuthorization_DriveRequestIsCurrent(
+            snap_cmd_vel_authorization_epoch);
 
     motor_link_rearm_required = mowgli_motor_safety::update_link_rearm(
         motor_link_rearm_state, links_healthy, snap_zero_phase,
@@ -909,15 +946,15 @@ extern "C" void motors_handler() {
         blade_decision.request_generation != snap_blade_generation) {
       const uint32_t primask = __get_PRIMASK();
       __disable_irq();
-      const uint32_t current_generation = Emergency_Generation();
+      const uint32_t current_generation = ActuatorAuthorization_Epoch();
       const bool emergency_active_now = Emergency_State() != 0u;
       const bool idle_now = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
       if (target_blade_on_off != 0u &&
           (emergency_active_now || idle_now ||
            motor_link_rearm_required != 0u ||
-           target_blade_emergency_generation != current_generation)) {
+           target_blade_authorization_epoch != current_generation)) {
         target_blade_on_off = 0;
-        target_blade_emergency_generation = current_generation;
+        target_blade_authorization_epoch = current_generation;
       }
       __set_PRIMASK(primask);
     }
@@ -925,6 +962,22 @@ extern "C" void motors_handler() {
     /* --- decide effective drive target ---
      * Emergency or cmd_vel watchdog timeout overrides the drive output. */
     bool hard_stop = false;
+    if (!cmd_vel_authorization_current) {
+      hard_stop = true;
+      const uint32_t auth_primask = __get_PRIMASK();
+      __disable_irq();
+      if (cmd_vel_authorization_epoch ==
+          snap_cmd_vel_authorization_epoch) {
+        left_target_mps = 0.0f;
+        right_target_mps = 0.0f;
+        cmd_wz = 0.0f;
+        valid_cmd_vel_seen = 0u;
+        host_zero_motion_intent = 1u;
+        host_yaw_inhibit = 1u;
+        DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+      }
+      __set_PRIMASK(auth_primask);
+    }
     if (motor_link_rearm_required != 0u) {
       hard_stop = true;
       blade_on_off = 0;
@@ -963,9 +1016,9 @@ extern "C" void motors_handler() {
         __disable_irq();
         if ((uint32_t)(HAL_GetTick() - last_cmd_vel_tick) > 25000u) {
           const BladeIntentDecision stopped =
-              stop_blade_intent(Emergency_Generation());
+              stop_blade_intent(ActuatorAuthorization_Epoch());
           target_blade_on_off = stopped.retained_request;
-          target_blade_emergency_generation = stopped.request_generation;
+          target_blade_authorization_epoch = stopped.request_generation;
           blade_on_off = stopped.effective_output;
         }
         __set_PRIMASK(timeout_primask);
@@ -1236,7 +1289,7 @@ extern "C" void motors_handler() {
       }
       Emergency_SetState(1);
       target_blade_on_off = 0;
-      target_blade_emergency_generation = Emergency_Generation();
+      target_blade_authorization_epoch = ActuatorAuthorization_Epoch();
       blade_on_off = 0;
     }
     __set_PRIMASK(heartbeat_primask);
@@ -1246,7 +1299,7 @@ extern "C" void motors_handler() {
      * or explicit OFF command must still force this cycle's output OFF. */
     const uint32_t output_primask = __get_PRIMASK();
     __disable_irq();
-    const uint32_t output_generation = Emergency_Generation();
+    const uint32_t output_generation = ActuatorAuthorization_Epoch();
     const bool output_links_healthy =
         DRIVEMOTOR_FeedbackHealthy() && BLADEMOTOR_FeedbackHealthy() &&
         DRIVEMOTOR_FaultSequence() == drive_fault_sequence &&
@@ -1258,7 +1311,7 @@ extern "C" void motors_handler() {
       motor_link_rearm_state.required = true;
       motor_link_rearm_state.zero_phase_baseline = host_zero_phase_sequence;
       target_blade_on_off = 0u;
-      target_blade_emergency_generation = output_generation;
+      target_blade_authorization_epoch = output_generation;
       blade_on_off = 0u;
       hard_stop = true;
     }
@@ -1266,19 +1319,24 @@ extern "C" void motors_handler() {
         main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
         motor_link_rearm_required != 0u ||
         target_blade_on_off == 0u ||
-        target_blade_emergency_generation != output_generation) {
+        target_blade_authorization_epoch != output_generation) {
       blade_on_off = 0;
     }
-    const bool final_drive_stop = hard_stop || !output_links_healthy ||
+    const bool final_drive_stop = hard_stop ||
+                                  !cmd_vel_authorization_current ||
+                                  !output_links_healthy ||
                                   Emergency_State() != 0u ||
                                   main_eOpenmowerStatus ==
                                       OPENMOWER_STATUS_IDLE;
     if (final_drive_stop) {
-      DRIVEMOTOR_SetSpeedSigned(0, 0);
+      DRIVEMOTOR_SetSpeedSigned(0, 0,
+                                snap_cmd_vel_authorization_epoch);
     } else {
-      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed);
+      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed,
+                                snap_cmd_vel_authorization_epoch);
     }
-    BLADEMOTOR_Set(blade_on_off, blade_direction);
+    BLADEMOTOR_Set(blade_on_off, blade_direction,
+                   snap_blade_generation);
     __set_PRIMASK(output_primask);
   }
 }

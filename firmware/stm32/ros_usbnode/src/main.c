@@ -21,6 +21,7 @@
 #include <string.h>
 #include "stm32f_board_hal.h"
 #include "main.h"
+#include "actuator_authorization.h"
 // stm32 custom
 #include "board.h"
 #include "panel.h"
@@ -78,8 +79,21 @@ uint8_t do_chirp = 0;
 openmower_status_e main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
 static volatile uint8_t motor_link_output_inhibited = 1u;
 
-void MOTORLINK_ForceInhibit(void) { motor_link_output_inhibited = 1u; }
-void MOTORLINK_ClearInhibit(void) { motor_link_output_inhibited = 0u; }
+void MOTORLINK_ForceInhibit(void) {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (motor_link_output_inhibited == 0u) {
+    ActuatorAuthorization_Invalidate();
+    motor_link_output_inhibited = 1u;
+  }
+  __set_PRIMASK(primask);
+}
+void MOTORLINK_ClearInhibit(void) {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  motor_link_output_inhibited = 0u;
+  __set_PRIMASK(primask);
+}
 uint8_t MOTORLINK_OutputInhibited(void) {
   return motor_link_output_inhibited;
 }

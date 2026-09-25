@@ -59,7 +59,10 @@ void BLADEMOTOR_ReceiveIT(void);
 bool BLADEMOTOR_FeedbackHealthy(void);
 uint32_t BLADEMOTOR_FaultSequence(void);
 
-void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction);
+/* A blade ON request is accepted only for the caller's current drive
+ * authorization epoch. OFF requests do not require an authorization token. */
+void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction,
+                    uint32_t authorization_epoch);
 
 
 #ifdef __cplusplus

@@ -15,6 +15,7 @@ FW = Path(__file__).resolve().parents[1] / 'stm32/ros_usbnode'
 
 SHIM = r'''
 #include <stdint.h>
+#include <stdbool.h>
 #include <assert.h>
 #include <string.h>
 #include <stdarg.h>
@@ -34,11 +35,23 @@ static GPIO_TypeDef gpioe, gpiod;
 #define HAL_OK 0
 #define HAL_BUSY 1
 static uint32_t test_tick, test_primask;
+static uint32_t test_authorization_epoch = 1u;
+static bool test_drive_token_current = true;
 enum { OPENMOWER_STATUS_MOWING = 0, OPENMOWER_STATUS_IDLE = 3 };
 static int main_eOpenmowerStatus = OPENMOWER_STATUS_MOWING;
 static uint8_t test_emergency;
+static uint8_t test_link_inhibited;
 static unsigned test_reset_pin, test_power_pin;
 static uint8_t Emergency_State(void) { return test_emergency; }
+uint32_t ActuatorAuthorization_Epoch(void) { return test_authorization_epoch; }
+bool ActuatorAuthorization_DriveRequestIsCurrent(uint32_t request_epoch) {
+    return test_drive_token_current && request_epoch == test_authorization_epoch;
+}
+static void __attribute__((unused)) test_advance_authorization_epoch(void) {
+    ++test_authorization_epoch;
+    if (test_authorization_epoch == 0u) ++test_authorization_epoch;
+    test_drive_token_current = false;
+}
 static void __attribute__((unused)) HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pin, unsigned value) {
     if (port == GPIOE && pin == GPIO_PIN_14) test_reset_pin = value;
     if (port == GPIOD && pin == GPIO_PIN_11) test_power_pin = value;
@@ -53,7 +66,7 @@ static uint32_t __get_PRIMASK(void) { return test_primask; }
 static void __disable_irq(void) { test_primask = 1; }
 static void __set_PRIMASK(uint32_t value) { test_primask = value; }
 static void MOTORLINK_ForceInhibit(void) {}
-static uint8_t MOTORLINK_OutputInhibited(void) { return 0u; }
+static uint8_t MOTORLINK_OutputInhibited(void) { return test_link_inhibited; }
 static int HAL_UART_AbortReceive(UART_HandleTypeDef *h) { h->RxState = HAL_UART_STATE_READY; return HAL_OK; }
 static int __attribute__((unused)) HAL_UART_AbortTransmit(UART_HandleTypeDef *h) { h->gState = HAL_UART_STATE_READY; return HAL_OK; }
 static int HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, unsigned n) {
@@ -77,6 +90,11 @@ TEST = r'''
 #include <stdio.h>
 #include "blade_under_test.c"
 
+static void set_blade_current(uint8_t on_off, uint8_t direction) {
+    BLADEMOTOR_Set(on_off, direction, ActuatorAuthorization_Epoch());
+}
+#define BLADEMOTOR_Set(on_off, direction) set_blade_current(on_off, direction)
+
 static void app(void) {
     /* Most scenarios model a prompt full response; timeout/overlap cases call
      * BLADEMOTOR_App directly and control HAL state explicitly. */
@@ -88,8 +106,11 @@ static void app(void) {
 }
 static void reset(void) {
     test_tick = 100;
+    test_authorization_epoch = 1u;
+    test_drive_token_current = true;
     main_eOpenmowerStatus = OPENMOWER_STATUS_MOWING;
     test_emergency = 0;
+    test_link_inhibited = 0u;
     test_primask = test_tx_count = test_tx_result = 0;
     test_rx_count = test_wait_count = test_trace_count = 0;
     test_debug_line[0] = 0;
@@ -104,6 +125,7 @@ static void reset(void) {
     test_reset_pin = 0u; test_power_pin = 1u;
     blademotor_eState = BLADEMOTOR_RUN;
     blademotor_u8OnOff = blademotor_u8Direction = blademotor_u8RunDirection = 0;
+    blademotor_u32OnAuthorizationEpoch = 0u;
     blademotor_reverse_pending = blademotor_off_sent = blademotor_zero_seen = false;
     blademotor_stop_since = blademotor_zero_since = blademotor_last_feedback_seq = 0;
     blademotor_zero_epoch = 0;
@@ -227,18 +249,58 @@ int main(void) {
     assert(test_power_pin == GPIO_PIN_SET);
 #endif
     reset(); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
-    BLADEMOTOR_Set(1, 0); app(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
-    BLADEMOTOR_Set(0, 1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    BLADEMOTOR_Set(1, 0);
+    assert(blademotor_u32OnAuthorizationEpoch == test_authorization_epoch);
+    app(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
+    BLADEMOTOR_Set(0, 1);
+    assert(blademotor_u32OnAuthorizationEpoch == 0u);
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     reset(); BLADEMOTOR_Set(1, 0); test_emergency = 1;
     app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(blademotor_u8OnOff == 0u);
     test_emergency = 0; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    // Emergency assert and release can happen entirely between blade App
+    // passes. The cached pre-emergency token must not revive the old ON.
+    reset(); BLADEMOTOR_Set(1, 0);
+    test_emergency = 1; test_advance_authorization_epoch();
+    test_emergency = 0;
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    assert(blademotor_u8OnOff == 0u);
+    // A request arriving while emergency is active is rejected and stays OFF
+    // after emergency release, even though the same caller epoch is supplied.
+    reset(); test_emergency = 1; BLADEMOTOR_Set(1, 0);
+    test_emergency = 0; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    assert(blademotor_u8OnOff == 0u);
     reset(); BLADEMOTOR_Set(1, 0);
     main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
     app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(blademotor_u8OnOff == 0u);
     main_eOpenmowerStatus = OPENMOWER_STATUS_MOWING;
     app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    // IDLE->MOWING does not replay a cached ON without a fresh drive epoch.
+    reset(); BLADEMOTOR_Set(1, 0);
+    main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
+    test_advance_authorization_epoch();
+    main_eOpenmowerStatus = OPENMOWER_STATUS_MOWING;
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    assert(blademotor_u8OnOff == 0u);
+    // Either a link inhibit or an epoch change invalidates the lower cached ON.
+    reset(); BLADEMOTOR_Set(1, 0); test_link_inhibited = 1u;
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    assert(blademotor_u8OnOff == 0u);
+    test_link_inhibited = 0u; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    reset(); BLADEMOTOR_Set(1, 0); test_advance_authorization_epoch();
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    assert(blademotor_u8OnOff == 0u);
+    // A stale epoch captured by the upper loop before an emergency boundary
+    // is rejected even if its Set call arrives after emergency release.
+    reset();
+    uint32_t stale_blade_epoch = ActuatorAuthorization_Epoch();
+    test_emergency = 1; test_advance_authorization_epoch();
+    test_emergency = 0;
+    (BLADEMOTOR_Set)(1, 0, stale_blade_epoch);
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    assert(blademotor_u8OnOff == 0u);
     // A reverse first start cannot use the zero-initialized public RPM.
     reset(); BLADEMOTOR_Set(1, 1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     test_tick += 5000; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
@@ -416,6 +478,9 @@ def main():
         (out / 'stm32f_board_hal.h').write_text('', encoding='utf-8')
         (out / 'emergency.h').write_text(
             (FW / 'include/emergency.h').read_text(encoding='utf-8'), encoding='utf-8')
+        (out / 'actuator_authorization.h').write_text(
+            (FW / 'include/actuator_authorization.h').read_text(encoding='utf-8'),
+            encoding='utf-8')
         (out / 'blademotor.h').write_text(
             '#pragma once\n#include <stdbool.h>\nbool BLADEMOTOR_FeedbackHealthy(void);\n',
             encoding='utf-8')

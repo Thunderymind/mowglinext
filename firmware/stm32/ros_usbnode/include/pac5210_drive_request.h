@@ -27,9 +27,10 @@ static inline Pac5210DriveRequest pac5210_request_from_signed_pwm(
 
 static inline bool pac5210_should_stop_output(
     bool emergency_active, bool idle, bool link_inhibited,
-    bool feedback_healthy, bool host_zero_intent) {
+    bool feedback_healthy, bool host_zero_intent,
+    bool authorization_current) {
   return emergency_active || idle || link_inhibited || !feedback_healthy ||
-         host_zero_intent;
+         host_zero_intent || !authorization_current;
 }
 
 static inline Pac5210DriveRequest pac5210_apply_final_output_gate(
