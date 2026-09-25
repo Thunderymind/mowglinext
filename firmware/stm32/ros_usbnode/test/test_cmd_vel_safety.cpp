@@ -88,6 +88,53 @@ static void test_imu_mount_rotation_yaw_180_negates_x_y_only()
   TEST_ASSERT_FLOAT_WITHIN(0.0f, 3.0f, z);
 }
 
+static void test_configured_mount_maps_accel_and_gyro_basis_vectors()
+{
+#if IMU_MOUNT_ROTATION == IMU_MOUNT_ROTATION_YAW_180
+  float x = 1.0f, y = 0.0f, z = 0.0f;
+  IMU_ApplyConfiguredMountRotation(&x, &y, &z);  // +X acceleration
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, z);
+
+  x = 0.0f; y = 1.0f; z = 0.0f;
+  IMU_ApplyConfiguredMountRotation(&x, &y, &z);  // +Y acceleration
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, z);
+
+  x = 1.0f; y = 0.0f; z = 0.0f;
+  IMU_ApplyConfiguredMountRotation(&x, &y, &z);  // gyro +X
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, z);
+
+  x = 0.0f; y = 1.0f; z = 0.0f;
+  IMU_ApplyConfiguredMountRotation(&x, &y, &z);  // gyro +Y
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, z);
+
+  x = 0.0f; y = 0.0f; z = 1.0f;
+  IMU_ApplyConfiguredMountRotation(&x, &y, &z);  // gyro +Z
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 0.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, z);
+
+  x = 1.0f; y = 2.0f; z = 3.0f;
+  IMU_ApplyConfiguredMountRotation(&x, &y, &z);  // magnetometer path
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -2.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 3.0f, z);
+#else
+  float x = 1.0f, y = 2.0f, z = 3.0f;
+  IMU_ApplyConfiguredMountRotation(&x, &y, &z);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 2.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 3.0f, z);
+#endif
+}
+
 int main()
 {
   UNITY_BEGIN();
@@ -96,5 +143,6 @@ int main()
   RUN_TEST(test_valid_command_after_invalid_is_normal);
   RUN_TEST(test_imu_mount_rotation_identity_preserves_all_axes);
   RUN_TEST(test_imu_mount_rotation_yaw_180_negates_x_y_only);
+  RUN_TEST(test_configured_mount_maps_accel_and_gyro_basis_vectors);
   return UNITY_END();
 }
