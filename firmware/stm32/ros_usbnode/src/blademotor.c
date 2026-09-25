@@ -37,6 +37,7 @@
 #define BLADEMOTOR_ZERO_CONFIRM_MS 300u
 #define BLADEMOTOR_FEEDBACK_MAX_AGE_MS 300u
 #define BLADEMOTOR_REVERSE_REPORT_MS 5000u
+#define BLADEMOTOR_RX_TIMEOUT_MS 100u
 #ifndef BLADEMOTOR_COASTDOWN_VALIDATION
 #define BLADEMOTOR_COASTDOWN_VALIDATION 0
 #endif
@@ -85,7 +86,10 @@ static uint8_t blademotor_u8Direction = 0;
 static uint8_t blademotor_u8RunDirection = 0;
 #if defined(BLADEMOTOR_SEQUENCED_POWER)
 static uint32_t blademotor_state_started_tick = 0u;
+static bool blademotor_startup_retry_pending = false;
 #endif
+static volatile bool blademotor_rx_armed = false;
+static volatile uint32_t blademotor_rx_started_tick = 0u;
 static volatile uint32_t blademotor_last_valid_tick = 0u;
 static volatile uint32_t blademotor_fault_sequence = 0u;
 static volatile uint8_t blademotor_seen_valid = 0u;
@@ -369,21 +373,39 @@ void  BLADEMOTOR_App(void){
         break;
 
     case BLADEMOTOR_LOGIC_BOOT:
-        if ((uint32_t)(HAL_GetTick() - blademotor_state_started_tick) >= 100u &&
+        if ((uint32_t)(HAL_GetTick() - blademotor_state_started_tick) >=
+                (blademotor_startup_retry_pending ? 1000u : 100u) &&
             BLADEMOTOR_USART_Handler.gState == HAL_UART_STATE_READY &&
             BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_READY)
         {
-            /* The RM1000 startup sequence receives the PAC5223 response to
-             * the version query before sending the matrix/power commands. */
+            /* Arm RX before querying the PAC5223. A missing response is
+             * bounded and retried while the blade inverter stays unpowered. */
             if (HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler,
                     blademotor_pu8ReceivedData,
-                    BLADEMOTOR_LENGTH_RECEIVED_MSG) == HAL_OK &&
-                HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
-                    (uint8_t*)blademotor_pcu8VersionMsg,
-                    BLADEMOTOR_LENGTH_VERSION_MSG) == HAL_OK)
+                    BLADEMOTOR_LENGTH_RECEIVED_MSG) == HAL_OK)
             {
+                if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
+                        (uint8_t*)blademotor_pcu8VersionMsg,
+                        BLADEMOTOR_LENGTH_VERSION_MSG) == HAL_OK)
+                {
+                    blademotor_state_started_tick = HAL_GetTick();
+                    blademotor_eState = BLADEMOTOR_VERSION_WAIT;
+                }
+                else
+                {
+                    (void)HAL_UART_AbortReceive(&BLADEMOTOR_USART_Handler);
+                    blademotor_startup_retry_pending = true;
+                    blademotor_state_started_tick = HAL_GetTick();
+                    ++BLADEMOTOR_u32Error;
+                    MOTORLINK_ForceInhibit();
+                }
+            }
+            else
+            {
+                blademotor_startup_retry_pending = true;
                 blademotor_state_started_tick = HAL_GetTick();
-                blademotor_eState = BLADEMOTOR_VERSION_WAIT;
+                ++BLADEMOTOR_u32Error;
+                MOTORLINK_ForceInhibit();
             }
         }
         break;
@@ -397,9 +419,20 @@ void  BLADEMOTOR_App(void){
                                       (uint8_t*)blademotor_pcu8InitMsg,
                                       BLADEMOTOR_LENGTH_INIT_MSG) == HAL_OK)
             {
+                blademotor_startup_retry_pending = false;
                 blademotor_state_started_tick = HAL_GetTick();
                 blademotor_eState = BLADEMOTOR_MATRIX_WAIT;
             }
+        }
+        else if ((uint32_t)(HAL_GetTick() - blademotor_state_started_tick) > 350u)
+        {
+            (void)HAL_UART_AbortReceive(&BLADEMOTOR_USART_Handler);
+            (void)HAL_UART_AbortTransmit(&BLADEMOTOR_USART_Handler);
+            blademotor_startup_retry_pending = true;
+            blademotor_state_started_tick = HAL_GetTick();
+            blademotor_eState = BLADEMOTOR_LOGIC_BOOT;
+            ++BLADEMOTOR_u32Error;
+            MOTORLINK_ForceInhibit();
         }
         break;
 
@@ -439,9 +472,47 @@ void  BLADEMOTOR_App(void){
             blademotor_off_sent = blademotor_zero_seen = false;
             BLADEMOTOR_u32Error++;
         }
-        /* Polling continues after OFF, including while the speed word is held.
-         * RX re-arm and error handling must continue even while TX is busy. */
-        HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler, blademotor_pu8ReceivedData, BLADEMOTOR_LENGTH_RECEIVED_MSG);
+        /* Each command gets exactly one bounded response window. Do not issue
+         * another request while DMA still owns the RX buffer; a silent or
+         * malformed controller must not wedge polling indefinitely. */
+        if (blademotor_rx_armed)
+        {
+            if (BLADEMOTOR_USART_Handler.RxState != HAL_UART_STATE_READY)
+            {
+                if ((uint32_t)(HAL_GetTick() - blademotor_rx_started_tick) <
+                    BLADEMOTOR_RX_TIMEOUT_MS)
+                    break;
+                (void)HAL_UART_AbortReceive(&BLADEMOTOR_USART_Handler);
+                if (BLADEMOTOR_USART_Handler.RxState != HAL_UART_STATE_READY)
+                {
+                    /* Keep the timeout active if HAL could not reclaim DMA. */
+                    blademotor_rx_started_tick = HAL_GetTick();
+                    ++BLADEMOTOR_u32Error;
+                    MOTORLINK_ForceInhibit();
+                    break;
+                }
+                blademotor_rx_armed = false;
+                ++BLADEMOTOR_u32Error;
+                MOTORLINK_ForceInhibit();
+            }
+            else
+            {
+                /* A full frame completed; BLADEMOTOR_ReceiveIT also clears
+                 * this flag, while this path covers HAL completion ordering. */
+                blademotor_rx_armed = false;
+            }
+        }
+        if (BLADEMOTOR_USART_Handler.RxState != HAL_UART_STATE_READY ||
+            HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler,
+                blademotor_pu8ReceivedData,
+                BLADEMOTOR_LENGTH_RECEIVED_MSG) != HAL_OK)
+        {
+            ++BLADEMOTOR_u32Error;
+            MOTORLINK_ForceInhibit();
+            break;
+        }
+        blademotor_rx_armed = true;
+        blademotor_rx_started_tick = HAL_GetTick();
 
         if (blademotor_reverse_pending &&
             (uint32_t)(HAL_GetTick() - blademotor_pending_report_tick) >= BLADEMOTOR_REVERSE_REPORT_MS)
@@ -525,6 +596,7 @@ void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction)
 /// @param  
 void BLADEMOTOR_ReceiveIT(void)
 {
+    blademotor_rx_armed = false;
     const uint32_t now = HAL_GetTick();
     blademotor_feedback.valid = 0;
     /* decode the frame */    

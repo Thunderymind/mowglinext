@@ -54,6 +54,8 @@ static void __disable_irq(void) { test_primask = 1; }
 static void __set_PRIMASK(uint32_t value) { test_primask = value; }
 static void MOTORLINK_ForceInhibit(void) {}
 static uint8_t MOTORLINK_OutputInhibited(void) { return 0u; }
+static int HAL_UART_AbortReceive(UART_HandleTypeDef *h) { h->RxState = HAL_UART_STATE_READY; return HAL_OK; }
+static int __attribute__((unused)) HAL_UART_AbortTransmit(UART_HandleTypeDef *h) { h->gState = HAL_UART_STATE_READY; return HAL_OK; }
 static int HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, unsigned n) {
     (void)h;
     if (!test_tx_result) { memcpy(test_frame, p, n); ++test_tx_count; }
@@ -75,6 +77,15 @@ TEST = r'''
 #include <stdio.h>
 #include "blade_under_test.c"
 
+static void app(void) {
+    /* Most scenarios model a prompt full response; timeout/overlap cases call
+     * BLADEMOTOR_App directly and control HAL state explicitly. */
+    if (blademotor_eState == BLADEMOTOR_RUN && blademotor_rx_armed) {
+        BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_READY;
+        blademotor_rx_armed = false;
+    }
+    BLADEMOTOR_App();
+}
 static void reset(void) {
     test_tick = 100;
     main_eOpenmowerStatus = OPENMOWER_STATUS_MOWING;
@@ -84,6 +95,12 @@ static void reset(void) {
     test_debug_line[0] = 0;
     BLADEMOTOR_USART_Handler.gState = HAL_UART_STATE_READY;
     BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_READY;
+    blademotor_rx_armed = false;
+    blademotor_rx_started_tick = test_tick;
+#if defined(BLADEMOTOR_SEQUENCED_POWER)
+    blademotor_startup_retry_pending = false;
+    blademotor_state_started_tick = 0u;
+#endif
     test_reset_pin = 0u; test_power_pin = 1u;
     blademotor_eState = BLADEMOTOR_RUN;
     blademotor_u8OnOff = blademotor_u8Direction = blademotor_u8RunDirection = 0;
@@ -114,6 +131,7 @@ static void frame(uint8_t command) {
 /* valid: 1 good, 0 bad checksum, -1 bad preamble with otherwise valid checksum. */
 static void feedback(unsigned advance, unsigned rpm, unsigned active, unsigned error, int valid) {
     test_tick += advance;
+    BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_READY;
     memset(blademotor_pu8ReceivedData, 0, sizeof(blademotor_pu8ReceivedData));
     blademotor_pu8ReceivedData[0] = valid == -1 ? 0 : 0x55;
     blademotor_pu8ReceivedData[1] = 0xAA;
@@ -125,33 +143,33 @@ static void feedback(unsigned advance, unsigned rpm, unsigned active, unsigned e
         crcCalc(blademotor_pu8ReceivedData, BLADEMOTOR_LENGTH_RECEIVED_MSG-1) ^ (valid == 0);
     BLADEMOTOR_ReceiveIT();
 }
-static void zero(unsigned advance) { feedback(advance, 0, 0, 0, 1); BLADEMOTOR_App(); }
+static void zero(unsigned advance) { feedback(advance, 0, 0, 0, 1); app(); }
 static void reversing(void) {
-    reset(); BLADEMOTOR_Set(1, 0); BLADEMOTOR_App(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
+    reset(); BLADEMOTOR_Set(1, 0); app(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
     feedback(100, 3300, 1, 0, 1);
-    BLADEMOTOR_Set(1, 1); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    BLADEMOTOR_Set(1, 1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(blademotor_off_sent);
 }
 int main(void) {
 #if BLADEMOTOR_COASTDOWN_VALIDATION
     // No auto-start, no reverse even with qualifying zero feedback for 20 s.
-    reset(); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    reset(); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     reversing();
     for (unsigned i=0; i<200; ++i) { zero(100); frame(BLADEMOTOR_STOP_COMMAND_VALUE); }
     assert(blademotor_reverse_pending && test_wait_count == 4);
     assert(test_trace_count == 201);
-    BLADEMOTOR_Set(0, 0); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    BLADEMOTOR_Set(0, 0); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(!blademotor_reverse_pending);
     // Trace only completed samples; preserve IRQ mask and report raw RX values.
-    reset(); BLADEMOTOR_Set(1,0); BLADEMOTOR_App(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
-    feedback(100,3300,1,0,1); test_primask=1; BLADEMOTOR_App();
+    reset(); BLADEMOTOR_Set(1,0); app(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
+    feedback(100,3300,1,0,1); test_primask=1; app();
     assert(test_primask==1 && test_trace_count==1);
     assert(strstr(test_debug_line,"tx=80 tx_t=100 seq=1 rx_t=200 valid=1 active=1 speed_word=3300"));
-    BLADEMOTOR_Set(0,0); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    BLADEMOTOR_Set(0,0); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(test_trace_count==1);
-    feedback(100,3300,0,0,1); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    feedback(100,3300,0,0,1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(strstr(test_debug_line,"tx=00 tx_t=200 seq=2 rx_t=300 valid=1 active=0 speed_word=3300"));
-    feedback(100,0,0,0,0); BLADEMOTOR_App();
+    feedback(100,0,0,0,0); app();
     assert(strstr(test_debug_line,"valid=0"));
     puts("PASS: validation image never reverses or auto-starts; timestamped RX/accepted-command trace");
     return 0;
@@ -160,45 +178,77 @@ int main(void) {
     reset();
     blademotor_eState = BLADEMOTOR_RESET_HOLD;
     blademotor_state_started_tick = 0u;
-    test_tick = 50u; BLADEMOTOR_App();
+    test_tick = 50u; app();
     assert(blademotor_eState == BLADEMOTOR_LOGIC_BOOT && test_reset_pin == GPIO_PIN_SET);
-    test_tick = 150u; BLADEMOTOR_App();
+    test_tick = 150u; app();
     assert(blademotor_eState == BLADEMOTOR_VERSION_WAIT);
     assert(BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_BUSY_RX);
     assert(test_power_pin == GPIO_PIN_SET && test_frame[4] == 0x5au);
-    test_tick = 170u; BLADEMOTOR_App();
+    test_tick = 170u; app();
     assert(blademotor_eState == BLADEMOTOR_VERSION_WAIT && test_power_pin == GPIO_PIN_SET);
     BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_READY;
-    BLADEMOTOR_App();
+    app();
     assert(blademotor_eState == BLADEMOTOR_MATRIX_WAIT);
-    test_tick = 190u; BLADEMOTOR_App();
+    test_tick = 190u; app();
     assert(blademotor_eState == BLADEMOTOR_POWER_WAIT && test_power_pin == GPIO_PIN_RESET);
-    test_tick = 240u; BLADEMOTOR_App();
+    test_tick = 240u; app();
     assert(blademotor_eState == BLADEMOTOR_RUN);
+    /* A response still in DMA must block duplicate commands and RX re-arms. */
+    reset(); app();
+    unsigned tx_pre_timeout = test_tx_count, rx_pre_timeout = test_rx_count;
+    test_tick += 20u; BLADEMOTOR_App();
+    assert(test_tx_count == tx_pre_timeout && test_rx_count == rx_pre_timeout);
+    /* A silent PAC5223 times out, aborts the stale DMA and starts one new exchange. */
+    test_tick += BLADEMOTOR_RX_TIMEOUT_MS; BLADEMOTOR_App();
+    assert(BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_BUSY_RX);
+    assert(test_tx_count == tx_pre_timeout + 1u && test_rx_count == rx_pre_timeout + 1u);
+    /* Startup version loss is also bounded and leaves inverter power off. */
+    reset();
+    blademotor_eState = BLADEMOTOR_VERSION_WAIT;
+    blademotor_state_started_tick = 50u;
+    BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_BUSY_RX;
+    test_tick = 401u; BLADEMOTOR_App();
+    assert(blademotor_eState == BLADEMOTOR_LOGIC_BOOT);
+    assert(test_power_pin == GPIO_PIN_SET);
+    assert(BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_READY);
+    /* A failed version-query TX reclaims RX and backs off before retrying. */
+    reset();
+    blademotor_eState = BLADEMOTOR_LOGIC_BOOT;
+    blademotor_state_started_tick = 50u;
+    test_tx_result = HAL_BUSY;
+    test_tick = 150u; BLADEMOTOR_App();
+    assert(blademotor_eState == BLADEMOTOR_LOGIC_BOOT);
+    assert(BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_READY);
+    test_tx_result = HAL_OK;
+    test_tick = 1149u; BLADEMOTOR_App();
+    assert(blademotor_eState == BLADEMOTOR_LOGIC_BOOT);
+    test_tick = 1150u; BLADEMOTOR_App();
+    assert(blademotor_eState == BLADEMOTOR_VERSION_WAIT);
+    assert(test_power_pin == GPIO_PIN_SET);
 #endif
-    reset(); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
-    BLADEMOTOR_Set(1, 0); BLADEMOTOR_App(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
-    BLADEMOTOR_Set(0, 1); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    reset(); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    BLADEMOTOR_Set(1, 0); app(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
+    BLADEMOTOR_Set(0, 1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     reset(); BLADEMOTOR_Set(1, 0); test_emergency = 1;
-    BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(blademotor_u8OnOff == 0u);
-    test_emergency = 0; BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    test_emergency = 0; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     reset(); BLADEMOTOR_Set(1, 0);
     main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
-    BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     assert(blademotor_u8OnOff == 0u);
     main_eOpenmowerStatus = OPENMOWER_STATUS_MOWING;
-    BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     // A reverse first start cannot use the zero-initialized public RPM.
-    reset(); BLADEMOTOR_Set(1, 1); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
-    test_tick += 5000; BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    reset(); BLADEMOTOR_Set(1, 1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    test_tick += 5000; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
 
     reversing();
     for (unsigned i=0; i<9; ++i) { zero(100); frame(BLADEMOTOR_STOP_COMMAND_VALUE); }
     zero(99); frame(BLADEMOTOR_STOP_COMMAND_VALUE); // minimum OFF dwell not complete
     zero(1); frame(BLADEMOTOR_REVERSE_COMMAND_VALUE); // fresh zero confirmation + exact dwell boundary
     assert(blademotor_u8RunDirection == 1);
-    BLADEMOTOR_Set(1, 0); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    BLADEMOTOR_Set(1, 0); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     for (unsigned i=0; i<9; ++i) { zero(100); frame(BLADEMOTOR_STOP_COMMAND_VALUE); }
     zero(100); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE); // symmetric reverse-to-forward interlock
 
@@ -209,12 +259,12 @@ int main(void) {
         for (unsigned held=20; held<=60; held+=40) {
             reset(); blademotor_u8RunDirection=1-direction;
             feedback(0,3520,1,0,1);
-            BLADEMOTOR_Set(1,direction); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+            BLADEMOTOR_Set(1,direction); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
             for (unsigned i=0; i<held; ++i) {
                 BLADEMOTOR_Set(1,direction);
                 feedback(100,3494,0,0,1);
                 unsigned rx_before=test_rx_count, tx_before=test_tx_count;
-                BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+                app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
                 assert(test_rx_count==rx_before+1 && test_tx_count==tx_before+1);
                 assert(!blademotor_zero_seen);
             }
@@ -230,7 +280,7 @@ int main(void) {
     // the last reply when the clock reaches 1000 ms must still send OFF.
     reversing();
     for (unsigned i=0; i<9; ++i) { zero(100); frame(BLADEMOTOR_STOP_COMMAND_VALUE); }
-    test_tick+=100; BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    test_tick+=100; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     zero(1); frame(BLADEMOTOR_REVERSE_COMMAND_VALUE); // a newly received qualifying reply releases it
 
     // A held nonzero reply interrupts zero confirmation even when overwritten
@@ -243,8 +293,8 @@ int main(void) {
     zero(1); frame(BLADEMOTOR_REVERSE_COMMAND_VALUE);
 
     reversing();
-    feedback(1000, 0, 0, 0, 1); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
-    test_tick += 300; BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE); // one old zero is insufficient
+    feedback(1000, 0, 0, 0, 1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    test_tick += 300; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE); // one old zero is insufficient
     zero(1); frame(BLADEMOTOR_STOP_COMMAND_VALUE); // feedback gap breaks the zero interval
     zero(299); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     zero(1); frame(BLADEMOTOR_REVERSE_COMMAND_VALUE);
@@ -256,7 +306,7 @@ int main(void) {
             if (failure == 5) test_tick += 100;
             else feedback(100, failure==0 ? 1:0, failure==1, failure==2,
                           failure==3 ? 0 : failure==4 ? -1 : 1);
-            BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+            app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
         }
     }
     // A bad sample cannot disappear when a good reply arrives before App.
@@ -272,39 +322,39 @@ int main(void) {
     BLADEMOTOR_Set(0, 1); zero(100); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     for (unsigned i=0; i<20; ++i) zero(100);
     frame(BLADEMOTOR_STOP_COMMAND_VALUE);
-    BLADEMOTOR_Set(1, 1); BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    BLADEMOTOR_Set(1, 1); app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     for (unsigned i=0; i<9; ++i) { zero(100); frame(BLADEMOTOR_STOP_COMMAND_VALUE); }
     zero(100); frame(BLADEMOTOR_REVERSE_COMMAND_VALUE);
 
     // Failed OFF transmissions cannot count as a stopped dwell.
-    reset(); BLADEMOTOR_Set(1,0); BLADEMOTOR_App(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
+    reset(); BLADEMOTOR_Set(1,0); app(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
     BLADEMOTOR_Set(1,1); test_tx_result=HAL_BUSY;
     for (unsigned i=0; i<20; ++i) zero(100);
     assert(!blademotor_off_sent); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
-    test_tx_result=HAL_OK; BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    test_tx_result=HAL_OK; app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
     for (unsigned i=0; i<9; ++i) { zero(100); frame(BLADEMOTOR_STOP_COMMAND_VALUE); }
     zero(100); frame(BLADEMOTOR_REVERSE_COMMAND_VALUE);
 
     // Set does not mutate DMA data; App does not rebuild while TX owns it.
-    reset(); BLADEMOTOR_Set(1,0); BLADEMOTOR_App(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
+    reset(); BLADEMOTOR_Set(1,0); app(); frame(BLADEMOTOR_FORWARD_COMMAND_VALUE);
     BLADEMOTOR_USART_Handler.gState=1;
-    BLADEMOTOR_Set(1,1); BLADEMOTOR_App();
+    BLADEMOTOR_Set(1,1); app();
     assert(blademotor_pu8RqstMessage[5]==BLADEMOTOR_FORWARD_COMMAND_VALUE && test_tx_count==1);
     BLADEMOTOR_USART_Handler.gState=HAL_UART_STATE_READY;
-    BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
 
     // TX busy must not skip receive re-arm or a controller-error stop.
-    reset(); BLADEMOTOR_Set(1,0); BLADEMOTOR_App();
+    reset(); BLADEMOTOR_Set(1,0); app();
     feedback(100,3300,1,2,1);
     BLADEMOTOR_USART_Handler.gState=HAL_BUSY;
     unsigned rx_before=test_rx_count;
-    BLADEMOTOR_App();
+    app();
     assert(test_rx_count==rx_before+1 && BLADEMOTOR_u32Error==1);
     assert(!blademotor_u8OnOff && test_tx_count==1);
     assert(blademotor_pu8RqstMessage[5]==BLADEMOTOR_FORWARD_COMMAND_VALUE); // DMA-owned frame unchanged
     feedback(100,0,0,0,1); // clearing the error cannot revive the cancelled ON
     BLADEMOTOR_USART_Handler.gState=HAL_UART_STATE_READY;
-    BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+    app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
 
     // Nonzero noise, active, invalid and missing replies remain OFF and report
     // every 5 s, including while UART TX is busy. ON retries cannot reset it.
@@ -314,20 +364,20 @@ int main(void) {
             BLADEMOTOR_Set(1,1);
             if (failure==3) test_tick+=100;
             else feedback(100,failure==0 ? 1:0,failure==1,0,failure==2 ? 0:1);
-            BLADEMOTOR_App(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
+            app(); frame(BLADEMOTOR_STOP_COMMAND_VALUE);
             assert(test_wait_count==(i+1)/50);
         }
         BLADEMOTOR_USART_Handler.gState=HAL_BUSY;
-        test_tick+=100; BLADEMOTOR_App();
+        test_tick+=100; app();
         assert(test_wait_count==2 && BLADEMOTOR_u32Error==2);
-        BLADEMOTOR_Set(0,0); test_tick+=5000; BLADEMOTOR_App();
+        BLADEMOTOR_Set(0,0); test_tick+=5000; app();
         assert(test_wait_count==2); // OFF cancels warnings as well as reversal
     }
     reversing();
     test_tick=UINT32_MAX-2000;
     blademotor_pending_since=blademotor_pending_report_tick=test_tick;
-    test_tick+=4999; BLADEMOTOR_App(); assert(test_wait_count==0);
-    test_tick+=1; BLADEMOTOR_App(); assert(test_wait_count==1);
+    test_tick+=4999; app(); assert(test_wait_count==0);
+    test_tick+=1; app(); assert(test_wait_count==1);
 
     // Repeated ON updates do not restart the dwell; timing survives tick wrap.
     reversing(); test_tick=UINT32_MAX-500;

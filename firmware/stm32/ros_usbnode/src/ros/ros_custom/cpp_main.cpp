@@ -648,10 +648,14 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     PANEL_Set_LED(PANEL_LED_8H, PANEL_LED_OFF);
     main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
     left_target_mps = right_target_mps = 0.0f;
+    /* IDLE invalidates the controller's already prepared UART speeds too. A
+     * rapid later mode change still needs a fresh post-IDLE cmd_vel. */
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    DRIVEMOTOR_SetSpeedSigned(0, 0);
     cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
     target_blade_emergency_generation = Emergency_Generation();
-    host_zero_motion_intent = 0u;
+    host_zero_motion_intent = 1u;
     host_yaw_inhibit = 1u;
     break;
   }
