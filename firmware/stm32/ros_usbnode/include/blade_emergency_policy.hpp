@@ -16,6 +16,21 @@ struct BladeIntentDecision {
   std::uint32_t request_generation;
 };
 
+constexpr BladeIntentDecision stop_blade_intent(
+    const std::uint32_t current_generation) {
+  return {0u, 0u, current_generation};
+}
+
+constexpr bool blade_on_command_is_fresh(
+    const std::uint32_t now, const std::uint32_t last_cmd_vel,
+    const bool cmd_vel_seen, const std::uint32_t cmd_vel_timeout,
+    const std::uint32_t last_heartbeat, const bool heartbeat_seen,
+    const std::uint32_t heartbeat_timeout) {
+  return cmd_vel_seen && heartbeat_seen &&
+         (now - last_cmd_vel) <= cmd_vel_timeout &&
+         (now - last_heartbeat) <= heartbeat_timeout;
+}
+
 constexpr BladeIntentDecision decide_blade_intent(
     const std::uint8_t previous_request,
     const std::uint32_t previous_generation, const bool command_received,

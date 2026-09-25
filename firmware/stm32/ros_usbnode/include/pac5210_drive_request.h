@@ -1,6 +1,7 @@
 #ifndef PAC5210_DRIVE_REQUEST_H
 #define PAC5210_DRIVE_REQUEST_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef struct {
@@ -21,6 +22,23 @@ static inline Pac5210DriveRequest pac5210_request_from_signed_pwm(
       direction,
       (uint8_t)(left_pwm < 0 ? -left_pwm : left_pwm),
       (uint8_t)(right_pwm < 0 ? -right_pwm : right_pwm)};
+  return request;
+}
+
+static inline bool pac5210_should_stop_output(
+    bool emergency_active, bool idle, bool link_inhibited,
+    bool feedback_healthy, bool host_zero_intent) {
+  return emergency_active || idle || link_inhibited || !feedback_healthy ||
+         host_zero_intent;
+}
+
+static inline Pac5210DriveRequest pac5210_apply_final_output_gate(
+    Pac5210DriveRequest request, bool stop) {
+  if (stop) {
+    request.direction = 0xa0u;
+    request.left_speed = 0u;
+    request.right_speed = 0u;
+  }
   return request;
 }
 

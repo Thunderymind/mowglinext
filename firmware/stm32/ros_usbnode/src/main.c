@@ -563,7 +563,7 @@ int main(void)
 #if (DEBUG_TYPE != DEBUG_TYPE_UART) && (OPTION_ULTRASONIC == 1)
   NBT_init(&main_ultrasonicsensor_nbt, 50);
 #endif
-  NBT_init(&main_blademotor_nbt, 100);
+  NBT_init(&main_blademotor_nbt, BLADEMOTOR_POLL_INTERVAL_MS);
   NBT_init(&main_drivemotor_nbt, 20);
   NBT_init(&main_wdg_nbt, 10);
   NBT_init(&main_buzzer_nbt, 200);

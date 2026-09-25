@@ -77,6 +77,7 @@ void DRIVEMOTOR_ReceiveIT(void);
 void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
                                int16_t right_pwm_signed);
 void DRIVEMOTOR_SetTicksPerMeter(float ticks_per_meter);
+void DRIVEMOTOR_SetHostZeroMotionIntent(uint8_t zero_intent);
 float DRIVEMOTOR_GetTicksPerMeter(void);
 /* Runtime max wheel-speed cap. The setter clamps to (0, compile-time MAX_MPS];
  * the wire (PKT_ID_SET_KINEMATICS) can only LOWER the cap, never raise it. */

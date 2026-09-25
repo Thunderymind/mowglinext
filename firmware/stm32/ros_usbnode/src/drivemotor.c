@@ -103,6 +103,7 @@ static volatile uint32_t drivemotor_last_valid_tick = 0u;
 static volatile uint32_t drivemotor_fault_sequence = 0u;
 static volatile uint8_t drivemotor_seen_valid = 0u;
 static volatile uint8_t drivemotor_last_error = 0u;
+static volatile uint8_t drivemotor_host_zero_intent = 1u;
 
 static DRIVEMOTORS_data_t drivemotor_psReceivedData = {0};
 static uint8_t drivemotor_pu8RqstMessage[DRIVEMOTOR_LENGTH_RQST_MSG] = {
@@ -394,9 +395,23 @@ void DRIVEMOTOR_App_10ms(void) {
       }
     }
 
-    HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
-                          (uint8_t *)drivemotor_pu8RqstMessage,
-                          DRIVEMOTOR_LENGTH_RQST_MSG);
+    /* Recheck the actuator gates atomically at the UART DMA handoff. A USB,
+     * emergency or feedback ISR may have changed them after the earlier
+     * request calculation. */
+    {
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      if (Emergency_State() != 0u ||
+          main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+          MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy() ||
+          drivemotor_host_zero_intent != 0u) {
+        drivemotor_prepareMsg(0, 0, 0, 0);
+      }
+      HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
+                            (uint8_t *)drivemotor_pu8RqstMessage,
+                            DRIVEMOTOR_LENGTH_RQST_MSG);
+      __set_PRIMASK(primask);
+    }
 
     break;
 
@@ -424,9 +439,21 @@ void DRIVEMOTOR_App_10ms(void) {
         l_u32Timestamp = HAL_GetTick();
       }
     }
-    HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
-                          (uint8_t *)drivemotor_pu8RqstMessage,
-                          DRIVEMOTOR_LENGTH_RQST_MSG);
+    {
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      if (Emergency_State() != 0u ||
+          main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+          MOTORLINK_OutputInhibited() || !DRIVEMOTOR_FeedbackHealthy() ||
+          drivemotor_host_zero_intent != 0u) {
+        drivemotor_prepareMsg(0, 0, 0, 0);
+        drivemotor_eState = DRIVEMOTOR_RUN;
+      }
+      HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
+                            (uint8_t *)drivemotor_pu8RqstMessage,
+                            DRIVEMOTOR_LENGTH_RQST_MSG);
+      __set_PRIMASK(primask);
+    }
 
     break;
 
@@ -631,6 +658,10 @@ void DRIVEMOTOR_App_Rx(void) {
   }
 }
 
+void DRIVEMOTOR_SetHostZeroMotionIntent(uint8_t zero_intent) {
+  drivemotor_host_zero_intent = zero_intent != 0u;
+}
+
 void DRIVEMOTOR_SetTicksPerMeter(float ticks_per_meter) {
   g_ticks_per_meter = drivemotor_clamp_ticks_per_meter(ticks_per_meter);
 }
@@ -738,10 +769,16 @@ __STATIC_INLINE void drivemotor_prepareMsg(uint8_t left_speed,
                                            uint8_t left_dir,
                                            uint8_t right_dir) {
 
-  const Pac5210DriveRequest request = {
+  Pac5210DriveRequest request = {
       (uint8_t)((right_dir ? 0x30u : 0x20u) |
                 (left_dir ? 0xc0u : 0x80u)),
       left_speed,
       right_speed};
+  const bool stop = pac5210_should_stop_output(
+      Emergency_State() != 0u,
+      main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE,
+      MOTORLINK_OutputInhibited() != 0u, DRIVEMOTOR_FeedbackHealthy(),
+      drivemotor_host_zero_intent != 0u);
+  request = pac5210_apply_final_output_gate(request, stop);
   pac5210_encode_drive_packet(drivemotor_pu8RqstMessage, request);
 }

@@ -220,6 +220,7 @@ HEARTBEAT_SHIM = r'''
 #include "heartbeat_emergency_policy.hpp"
 static bool heartbeat_only_latch;
 static uint32_t last_heartbeat_tick;
+static uint8_t heartbeat_seen;
 typedef struct { uint8_t type, emergency_requested, emergency_release_requested; uint16_t crc; } pkt_heartbeat_t;
 static bool any_physical_emergency(void) { return I2C_TestZLowINT(); }
 '''

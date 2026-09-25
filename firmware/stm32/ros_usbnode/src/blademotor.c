@@ -20,6 +20,7 @@
 
 #include "main.h"
 #include "board.h"
+#include "emergency.h"
 
 #include "blademotor.h" 
 
@@ -168,6 +169,14 @@ static bool blademotor_feedback_qualified_for_reverse(uint32_t now)
 void blademotor_prepareMsg(void)
 {
     uint8_t command = BLADEMOTOR_STOP_COMMAND_VALUE;
+    /* Recheck the system-level actuator gates where the final packet is built.
+     * This catches emergency/IDLE events that arrive after cpp_main selected
+     * the cached blade request. BLADEMOTOR_App holds IRQs through DMA start. */
+    if (Emergency_State() != 0u ||
+        main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE)
+    {
+        blademotor_u8OnOff = 0u;
+    }
     if (!BLADEMOTOR_FeedbackHealthy())
     {
         MOTORLINK_ForceInhibit();
@@ -361,11 +370,17 @@ void  BLADEMOTOR_App(void){
 
     case BLADEMOTOR_LOGIC_BOOT:
         if ((uint32_t)(HAL_GetTick() - blademotor_state_started_tick) >= 100u &&
-            BLADEMOTOR_USART_Handler.gState == HAL_UART_STATE_READY)
+            BLADEMOTOR_USART_Handler.gState == HAL_UART_STATE_READY &&
+            BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_READY)
         {
-            if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
-                                      (uint8_t*)blademotor_pcu8VersionMsg,
-                                      BLADEMOTOR_LENGTH_VERSION_MSG) == HAL_OK)
+            /* The RM1000 startup sequence receives the PAC5223 response to
+             * the version query before sending the matrix/power commands. */
+            if (HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler,
+                    blademotor_pu8ReceivedData,
+                    BLADEMOTOR_LENGTH_RECEIVED_MSG) == HAL_OK &&
+                HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
+                    (uint8_t*)blademotor_pcu8VersionMsg,
+                    BLADEMOTOR_LENGTH_VERSION_MSG) == HAL_OK)
             {
                 blademotor_state_started_tick = HAL_GetTick();
                 blademotor_eState = BLADEMOTOR_VERSION_WAIT;
@@ -375,7 +390,8 @@ void  BLADEMOTOR_App(void){
 
     case BLADEMOTOR_VERSION_WAIT:
         if ((uint32_t)(HAL_GetTick() - blademotor_state_started_tick) >= 20u &&
-            BLADEMOTOR_USART_Handler.gState == HAL_UART_STATE_READY)
+            BLADEMOTOR_USART_Handler.gState == HAL_UART_STATE_READY &&
+            BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_READY)
         {
             if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
                                       (uint8_t*)blademotor_pcu8InitMsg,
@@ -454,9 +470,12 @@ void  BLADEMOTOR_App(void){
 #endif
         /* Do not rewrite a request buffer still owned by the UART DMA. */
         if (BLADEMOTOR_USART_Handler.gState != HAL_UART_STATE_READY) break;
+        const uint32_t output_primask = __get_PRIMASK();
+        __disable_irq();
         blademotor_prepareMsg();
-                  
-        if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler, (uint8_t*)blademotor_pu8RqstMessage,
+        if (BLADEMOTOR_USART_Handler.gState == HAL_UART_STATE_READY &&
+            HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
+                (uint8_t*)blademotor_pu8RqstMessage,
                 BLADEMOTOR_LENGTH_RQST_MSG) == HAL_OK)
         {
 #if BLADEMOTOR_COASTDOWN_VALIDATION
@@ -480,6 +499,7 @@ void  BLADEMOTOR_App(void){
                 blademotor_off_sent = true;
             }
         }
+        __set_PRIMASK(output_primask);
         break;
     
     default:

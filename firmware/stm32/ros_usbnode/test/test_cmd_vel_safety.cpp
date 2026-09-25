@@ -6,6 +6,7 @@
 #include "cmd_vel_safety.hpp"
 #include "imu/imu_mount_transform.h"
 #include "blade_emergency_policy.hpp"
+#include "heartbeat_emergency_policy.hpp"
 #include "motor_output_safety.hpp"
 #include "pac5210_drive_request.h"
 
@@ -23,6 +24,43 @@ static void test_blade_authorization_is_discarded_at_emergency_boundary()
                                  false, false, false, 8u);
   TEST_ASSERT_EQUAL_UINT8(0u, decision.retained_request);
   TEST_ASSERT_EQUAL_UINT8(0u, decision.effective_output);
+}
+
+static void test_blade_intent_is_cleared_after_cmd_vel_timeout()
+{
+  auto decision = decide_blade_intent(0u, 7u, true, 1u, 7u, false, false,
+                                      false, 7u);
+  TEST_ASSERT_EQUAL_UINT8(1u, decision.effective_output);
+  decision = stop_blade_intent(7u);
+  decision = decide_blade_intent(decision.retained_request,
+                                 decision.request_generation, false, 0u, 7u,
+                                 false, false, false, 7u);
+  TEST_ASSERT_EQUAL_UINT8(0u, decision.retained_request);
+  TEST_ASSERT_EQUAL_UINT8(0u, decision.effective_output);
+}
+
+static void test_blade_on_requires_fresh_cmd_vel_and_heartbeat()
+{
+  TEST_ASSERT_FALSE(blade_on_command_is_fresh(100u, 100u, false, 200u,
+                                               100u, true, 2000u));
+  TEST_ASSERT_FALSE(blade_on_command_is_fresh(401u, 100u, true, 200u,
+                                               401u, true, 2000u));
+  TEST_ASSERT_FALSE(blade_on_command_is_fresh(2201u, 2201u, true, 200u,
+                                               100u, true, 2000u));
+  TEST_ASSERT_TRUE(blade_on_command_is_fresh(500u, 450u, true, 200u,
+                                              400u, true, 2000u));
+
+  const auto rejected = decide_blade_intent(
+      0u, 9u, true, 0u, 9u, false, false, false, 9u);
+  TEST_ASSERT_EQUAL_UINT8(0u, rejected.retained_request);
+  TEST_ASSERT_EQUAL_UINT8(0u, rejected.effective_output);
+}
+
+static void test_heartbeat_watchdog_starts_without_received_packet()
+{
+  TEST_ASSERT_TRUE(heartbeat_timed_out(30001u, 0u, 30000u));
+  TEST_ASSERT_FALSE(heartbeat_timed_out(30000u, 0u, 30000u));
+  TEST_ASSERT_FALSE(heartbeat_timed_out(30001u, 30000u, 30000u));
 }
 
 static void test_blade_on_received_during_latch_is_not_deferred()
@@ -123,6 +161,42 @@ static void test_signed_zero_and_braking_reach_pac5210_frame()
     checksum = static_cast<std::uint8_t>(checksum + packet[i]);
   }
   TEST_ASSERT_EQUAL_UINT8(checksum, packet[11]);
+}
+
+static void test_final_drive_gate_keeps_packet_zero_for_safety_events()
+{
+  const Pac5210DriveRequest reverse{0xb0u, 100u, 100u};
+  const bool stop_cases[][5] = {
+      {true, false, false, true, false},
+      {false, true, false, true, false},
+      {false, false, true, true, false},
+      {false, false, false, false, false},
+      {false, false, false, true, true},
+  };
+  std::uint8_t packet[12]{};
+  for (const auto &stop_case : stop_cases) {
+    TEST_ASSERT_TRUE(pac5210_should_stop_output(
+        stop_case[0], stop_case[1], stop_case[2], stop_case[3],
+        stop_case[4]));
+  }
+  TEST_ASSERT_FALSE(
+      pac5210_should_stop_output(false, false, false, true, false));
+  const Pac5210DriveRequest gated =
+      pac5210_apply_final_output_gate(reverse, true);
+  pac5210_encode_drive_packet(packet, gated);
+  TEST_ASSERT_EQUAL_HEX8(0xa0u, packet[5]);
+  TEST_ASSERT_EQUAL_UINT8(0u, packet[6]);
+  TEST_ASSERT_EQUAL_UINT8(0u, packet[7]);
+  std::uint8_t checksum = 0u;
+  for (std::uint8_t i = 0u; i < 11u; ++i) {
+    checksum = static_cast<std::uint8_t>(checksum + packet[i]);
+  }
+  TEST_ASSERT_EQUAL_UINT8(checksum, packet[11]);
+
+  const Pac5210DriveRequest allowed =
+      pac5210_apply_final_output_gate(reverse, false);
+  TEST_ASSERT_EQUAL_UINT8(100u, allowed.left_speed);
+  TEST_ASSERT_EQUAL_UINT8(100u, allowed.right_speed);
 }
 
 static void test_finite_and_zero_are_accepted()
@@ -265,6 +339,9 @@ int main()
 {
   UNITY_BEGIN();
   RUN_TEST(test_blade_authorization_is_discarded_at_emergency_boundary);
+  RUN_TEST(test_blade_intent_is_cleared_after_cmd_vel_timeout);
+  RUN_TEST(test_blade_on_requires_fresh_cmd_vel_and_heartbeat);
+  RUN_TEST(test_heartbeat_watchdog_starts_without_received_packet);
   RUN_TEST(test_blade_on_received_during_latch_is_not_deferred);
   RUN_TEST(test_blade_on_during_link_rearm_is_not_deferred);
   RUN_TEST(test_motor_link_requires_fresh_zero_after_recovery);
@@ -272,6 +349,7 @@ int main()
   RUN_TEST(test_zero_host_intent_suppresses_yaw_invented_targets);
   RUN_TEST(test_zero_host_intent_preserves_braking_but_not_stationary_pwm);
   RUN_TEST(test_signed_zero_and_braking_reach_pac5210_frame);
+  RUN_TEST(test_final_drive_gate_keeps_packet_zero_for_safety_events);
   RUN_TEST(test_finite_and_zero_are_accepted);
   RUN_TEST(test_nonfinite_commands_clear_targets_without_refresh);
   RUN_TEST(test_valid_command_after_invalid_is_normal);

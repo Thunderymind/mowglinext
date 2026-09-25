@@ -265,6 +265,7 @@ static uint8_t blade_direction = 0;
  * cmd_vel timeout tracking (replaces ros::Time)
  * ---------------------------------------------------------------------------*/
 static volatile uint32_t last_cmd_vel_tick = 0;
+static volatile uint8_t valid_cmd_vel_seen = 0u;
 
 /* ---------------------------------------------------------------------------
  * High-level state received from host
@@ -276,6 +277,8 @@ static uint8_t hl_gps_quality = 0;
  * Heartbeat watchdog
  * ---------------------------------------------------------------------------*/
 static volatile uint32_t last_heartbeat_tick = 0;
+static volatile uint8_t heartbeat_seen = 0u;
+#define CMD_VEL_TIMEOUT_MS 200u
 #define HEARTBEAT_TIMEOUT_MS 2000u
 
 /* True when the CURRENTLY latched emergency was raised SOLELY by the heartbeat
@@ -367,6 +370,7 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
   const pkt_heartbeat_t *pkt = reinterpret_cast<const pkt_heartbeat_t *>(data);
 
   last_heartbeat_tick = HAL_GetTick();
+  heartbeat_seen = 1u;
 
   const bool emergency_requested = pkt->emergency_requested != 0u;
   const bool emergency_release_requested =
@@ -430,14 +434,18 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
     right_target_mps = safety_state.right_target_mps;
     host_zero_motion_intent = 0u;
     host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
     return;
   }
 
   /* Only a validated command is a new cmd_vel heartbeat. */
   last_cmd_vel_tick = safety_state.last_valid_tick;
+  valid_cmd_vel_seen = 1u;
   const bool zero_motion = safety_state.zero_motion_intent;
   host_zero_motion_intent = zero_motion ? 1u : 0u;
   host_yaw_inhibit = safety_state.yaw_inhibited ? 1u : 0u;
+  DRIVEMOTOR_SetHostZeroMotionIntent(zero_motion ? 1u : 0u);
 
   if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
     return;
@@ -663,9 +671,15 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
   __disable_irq();
   const uint32_t emergency_generation = Emergency_Generation();
   const bool emergency_active = Emergency_State() != 0u;
+  const bool blade_command_fresh = blade_on_command_is_fresh(
+      HAL_GetTick(), last_cmd_vel_tick, valid_cmd_vel_seen != 0u,
+      CMD_VEL_TIMEOUT_MS, last_heartbeat_tick, heartbeat_seen != 0u,
+      HEARTBEAT_TIMEOUT_MS);
+  const std::uint8_t accepted_blade_request =
+      pkt->blade_on != 0u && !blade_command_fresh ? 0u : pkt->blade_on;
   const BladeIntentDecision decision = decide_blade_intent(
       target_blade_on_off, target_blade_emergency_generation, true,
-      pkt->blade_on, emergency_generation,
+      accepted_blade_request, emergency_generation,
       main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, emergency_active,
       motor_link_rearm_required != 0u,
       emergency_generation);
@@ -926,13 +940,32 @@ extern "C" void motors_handler() {
       blade_on_off = 0;
     } else {
       const uint32_t cmd_vel_age_ms = HAL_GetTick() - snap_cmd_vel;
-      if (cmd_vel_age_ms > 200u) {
+      if (cmd_vel_age_ms > CMD_VEL_TIMEOUT_MS) {
         /* Command-vel watchdog: zero motors if the host hasn't
          * sent a twist in 200 ms (Pi hang, USB glitch, etc). */
         hard_stop = true;
+        const uint32_t watchdog_primask = __get_PRIMASK();
+        __disable_irq();
+        if ((uint32_t)(HAL_GetTick() - last_cmd_vel_tick) >
+            CMD_VEL_TIMEOUT_MS) {
+          DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+        }
+        __set_PRIMASK(watchdog_primask);
       }
       if (cmd_vel_age_ms > 25000u) {
-        blade_on_off = 0;
+        /* This timeout is a blade authorization boundary. Recheck freshness
+         * under the same lock used by packet handlers so a concurrent fresh
+         * command is not erased, and never retain an old ON for later replay. */
+        const uint32_t timeout_primask = __get_PRIMASK();
+        __disable_irq();
+        if ((uint32_t)(HAL_GetTick() - last_cmd_vel_tick) > 25000u) {
+          const BladeIntentDecision stopped =
+              stop_blade_intent(Emergency_Generation());
+          target_blade_on_off = stopped.retained_request;
+          target_blade_emergency_generation = stopped.request_generation;
+          blade_on_off = stopped.effective_output;
+        }
+        __set_PRIMASK(timeout_primask);
       }
     }
 
@@ -1191,8 +1224,8 @@ extern "C" void motors_handler() {
     const uint32_t heartbeat_primask = __get_PRIMASK();
     __disable_irq();
     const uint32_t current_heartbeat = last_heartbeat_tick;
-    if (current_heartbeat != 0u &&
-        (HAL_GetTick() - current_heartbeat) > HEARTBEAT_TIMEOUT_MS) {
+    if (heartbeat_timed_out(HAL_GetTick(), current_heartbeat,
+                             HEARTBEAT_TIMEOUT_MS)) {
       if (any_physical_emergency()) {
         heartbeat_only_latch = false;
       } else if (!Emergency_State()) {
@@ -1591,8 +1624,13 @@ extern "C" void init_ROS() {
   apply_param_groups(fw_params_take_dirty_groups());
 
   last_odom_tick = HAL_GetTick();
-  last_heartbeat_tick = 0;
+  /* Start the heartbeat watchdog at initialization, not at the first packet:
+   * a host that sends actuator commands but omits HEARTBEAT must time out. */
+  last_heartbeat_tick = HAL_GetTick();
   last_cmd_vel_tick = 0;
+  valid_cmd_vel_seen = 0u;
+  heartbeat_seen = 0u;
+  DRIVEMOTOR_SetHostZeroMotionIntent(1u);
 }
 
 float clamp(float d, float min, float max) {
