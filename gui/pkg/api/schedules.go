@@ -88,6 +88,7 @@ func createSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
 		}
+		notifyScheduleChanged()
 
 		c.JSON(http.StatusOK, sched)
 	}
@@ -138,6 +139,7 @@ func updateSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
 		}
+		notifyScheduleChanged()
 
 		c.JSON(http.StatusOK, sched)
 	}
@@ -160,6 +162,7 @@ func deleteSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
 		}
+		notifyScheduleChanged()
 		c.JSON(http.StatusOK, OkResponse{})
 	}
 }
