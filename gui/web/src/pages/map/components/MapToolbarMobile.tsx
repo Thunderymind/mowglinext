@@ -33,6 +33,7 @@ import {
     ThunderboltOutlined,
     ImportOutlined,
     CheckOutlined,
+    RadarChartOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import AsyncButton from "../../../components/AsyncButton.tsx";
@@ -80,6 +81,12 @@ interface MapToolbarMobileProps {
     onSubtract?: () => void;
     onSplit?: () => void;
     onPlaceDock?: () => void;
+    /// LiDAR-ignore line drawing (draw_line_string on the map, click-to-place).
+    onDrawLidarCorridor?: () => void;
+    lidarCorridorDrawing?: boolean;
+    onFinishLidarCorridor?: () => void;
+    onCancelLidarCorridor?: () => void;
+    lidarCorridorDrawPointCount?: number;
     dockPlacementMode?: boolean;
     stateName?: string;
     highLevelState?: number;
@@ -111,6 +118,8 @@ export const MapToolbarMobile = ({
     onMowArea, selectedFeatureCount = 0, onEditSelectedFeature,
     onDrawPolygon, onDrawShape, onDrawEmoji, onTrash, onCombine, onSubtract, onSplit,
     onPlaceDock, dockPlacementMode,
+    onDrawLidarCorridor, lidarCorridorDrawing = false, onFinishLidarCorridor, onCancelLidarCorridor,
+    lidarCorridorDrawPointCount = 0,
     stateName, highLevelState, emergency,
     mowerAppearanceId = "urdf", onMowerAppearanceChange = () => {},
     dockAppearanceId = "marker", onDockAppearanceChange = () => {},
@@ -390,6 +399,39 @@ export const MapToolbarMobile = ({
                         aria-label={t("mapToolbarMobile.placeDock")}
                         style={touchTarget}
                     />
+
+                    {/* LiDAR-ignore line: tap to start, then tap points on the map.
+                        While drawing, this becomes Finish/Cancel (mirrors Save/Cancel above) —
+                        the running point count is shown via the aria-label since there is no
+                        room for a text counter in this scrolling row. */}
+                    {lidarCorridorDrawing ? (
+                        <Space.Compact size="large">
+                            <Button
+                                type="primary"
+                                size="large"
+                                icon={<CheckOutlined />}
+                                disabled={lidarCorridorDrawPointCount < 2}
+                                onClick={onFinishLidarCorridor}
+                                aria-label={t("mapLidarCorridors.finish") + ` (${lidarCorridorDrawPointCount})`}
+                                style={touchTarget}
+                            />
+                            <Button
+                                size="large"
+                                icon={<CloseOutlined />}
+                                onClick={onCancelLidarCorridor}
+                                aria-label={t("mapLidarCorridors.cancel")}
+                                style={touchTarget}
+                            />
+                        </Space.Compact>
+                    ) : (
+                        <Button
+                            size="large"
+                            icon={<RadarChartOutlined />}
+                            onClick={onDrawLidarCorridor}
+                            aria-label={t("mapLidarCorridors.draw")}
+                            style={touchTarget}
+                        />
+                    )}
 
                     {/* Combine/Subtract/Split now live inside this More menu
                         (editMenuItems) to keep the top row uncluttered. */}

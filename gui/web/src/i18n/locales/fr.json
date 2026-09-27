@@ -1746,6 +1746,7 @@
     "promoteTooltip": "Promouvoir en exclusion permanente"
   },
   "mapLidarCorridors": {
+    "save": "Enregistrer",
     "header": "Lignes d'ignorance LiDAR ({{count}})",
     "hint": "Le long d'une ligne tracée, le LiDAR est ignoré dans la largeur définie, de sorte que la tondeuse suit la limite enregistrée près d'une haie par exemple. Partout ailleurs, le LiDAR continue de surveiller les obstacles.",
     "safetyWarning": "À l'intérieur d'une ligne, l'arrêt de collision est aussi ignoré. Tracez-la avec précision et gardez la largeur faible.",

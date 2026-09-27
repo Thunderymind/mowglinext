@@ -36,6 +36,7 @@ import {AreasListPanel} from "./map/components/AreasListPanel.tsx";
 import {TrackedObstaclesPanel} from "./map/components/TrackedObstaclesPanel.tsx";
 import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.tsx";
 import {CORRIDOR_COLOR, LidarCorridorsPanel} from "./map/components/LidarCorridorsPanel.tsx";
+import {EditLidarCorridorModal} from "./map/components/EditLidarCorridorModal.tsx";
 import {DEFAULT_CORRIDOR_WIDTH_M, useLidarCorridors} from "./map/hooks/useLidarCorridors.ts";
 import {simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
 import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
@@ -140,6 +141,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // LiDAR-ignore lines: null = not drawing, otherwise the clicked [lng, lat]
     // points so far. Independent of the polygon edit pipeline (useMapEditing).
     const [corridorDraw, setCorridorDraw] = useState<[number, number][] | null>(null);
+    // Mobile: index into lidarCorridors.corridors of the line whose width the
+    // operator is editing (there is no side panel to hold the width field there).
+    const [corridorWidthModalIndex, setCorridorWidthModalIndex] = useState<number | null>(null);
     const lidarCorridors = useLidarCorridors();
     // OpenMower import preview — populated by handleImportOpenMower after
     // the file is uploaded + parsed server-side. Modal renders when set.
@@ -877,6 +881,17 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     // Index of the line currently selected on the map (for Make curved / Simplify).
     const selectedCorridorIndex = lidarCorridors.corridors.findIndex((c) => selectedFeatureIds.includes(corridorDrawId(c)));
+
+    // "Edit properties" on the mobile toolbar: a selected ignore line has no
+    // MowingFeature entry (handleEditSelectedFeature would no-op on it), so open
+    // the width modal instead; anything else falls through as before.
+    const handleEditSelectedFeatureOrCorridor = useCallback(() => {
+        if (selectedCorridorIndex >= 0) {
+            setCorridorWidthModalIndex(selectedCorridorIndex);
+            return;
+        }
+        handleEditSelectedFeature();
+    }, [selectedCorridorIndex, handleEditSelectedFeature]);
     const handleReshapeSelectedCorridor = (reshape: (points: XY[]) => XY[]) => {
         const i = selectedCorridorIndex;
         if (i < 0) return;
@@ -1207,6 +1222,17 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 onSave={updateMowingArea}
                 onCancel={cancelAreaModal}
             />
+            <EditLidarCorridorModal
+                corridor={corridorWidthModalIndex !== null ? lidarCorridors.corridors[corridorWidthModalIndex] ?? null : null}
+                busy={lidarCorridors.busy}
+                onSave={(widthM) => {
+                    if (corridorWidthModalIndex === null) return;
+                    void handleCorridorChange(lidarCorridors.corridors.map((c, i) =>
+                        i === corridorWidthModalIndex ? {...c, width_m: widthM} : c));
+                    setCorridorWidthModalIndex(null);
+                }}
+                onCancel={() => setCorridorWidthModalIndex(null)}
+            />
 
             <div style={{height: '100%', position: 'relative'}}>
                 {map_sw?.length && map_ne?.length ? <Map key={mapKey}
@@ -1409,7 +1435,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         mowingAreas={mowingAreas}
                         selectedFeatureCount={selectedFeatureIds.length}
                         onEditMap={handleEditMap}
-                        onEditSelectedFeature={handleEditSelectedFeature}
+                        onEditSelectedFeature={handleEditSelectedFeatureOrCorridor}
                         onDrawPolygon={handleDrawPolygon}
                         onDrawShape={handleDrawShape}
                         onDrawEmoji={handleDrawEmoji}
@@ -1419,6 +1445,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onSplit={handleSplit}
                         onPlaceDock={handleDockPlacement}
                         dockPlacementMode={dockPlacementMode}
+                        onDrawLidarCorridor={() => setCorridorDraw([])}
+                        lidarCorridorDrawing={corridorDraw !== null}
+                        lidarCorridorDrawPointCount={corridorDraw?.length ?? 0}
+                        onFinishLidarCorridor={() => void handleFinishCorridor()}
+                        onCancelLidarCorridor={() => setCorridorDraw(null)}
                         onSaveMap={handleSaveMap}
                         onUndo={handleUndo}
                         onRedo={handleRedo}
@@ -1472,7 +1503,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onCombine={handleCombine}
                         onSubtract={handleSubtract}
                         onSplit={handleSplit}
-                        onEditSelectedFeature={handleEditSelectedFeature}
+                        onEditSelectedFeature={handleEditSelectedFeatureOrCorridor}
                         onPlaceDock={handleDockPlacement}
                         dockPlacementMode={dockPlacementMode}
                     />

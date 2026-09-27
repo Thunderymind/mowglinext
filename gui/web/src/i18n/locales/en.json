@@ -1750,6 +1750,7 @@
     "promoteTooltip": "Promote to permanent keepout"
   },
   "mapLidarCorridors": {
+    "save": "Save",
     "header": "LiDAR ignore lines ({{count}})",
     "hint": "Along a drawn line the LiDAR is ignored within the set width, so the mower follows the recorded boundary next to e.g. a hedge. Everywhere else the LiDAR keeps watching for obstacles.",
     "safetyWarning": "Inside a line the collision stop is ignored too. Draw it accurately and keep the width small.",
