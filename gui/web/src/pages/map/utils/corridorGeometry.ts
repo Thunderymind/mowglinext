@@ -103,3 +103,33 @@ export const simplifyPolyline = (points: XY[], toleranceM = 0.15): XY[] => {
     }
     return points.filter((_, i) => keep[i]);
 };
+
+/// Build the visible "ignore band" for a corridor: one rectangular quad per
+/// segment, offset `widthM / 2` to each side (perpendicular to the segment).
+/// This is a rough approximation, not a proper buffered polygon — quads from
+/// adjacent segments simply overlap at a bend rather than mitring cleanly —
+/// but that is exactly what we want here: the fill is only a translucent
+/// visual aid so the operator can see roughly how wide a band is actually
+/// suppressed (costmap_scan_filter_node's real point-to-segment test is the
+/// ground truth), and overlapping translucent quads at a corner just read as
+/// slightly more opaque there, not as a rendering bug. Returns one closed
+/// ring (5 points, first === last) per segment; a degenerate (zero-length)
+/// segment is skipped.
+export const buildCorridorBandQuads = (points: XY[], widthM: number): XY[][] => {
+    const halfW = Math.max(0.01, widthM) / 2;
+    const quads: XY[][] = [];
+    for (let i = 0; i + 1 < points.length; i++) {
+        const a = points[i], b = points[i + 1];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-6) continue;
+        const nx = (-dy / len) * halfW;
+        const ny = (dx / len) * halfW;
+        const p1 = {x: a.x + nx, y: a.y + ny};
+        const p2 = {x: b.x + nx, y: b.y + ny};
+        const p3 = {x: b.x - nx, y: b.y - ny};
+        const p4 = {x: a.x - nx, y: a.y - ny};
+        quads.push([p1, p2, p3, p4, p1]);
+    }
+    return quads;
+};

@@ -1,5 +1,6 @@
 import {describe, expect, it} from "vitest";
 import {
+    buildCorridorBandQuads,
     insertMidpoint,
     polylineLengthM,
     removeVertex,
@@ -49,5 +50,25 @@ describe("corridorGeometry", () => {
         expect(simplifyPolyline(line, 0.1)).toEqual([{x: 0, y: 0}, {x: 3, y: 0}]);
         const corner = [{x: 0, y: 0}, {x: 5, y: 0}, {x: 5, y: 5}];
         expect(simplifyPolyline(corner, 0.1)).toEqual(corner);
+    });
+
+    it("bands a straight segment as a widthM-wide rectangle, closed", () => {
+        const quads = buildCorridorBandQuads([{x: 0, y: 0}, {x: 10, y: 0}], 1.0);
+        expect(quads).toHaveLength(1);
+        const [ring] = quads;
+        expect(ring[0]).toEqual(ring[ring.length - 1]); // closed
+        expect(ring.every((p) => Math.abs(p.y) <= 0.5 + 1e-9)).toBe(true);
+        expect(ring.some((p) => Math.abs(p.y - 0.5) < 1e-9)).toBe(true);
+        expect(ring.some((p) => Math.abs(p.y + 0.5) < 1e-9)).toBe(true);
+    });
+
+    it("bands one quad per segment and skips degenerate (repeated) points", () => {
+        const quads = buildCorridorBandQuads([{x: 0, y: 0}, {x: 0, y: 0}, {x: 5, y: 0}, {x: 5, y: 5}], 0.4);
+        expect(quads).toHaveLength(2);
+    });
+
+    it("clamps a zero or negative width to a thin sliver rather than collapsing", () => {
+        const quads = buildCorridorBandQuads([{x: 0, y: 0}, {x: 1, y: 0}], 0);
+        expect(quads[0].some((p) => p.y !== 0)).toBe(true);
     });
 });
