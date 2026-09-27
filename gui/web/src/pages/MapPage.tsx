@@ -1463,14 +1463,27 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     {/* PENDING obstacle proposals (dig reports): dashed, never a real keepout */}
                     {renderProposalLayers()}
                     {/* The actual ignored band (width_m), under everything else so the
-                        centerline / vertex handles / draft points stay legible on top. */}
+                        centerline / vertex handles / draft points stay legible on top.
+                        A narrow band (the default is 0.2 m) can rasterize to a
+                        sub-pixel-wide fill at normal zoom and simply disappear —
+                        fill-opacity alone is not enough. The outline `line` layers
+                        below draw at a fixed PIXEL width regardless of how thin the
+                        polygon is geographically (same reason the centerline itself
+                        stays a constant 4 px), so the two edges of the band stay
+                        visible even for a very narrow line. */}
                     <Source type={"geojson"} id={"lidar-corridor-bands"} data={corridorBandFeatures}>
                         <Layer type={"fill"} id={"lidar-corridor-band-fill"}
                             filter={['==', ['get', 'kind'], 'band']}
-                            paint={{'fill-color': CORRIDOR_COLOR, 'fill-opacity': 0.18}}/>
+                            paint={{'fill-color': CORRIDOR_COLOR, 'fill-opacity': 0.35}}/>
+                        <Layer type={"line"} id={"lidar-corridor-band-outline"}
+                            filter={['==', ['get', 'kind'], 'band']}
+                            paint={{'line-color': CORRIDOR_COLOR, 'line-width': 2, 'line-opacity': 0.9}}/>
                         <Layer type={"fill"} id={"lidar-corridor-draft-band-fill"}
                             filter={['==', ['get', 'kind'], 'draft-band']}
-                            paint={{'fill-color': '#ffffff', 'fill-opacity': 0.15}}/>
+                            paint={{'fill-color': '#ffffff', 'fill-opacity': 0.3}}/>
+                        <Layer type={"line"} id={"lidar-corridor-draft-band-outline"}
+                            filter={['==', ['get', 'kind'], 'draft-band']}
+                            paint={{'line-color': '#ffffff', 'line-width': 2, 'line-opacity': 0.8}}/>
                     </Source>
                     {/* Operator-drawn LiDAR-ignore lines + the line being drawn */}
                     <Source type={"geojson"} id={"lidar-corridors"} data={corridorFeatures}>
