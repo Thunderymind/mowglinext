@@ -58,7 +58,7 @@ static void __attribute__((unused)) HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32
 }
 static int test_tx_result;
 static unsigned test_tx_count;
-static unsigned test_rx_count, test_wait_count, test_trace_count;
+static unsigned test_rx_count, test_rx_length, test_wait_count, test_trace_count;
 static char test_debug_line[200];
 static uint8_t test_frame[22];
 static uint32_t HAL_GetTick(void) { return test_tick; }
@@ -75,7 +75,7 @@ static int HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, unsigned n) 
     return test_tx_result;
 }
 static int HAL_UART_Receive_DMA(UART_HandleTypeDef *h, uint8_t *p, unsigned n) {
-    (void)p; (void)n; ++test_rx_count; h->RxState = HAL_UART_STATE_BUSY_RX; return HAL_OK;
+    (void)p; test_rx_length = n; ++test_rx_count; h->RxState = HAL_UART_STATE_BUSY_RX; return HAL_OK;
 }
 static void debug_printf(const char *fmt, ...) {
     va_list args; va_start(args, fmt);
@@ -112,7 +112,7 @@ static void reset(void) {
     test_emergency = 0;
     test_link_inhibited = 0u;
     test_primask = test_tx_count = test_tx_result = 0;
-    test_rx_count = test_wait_count = test_trace_count = 0;
+    test_rx_count = test_rx_length = test_wait_count = test_trace_count = 0;
     test_debug_line[0] = 0;
     BLADEMOTOR_USART_Handler.gState = HAL_UART_STATE_READY;
     BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_READY;
@@ -121,6 +121,9 @@ static void reset(void) {
 #if defined(BLADEMOTOR_SEQUENCED_POWER)
     blademotor_startup_retry_pending = false;
     blademotor_state_started_tick = 0u;
+    blademotor_startup_version_rx_armed = false;
+    blademotor_startup_version_response_complete = false;
+    blademotor_startup_version_response_valid = false;
 #endif
     test_reset_pin = 0u; test_power_pin = 1u;
     blademotor_eState = BLADEMOTOR_RUN;
@@ -149,6 +152,19 @@ static void frame(uint8_t command) {
     assert(test_frame[5] == command);
     assert(test_frame[6] == crcCalc(test_frame, 6));
     assert(test_frame[6] == (uint8_t)(0xA2u + command));
+}
+static void __attribute__((unused)) version_response(int valid) {
+    memset(blademotor_pu8ReceivedData, 0, sizeof(blademotor_pu8ReceivedData));
+    blademotor_pu8ReceivedData[0] = 0x55u;
+    blademotor_pu8ReceivedData[1] = 0xaau;
+    blademotor_pu8ReceivedData[2] = 0x08u;
+    blademotor_pu8ReceivedData[3] = 0x02u;
+    blademotor_pu8ReceivedData[4] = 0xdau;
+    blademotor_pu8ReceivedData[BLADEMOTOR_LENGTH_VERSION_RESPONSE - 1u] =
+        crcCalc(blademotor_pu8ReceivedData,
+                BLADEMOTOR_LENGTH_VERSION_RESPONSE - 1u) ^ (valid == 0);
+    BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_READY;
+    BLADEMOTOR_ReceiveIT();
 }
 /* valid: 1 good, 0 bad checksum, -1 bad preamble with otherwise valid checksum. */
 static void feedback(unsigned advance, unsigned rpm, unsigned active, unsigned error, int valid) {
@@ -205,16 +221,28 @@ int main(void) {
     test_tick = 150u; app();
     assert(blademotor_eState == BLADEMOTOR_VERSION_WAIT);
     assert(BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_BUSY_RX);
+    assert(test_rx_length == BLADEMOTOR_LENGTH_VERSION_RESPONSE);
     assert(test_power_pin == GPIO_PIN_SET && test_frame[4] == 0x5au);
     test_tick = 170u; app();
     assert(blademotor_eState == BLADEMOTOR_VERSION_WAIT && test_power_pin == GPIO_PIN_SET);
-    BLADEMOTOR_USART_Handler.RxState = HAL_UART_STATE_READY;
+    version_response(1);
     app();
     assert(blademotor_eState == BLADEMOTOR_MATRIX_WAIT);
     test_tick = 190u; app();
     assert(blademotor_eState == BLADEMOTOR_POWER_WAIT && test_power_pin == GPIO_PIN_RESET);
     test_tick = 240u; app();
     assert(blademotor_eState == BLADEMOTOR_RUN);
+    /* A malformed 12-byte version frame must never advance to matrix/power. */
+    reset();
+    blademotor_eState = BLADEMOTOR_LOGIC_BOOT;
+    blademotor_state_started_tick = 50u;
+    test_tick = 150u; app();
+    assert(test_rx_length == BLADEMOTOR_LENGTH_VERSION_RESPONSE);
+    version_response(0);
+    test_tick = 170u;
+    app();
+    assert(blademotor_eState == BLADEMOTOR_LOGIC_BOOT);
+    assert(test_power_pin == GPIO_PIN_SET);
     /* A response still in DMA must block duplicate commands and RX re-arms. */
     reset(); app();
     unsigned tx_pre_timeout = test_tx_count, rx_pre_timeout = test_rx_count;

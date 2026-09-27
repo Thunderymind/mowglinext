@@ -31,6 +31,10 @@
 #define BLADEMOTOR_LENGTH_INIT_MSG 22
 #define BLADEMOTOR_LENGTH_RQST_MSG 7
 #define BLADEMOTOR_LENGTH_VERSION_MSG 7
+/* The RM1000 PAC5223 replies to the version query with a 12-byte frame
+ * (length byte 0x08 plus four framing/checksum bytes). This is distinct from
+ * the 16-byte steady-state motor telemetry frame. */
+#define BLADEMOTOR_LENGTH_VERSION_RESPONSE 12u
 /* Reversal requires an accepted OFF transmission and qualifying ESC reports.
  * The tested 500 holds its speed word after OFF, then clears it; it reports no
  * progressive coast-down curve. These guards are not a mechanical stop model. */
@@ -89,6 +93,9 @@ static uint32_t blademotor_u32OnAuthorizationEpoch = 0u;
 #if defined(BLADEMOTOR_SEQUENCED_POWER)
 static uint32_t blademotor_state_started_tick = 0u;
 static bool blademotor_startup_retry_pending = false;
+static volatile bool blademotor_startup_version_rx_armed = false;
+static volatile bool blademotor_startup_version_response_complete = false;
+static volatile bool blademotor_startup_version_response_valid = false;
 #endif
 static volatile bool blademotor_rx_armed = false;
 static volatile uint32_t blademotor_rx_started_tick = 0u;
@@ -400,9 +407,12 @@ void  BLADEMOTOR_App(void){
         {
             /* Arm RX before querying the PAC5223. A missing response is
              * bounded and retried while the blade inverter stays unpowered. */
+            blademotor_startup_version_response_complete = false;
+            blademotor_startup_version_response_valid = false;
+            blademotor_startup_version_rx_armed = true;
             if (HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler,
                     blademotor_pu8ReceivedData,
-                    BLADEMOTOR_LENGTH_RECEIVED_MSG) == HAL_OK)
+                    BLADEMOTOR_LENGTH_VERSION_RESPONSE) == HAL_OK)
             {
                 if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
                         (uint8_t*)blademotor_pcu8VersionMsg,
@@ -413,6 +423,7 @@ void  BLADEMOTOR_App(void){
                 }
                 else
                 {
+                    blademotor_startup_version_rx_armed = false;
                     (void)HAL_UART_AbortReceive(&BLADEMOTOR_USART_Handler);
                     blademotor_startup_retry_pending = true;
                     blademotor_state_started_tick = HAL_GetTick();
@@ -422,6 +433,7 @@ void  BLADEMOTOR_App(void){
             }
             else
             {
+                blademotor_startup_version_rx_armed = false;
                 blademotor_startup_retry_pending = true;
                 blademotor_state_started_tick = HAL_GetTick();
                 ++BLADEMOTOR_u32Error;
@@ -435,17 +447,40 @@ void  BLADEMOTOR_App(void){
             BLADEMOTOR_USART_Handler.gState == HAL_UART_STATE_READY &&
             BLADEMOTOR_USART_Handler.RxState == HAL_UART_STATE_READY)
         {
-            if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
-                                      (uint8_t*)blademotor_pcu8InitMsg,
-                                      BLADEMOTOR_LENGTH_INIT_MSG) == HAL_OK)
+            if (blademotor_startup_version_response_complete &&
+                blademotor_startup_version_response_valid)
             {
-                blademotor_startup_retry_pending = false;
+                if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler,
+                                          (uint8_t*)blademotor_pcu8InitMsg,
+                                          BLADEMOTOR_LENGTH_INIT_MSG) == HAL_OK)
+                {
+                    blademotor_startup_version_rx_armed = false;
+                    blademotor_startup_retry_pending = false;
+                    blademotor_state_started_tick = HAL_GetTick();
+                    blademotor_eState = BLADEMOTOR_MATRIX_WAIT;
+                }
+                else
+                {
+                    ++BLADEMOTOR_u32Error;
+                    blademotor_startup_version_rx_armed = false;
+                    blademotor_startup_retry_pending = true;
+                    blademotor_state_started_tick = HAL_GetTick();
+                    blademotor_eState = BLADEMOTOR_LOGIC_BOOT;
+                    MOTORLINK_ForceInhibit();
+                }
+            }
+            else if (blademotor_startup_version_response_complete)
+            {
+                blademotor_startup_version_rx_armed = false;
+                blademotor_startup_retry_pending = true;
                 blademotor_state_started_tick = HAL_GetTick();
-                blademotor_eState = BLADEMOTOR_MATRIX_WAIT;
+                blademotor_eState = BLADEMOTOR_LOGIC_BOOT;
             }
         }
-        else if ((uint32_t)(HAL_GetTick() - blademotor_state_started_tick) > 350u)
+        if (blademotor_eState == BLADEMOTOR_VERSION_WAIT &&
+            (uint32_t)(HAL_GetTick() - blademotor_state_started_tick) > 350u)
         {
+            blademotor_startup_version_rx_armed = false;
             (void)HAL_UART_AbortReceive(&BLADEMOTOR_USART_Handler);
             (void)HAL_UART_AbortTransmit(&BLADEMOTOR_USART_Handler);
             blademotor_startup_retry_pending = true;
@@ -636,6 +671,38 @@ void BLADEMOTOR_ReceiveIT(void)
 {
     blademotor_rx_armed = false;
     const uint32_t now = HAL_GetTick();
+#if defined(BLADEMOTOR_SEQUENCED_POWER)
+    if (blademotor_startup_version_rx_armed)
+    {
+        /* This reply is the PAC5223 version response, not steady-state motor
+         * telemetry. Validate its own framed length and additive checksum;
+         * never pass it through the 16-byte status decoder. */
+        const bool valid =
+            blademotor_pu8ReceivedData[0] == 0x55u &&
+            blademotor_pu8ReceivedData[1] == 0xaau &&
+            blademotor_pu8ReceivedData[2] ==
+                (BLADEMOTOR_LENGTH_VERSION_RESPONSE - 4u) &&
+            blademotor_pu8ReceivedData[3] == 0x02u &&
+            blademotor_pu8ReceivedData[4] == 0xdau &&
+            blademotor_pu8ReceivedData[BLADEMOTOR_LENGTH_VERSION_RESPONSE - 1u] ==
+                crcCalc(blademotor_pu8ReceivedData,
+                        BLADEMOTOR_LENGTH_VERSION_RESPONSE - 1u);
+        blademotor_startup_version_rx_armed = false;
+        blademotor_startup_version_response_valid = valid;
+        blademotor_startup_version_response_complete = true;
+        if (!valid)
+        {
+            ++BLADEMOTOR_u32Error;
+            ++blademotor_fault_sequence;
+            MOTORLINK_ForceInhibit();
+        }
+        return;
+    }
+    /* A late completion from an aborted startup query is not a motor-status
+     * frame. Accept 16-byte feedback only after startup reaches RUN. */
+    if (blademotor_eState != BLADEMOTOR_RUN)
+        return;
+#endif
     blademotor_feedback.valid = 0;
     /* decode the frame */    
     if(memcmp(blademotor_pcu8Preamble, blademotor_pu8ReceivedData, 2) == 0){        
