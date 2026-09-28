@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useEffect, useState} from 'react';
 
 export interface UpdateSource {repository: string; track: 'stable' | 'dev' | 'custom'; branch: string}
 export interface UpdatePolicy {source: UpdateSource; interval_hours: number; pinned: boolean}
@@ -25,16 +25,66 @@ export async function updaterRequest<T>(operation: string, body?: unknown): Prom
     if (operation === 'state' && (!data || typeof data !== 'object' || !('state' in data) || !('agent' in data))) throw new Error('Host updater unavailable');
     return data as T;
 }
+// Shared, ref-counted poller — same shape as multiplexedSocket.ts's WS-topic
+// sharing, for the same reason. useHostUpdater() is called from AppShell,
+// useNotificationCenter AND HostUpdaterPanel, all mounted at once in normal
+// use; each used to run its OWN independent 5s setInterval + fetch, so two
+// or three uncoordinated pollers hit `state` (the state payload — releases,
+// history, everything — is easily >1 MB) within milliseconds of each other
+// on every cycle. Field-reported 2026-09-28: two ~1.34 MB `state` GETs back
+// to back, every ~5s, regardless of which page was open (misread at first
+// as a Map-page-specific issue — this endpoint has nothing to do with the
+// map). Now there is ONE poller total, shared by however many components
+// currently want the data; the last one to unmount stops it.
+let sharedData: HostUpdater | undefined;
+let sharedError: string | undefined;
+let pollTimer: number | undefined;
+const listeners = new Set<() => void>();
+
+function notifyListeners(): void {
+    for (const listener of listeners) listener();
+}
+
+async function sharedRefresh(): Promise<void> {
+    try {
+        sharedData = await updaterRequest<HostUpdater>('state');
+        sharedError = undefined;
+    } catch (e) {
+        sharedError = e instanceof Error ? e.message : String(e);
+    }
+    notifyListeners();
+}
+
 // Polling only reads cached local status. It never schedules a registry check.
 export function useHostUpdater() {
-    const [data, setData] = useState<HostUpdater>();
-    const [error, setError] = useState<string>();
-    const refresh = useCallback(async () => {
-        try {setData(await updaterRequest<HostUpdater>('state')); setError(undefined);}
-        catch (e) {setError(e instanceof Error ? e.message : String(e));}
+    const [data, setData] = useState<HostUpdater | undefined>(sharedData);
+    const [error, setError] = useState<string | undefined>(sharedError);
+
+    useEffect(() => {
+        const listener = () => {
+            setData(sharedData);
+            setError(sharedError);
+        };
+        const isFirstListener = listeners.size === 0;
+        listeners.add(listener);
+        if (isFirstListener) {
+            void sharedRefresh();
+            pollTimer = window.setInterval(() => void sharedRefresh(), 5000);
+        } else {
+            // A poller is already running and may already have fresher data
+            // than what this component's initial useState captured at mount.
+            listener();
+        }
+        return () => {
+            listeners.delete(listener);
+            if (listeners.size === 0 && pollTimer !== undefined) {
+                window.clearInterval(pollTimer);
+                pollTimer = undefined;
+            }
+        };
     }, []);
-    useEffect(() => {void refresh(); const timer = window.setInterval(() => void refresh(), 5000); return () => window.clearInterval(timer);}, [refresh]);
-    return {data, error, refresh};
+
+    return {data, error, refresh: sharedRefresh};
 }
 
 export function compatibleGUI(base: Deployment, gui: Deployment): boolean {
