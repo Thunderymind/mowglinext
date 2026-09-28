@@ -44,6 +44,9 @@ jobs:
       - name: Test runtime parameters and their flash persistence
         run: python3 firmware/scripts/test_fw_params.py
 
+      - name: Validate published firmware permutations and release builds
+        run: python3 firmware/scripts/test_package_release.py
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -136,6 +139,7 @@ jobs:
         run: |
           pio run -e Yardforce500
           pio run -e Yardforce500B
+          pio run -e BiltemaRM1000
 
       - name: Package binaries + manifest
         env:
