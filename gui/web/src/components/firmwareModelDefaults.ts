@@ -9,16 +9,19 @@
 export type FirmwareSelection = {
     boardType?: string;
     panelType?: string;
-    /** Persisted provenance for the two independently editable fields. */
+    /** An exact PlatformIO/release-manifest target when the board is ambiguous. */
+    firmwareTarget?: string;
+    /** Persisted provenance for each independently editable field. */
     boardTypeOrigin?: FirmwareFieldOrigin;
     panelTypeOrigin?: FirmwareFieldOrigin;
+    firmwareTargetOrigin?: FirmwareFieldOrigin;
     /** Mower model whose automatic defaults were last applied. */
     firmwareSelectionModel?: string;
 };
 
 export type FirmwareFieldOrigin = "auto" | "manual" | "legacy";
 
-export type FirmwareModelDefaults = Readonly<Pick<FirmwareSelection, "boardType" | "panelType">>;
+export type FirmwareModelDefaults = Readonly<Pick<FirmwareSelection, "boardType" | "panelType" | "firmwareTarget">>;
 
 export const FIRMWARE_MODEL_DEFAULTS: Readonly<Record<string, FirmwareModelDefaults>> = {
     YardForce500: {
@@ -30,6 +33,11 @@ export const FIRMWARE_MODEL_DEFAULTS: Readonly<Record<string, FirmwareModelDefau
     YardForce500B: {
         boardType: "BOARD_YARDFORCE500B",
         panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+    },
+    BiltemaRM1000: {
+        boardType: "BOARD_YARDFORCE500B",
+        panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+        firmwareTarget: "BiltemaRM1000",
     },
 };
 
@@ -57,6 +65,7 @@ export const applyFirmwareModelDefaults = <T extends FirmwareSelection>(
         // defaults and leaves an unsupported model visibly unselected.
         ...(manualOverrides.boardType ? {} : {boardType: defaults?.boardType ?? ""}),
         ...(manualOverrides.panelType ? {} : {panelType: defaults?.panelType ?? ""}),
+        ...(manualOverrides.firmwareTarget ? {} : {firmwareTarget: defaults?.firmwareTarget ?? ""}),
     } as T;
 };
 
@@ -67,7 +76,13 @@ export const applyFirmwareModelDefaults = <T extends FirmwareSelection>(
  */
 export const manualOverridesFromProvenance = (
     selection: FirmwareSelection,
-): Partial<Record<"boardType" | "panelType", boolean>> => ({
+): Partial<Record<"boardType" | "panelType" | "firmwareTarget", boolean>> => ({
     boardType: selection.boardTypeOrigin !== "auto",
     panelType: selection.panelTypeOrigin !== "auto",
+    // The target field is new. A legacy config cannot contain a user's
+    // explicit target override, so infer it from the model while keeping the
+    // existing legacy board and panel values untouched.
+    firmwareTarget: selection.firmwareTargetOrigin !== undefined
+        ? selection.firmwareTargetOrigin !== "auto"
+        : selection.firmwareTarget !== undefined,
 });

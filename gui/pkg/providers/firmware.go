@@ -84,6 +84,9 @@ func (fp *FirmwareProvider) FlashFirmware(writer io.Writer, config types.Firmwar
 		return xerrors.Errorf("invalid firmwareSource %q (want %q or %q)",
 			config.FirmwareSource, FirmwareSourcePrebuilt, FirmwareSourceCustom)
 	}
+	if err := validateFirmwareTargetSelection(config.FirmwareSelectionModel, config.BoardType, config.PanelType, config.FirmwareTarget); err != nil {
+		return err
+	}
 	configJson, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -160,12 +163,9 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	_, _ = writer.Write([]byte("------> board.h built\n"))
 	//Build firmware
 	_, _ = writer.Write([]byte("------> Building firmware...\n"))
-	pioEnv := "Yardforce500"
-	switch config.BoardType {
-	case "BOARD_YARDFORCE500B":
-		pioEnv = "Yardforce500B"
-	case "BOARD_LUV1000RI":
-		pioEnv = "LUV1000RI"
+	pioEnv, err := firmwareEnvironment(config.BoardType, config.FirmwareTarget)
+	if err != nil {
+		return err
 	}
 	// BUILD ONLY — deliberately not `-t upload`. PlatformIO's uploader forces
 	// `transport select swd`, which excludes ST-Link V2 dongles without recent
@@ -289,6 +289,53 @@ func openocdTargetCfg(board string) string {
 	}
 }
 
+// firmwareEnvironment resolves the custom-build environment. The explicit
+// target matters for variants such as RM1000, which share an MCU board profile
+// with YardForce500B but require different compile-time behavior.
+func firmwareEnvironment(board, target string) (string, error) {
+	if target == "" {
+		switch board {
+		case "BOARD_YARDFORCE500B":
+			return "Yardforce500B", nil
+		case "BOARD_LUV1000RI":
+			return "LUV1000RI", nil
+		default:
+			return "Yardforce500", nil
+		}
+	}
+	allowed := map[string]string{
+		"Yardforce500":  "BOARD_YARDFORCE500",
+		"Yardforce500B": "BOARD_YARDFORCE500B",
+		"BiltemaRM1000": "BOARD_YARDFORCE500B",
+		"LUV1000RI":     "BOARD_LUV1000RI",
+	}
+	wantBoard, ok := allowed[target]
+	if !ok {
+		return "", xerrors.Errorf("unsupported firmware target %q", target)
+	}
+	if board != wantBoard {
+		return "", xerrors.Errorf("firmware target %q requires board %q, got %q", target, wantBoard, board)
+	}
+	return target, nil
+}
+
+// requireExplicitRM1000Target prevents targetless RM1000 configs from falling
+// back to the ordinary Yardforce500B environment or its prebuilt binary.
+func validateFirmwareTargetSelection(model, board, panel, target string) error {
+	if model == "BiltemaRM1000" && target == "" {
+		return xerrors.Errorf("Biltema RM1000 requires the explicit BiltemaRM1000 firmware target")
+	}
+	if target == "BiltemaRM1000" {
+		if board != "BOARD_YARDFORCE500B" {
+			return xerrors.Errorf("BiltemaRM1000 firmware requires board BOARD_YARDFORCE500B, got %q", board)
+		}
+		if panel != "PANEL_TYPE_YARDFORCE_900_ECO" {
+			return xerrors.Errorf("BiltemaRM1000 firmware requires panel PANEL_TYPE_YARDFORCE_900_ECO, got %q", panel)
+		}
+	}
+	return nil
+}
+
 // flashPrebuilt is the default new-user path: resolve the prebuilt binary for
 // the selected board from the release manifest, download + sha256-verify it,
 // SWD-flash it with openocd (program+verify+reset at the STM32 flash base), then
@@ -312,7 +359,7 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 		_, _ = fmt.Fprintf(writer, "------> This installation's release has no firmware attached: using the latest stable release %s\n", source.Release)
 	}
 
-	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType)
+	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType, config.FirmwareTarget)
 	if err != nil {
 		_, _ = fmt.Fprintf(writer, "------> %v — use the Expert build path for this board.\n", err)
 		return xerrors.Errorf("resolving prebuilt firmware: %w", err)
@@ -436,13 +483,16 @@ func (fp *FirmwareProvider) AvailableFirmware() (types.FirmwareAvailability, err
 	if config.BoardType == "" {
 		return result, nil
 	}
+	if err := validateFirmwareTargetSelection(config.FirmwareSelectionModel, config.BoardType, config.PanelType, config.FirmwareTarget); err != nil {
+		return result, nil
+	}
 	manifest, source, err := fetchInstallFirmwareManifest(buildinfo.Current().Version)
 	if err != nil {
 		return result, err
 	}
 	result.Release = source.Release
 	result.OwnRelease = source.OwnRelease
-	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType)
+	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType, config.FirmwareTarget)
 	if err != nil {
 		// No prebuilt for this board: the operator needs the expert path.
 		return result, nil
