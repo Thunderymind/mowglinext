@@ -756,6 +756,136 @@ TEST_P(CrossHatchContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
       << "relocation is being mowed instead of split into a Nav2 transit";
 }
 
+// Field report: "a weird little loop between headland rings" — the ring-to-
+// ring entry vertex used to be picked by nearest-Euclidean-distance among
+// heading-aligned candidates, which for closely-spaced concentric rings (ring
+// spacing == op_width, well under twice the turn radius here) sits almost
+// directly inward from the previous ring's end with near-zero forward
+// advance. That is exactly the "spacing < 2*radius forces an omega (RLR/LRL)
+// loop" geometry already documented for swath-end turn-arounds (see
+// ConnectorStats's "WHAT IT MEASURED" comment above) — a forward-only Dubins
+// connector cannot just slide sideways between two closely-spaced, near-
+// parallel poses. The fix biases the entry-point search toward a point far
+// enough ALONG the next ring for a clean two-arc diagonal merge instead.
+//
+// Assert directly on the driven path: no ring-to-ring connector run may turn
+// through anywhere near a full loop. A clean two-arc merge turns through at
+// most ~180 degrees total; an omega/loop maneuver turns through close to or
+// beyond 360 by construction, so 300 degrees cleanly separates the two
+// without being sensitive to exact path-length tuning.
+TEST(CoverageContinuousPath, RingToRingJoinsDoNotLoop)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr int kNumRings = 5;  // production default (mowgli_robot.yaml)
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kStep = 0.03;
+
+  // 10 x 10 m square: large enough for 5 rings (0.8 m total inset) plus a
+  // real mainland with swaths, so ring-to-ring joins sit alongside ordinary
+  // swath-to-swath and ring-to-swath joins in the same driven path.
+  const auto cell = makeSquare(10.0);
+
+  const auto plan = planBoustrophedon(cell,
+                                      kOpWidth,
+                                      /*headland_width=*/0.18,
+                                      kNumRings,
+                                      0.0,
+                                      -1.0,
+                                      kMinSwath,
+                                      /*ring_direction=*/0,
+                                      kMinTurnRadius);
+  ASSERT_GE(plan.rings.size(), 5u) << "expected all 5 forced headland rings to plan";
+  ASSERT_FALSE(plan.connector_clearance_boundary.empty());
+
+  const auto subs = buildContinuousSubPaths(
+      plan, plan.connector_clearance_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_FALSE(subs.empty());
+
+  // Ring-only primitives, so a connector run's endpoints can be classified as
+  // "adjacent to a ring" independent of the swaths that follow in the same
+  // driven sub-path.
+  std::vector<std::array<double, 4>> ring_prim;
+  for (const auto& loop : plan.rings)
+  {
+    for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+    {
+      ring_prim.push_back({loop[i].first, loop[i].second, loop[i + 1].first, loop[i + 1].second});
+    }
+  }
+  auto distToRingPrims = [&ring_prim](double x, double y)
+  {
+    double best = std::numeric_limits<double>::max();
+    for (const auto& s : ring_prim)
+    {
+      const double dx = s[2] - s[0], dy = s[3] - s[1];
+      const double l2 = dx * dx + dy * dy;
+      double t = l2 > 1e-12 ? ((x - s[0]) * dx + (y - s[1]) * dy) / l2 : 0.0;
+      t = std::max(0.0, std::min(1.0, t));
+      best = std::min(best, std::hypot(x - (s[0] + t * dx), y - (s[1] + t * dy)));
+    }
+    return best;
+  };
+  auto heading = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+  {
+    return std::atan2(b.second - a.second, b.first - a.first);
+  };
+  auto turnDeg = [](double h_in, double h_out)
+  {
+    double d = h_out - h_in;
+    while (d > M_PI)
+      d -= 2.0 * M_PI;
+    while (d < -M_PI)
+      d += 2.0 * M_PI;
+    return std::fabs(d) * 180.0 / M_PI;
+  };
+
+  constexpr double kOnRingTolM = 0.05;  // rings are densified far finer than this
+  constexpr double kMaxLoopishTurnDeg = 300.0;
+
+  std::size_t ring_to_ring_joins_checked = 0;
+  for (const auto& path : subs)
+  {
+    ASSERT_GE(path.size(), 2u);
+    bool in_connector = false;
+    bool run_started_on_ring = false;
+    double cum_turn = 0.0;
+    for (std::size_t i = 1; i + 1 < path.size(); ++i)
+    {
+      const bool on_ring = distToRingPrims(path[i].first, path[i].second) <= kOnRingTolM;
+      if (!on_ring && !in_connector)
+      {
+        in_connector = true;
+        cum_turn = 0.0;
+        run_started_on_ring = distToRingPrims(path[i - 1].first, path[i - 1].second) <= kOnRingTolM;
+      }
+      // Accumulate the turn AT this point before checking whether the run
+      // just closed, so the closing turn (off-ring segment -> the re-entry
+      // segment onto the next ring) is included in cum_turn.
+      if (in_connector)
+      {
+        cum_turn += turnDeg(heading(path[i - 1], path[i]), heading(path[i], path[i + 1]));
+      }
+      if (on_ring && in_connector)
+      {
+        if (run_started_on_ring)
+        {
+          ++ring_to_ring_joins_checked;
+          EXPECT_LT(cum_turn, kMaxLoopishTurnDeg)
+              << "ring-to-ring connector turns " << cum_turn
+              << " degrees cumulative — looks like an omega/loop maneuver, not a "
+                 "diagonal merge";
+        }
+        in_connector = false;
+      }
+    }
+  }
+  EXPECT_GE(ring_to_ring_joins_checked, 3u)
+      << "expected several ring-to-ring joins in a 5-ring plan; found "
+      << ring_to_ring_joins_checked << " — test may not be exercising the intended geometry";
+}
+
 // Concave L-shape: covered without decomposition — swaths exist in BOTH lobes
 // and none crosses the notch.
 TEST(CoveragePlanning, ConcaveFieldIsCovered)

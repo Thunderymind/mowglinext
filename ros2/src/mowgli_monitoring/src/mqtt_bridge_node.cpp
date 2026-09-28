@@ -685,6 +685,18 @@ void MqttBridgeNode::create_subscriptions()
   // Fused map-frame pose from the localizer: position and heading that do not jitter
   // like the raw GPS fix. SensorDataQoS is compatible with the localizer's reliable
   // publisher and with a best-effort one, should it ever become one.
+  // The planned coverage path (headland rings + serpentine swaths), latched by
+  // behavior_tree_node right after a plan_coverage call succeeds. transient_local on
+  // BOTH ends is required to receive that latched message immediately on (re)connect,
+  // rather than only plans created after this subscription came up.
+  sub_coverage_path_ =
+      create_subscription<nav_msgs::msg::Path>("/coverage/full_plan",
+                                               rclcpp::QoS(1).transient_local(),
+                                               [this](nav_msgs::msg::Path::ConstSharedPtr msg)
+                                               {
+                                                 on_coverage_path(msg);
+                                               });
+
   sub_pose_ =
       create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered_map",
                                                    sensor_qos,
@@ -825,6 +837,20 @@ void MqttBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSha
 std::string MqttBridgeNode::serialise_host(const std::string& ip)
 {
   return "{\"ip\":\"" + json_escape(ip) + "\"}";
+}
+
+void MqttBridgeNode::on_coverage_path(nav_msgs::msg::Path::ConstSharedPtr msg)
+{
+  // Latched, rare (once per plan), and small enough for the GUI to hold in a browser —
+  // no rate limiting needed. Only republish (retained) when the plan actually changed,
+  // matching <prefix>/area_boundary's own poll-but-only-republish-on-change pattern.
+  const std::string json = serialise_coverage_path(*msg);
+  if (json == last_coverage_path_json_)
+  {
+    return;
+  }
+  last_coverage_path_json_ = json;
+  mqtt_client_->publish(full_topic("coverage_path"), json, /*retain=*/true);
 }
 
 void MqttBridgeNode::on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -1628,6 +1654,27 @@ std::string MqttBridgeNode::serialise_areas(const std::vector<AreaSummary>& area
     json += "\"}";
   }
   json += ']';
+  return json;
+}
+
+std::string MqttBridgeNode::serialise_coverage_path(const nav_msgs::msg::Path& path)
+{
+  // Unbounded-length payload (point count varies with plan size), same precedent as
+  // <prefix>/area_boundary and <prefix>/areas.
+  std::string json = "{\"points\":[";
+  bool first = true;
+  for (const auto& pose : path.poses)
+  {
+    if (!first)
+    {
+      json += ',';
+    }
+    first = false;
+    char point[48];
+    std::snprintf(point, sizeof(point), "[%.3f,%.3f]", pose.pose.position.x, pose.pose.position.y);
+    json += point;
+  }
+  json += "]}";
   return json;
 }
 

@@ -181,6 +181,27 @@ struct BTContext
   std::chrono::steady_clock::time_point manual_resume_requested_time{};
   static constexpr double kManualResumeMaxAgeSec = 30.0;
 
+  /// Latched after COMMAND_STOP is observed in CriticalBatteryDock's
+  /// post-dock charge hold. The critical-battery branch otherwise re-enters
+  /// on every root tick and would send another DockRobot goal before reaching
+  /// StopHoldSequence. Explicit new commands clear this latch. Protected by
+  /// context_mutex.
+  bool critical_charge_stop_latched{false};
+
+  /// Outcome of the most recent DockRobot attempt. Reset when an action starts
+  /// and set only after its action result reports success. Used by the
+  /// critical-battery tree to avoid treating a failed navigation attempt as
+  /// arrival at the charger.
+  bool last_dock_succeeded{false};
+
+  /// Latches a failed critical-battery dock attempt. The mower stays stopped
+  /// until an operator sends a new command, rather than retrying at BT rate.
+  bool critical_dock_failure_latched{false};
+
+  /// Set by LatchCriticalDockFailure and consumed by the node after the current
+  /// tree tick, so persistence remains serialized with coverage-map access.
+  bool critical_dock_failure_persistence_requested{false};
+
   /// Set by the ~/start_in_area service to REQUEST mowing a single, specific
   /// area instead of iterating all areas. This is the one-shot *request*:
   /// GetNextUnmowedArea consumes it on the next onStart() and latches the
@@ -919,7 +940,7 @@ inline void clearSingleAreaMode(BTContext& ctx)
 }
 
 /// True for the HighLevelStatus state_name values published while the tree
-/// is parked in a battery charge hold: BatteryDockAndResume's "CHARGING" and
+/// is parked in a battery charge hold: BatteryGuardHandler's "CHARGING" and
 /// CriticalBatteryDock's "CRITICAL_BATTERY_CHARGING" (main_tree.xml). A
 /// COMMAND_START received in one of these states is an operator asking to
 /// resume the mow before the pack reaches battery_full_pct — see
