@@ -1,5 +1,5 @@
 import {CheckOutlined, CloseOutlined, InfoCircleOutlined} from "@ant-design/icons";
-import {Button, InputNumber, Tooltip} from "antd";
+import {Button, Tooltip} from "antd";
 import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 import type {LidarIgnoreCorridor} from "../../../types/ros.ts";
@@ -22,8 +22,6 @@ interface LidarCorridorsPanelProps {
     /// onStartDraw prop here any more.
     onFinishDraw: () => void;
     onCancelDraw: () => void;
-    /// Width in METRES (the panel edits centimetres).
-    onChangeWidth: (index: number, widthM: number) => void;
     /// Select a row's line on the map (simple_select on its DrawControl
     /// feature) — the only way to delete a line now: select it here or on
     /// the map, then use the map editor toolbar's trash button. There is no
@@ -42,7 +40,7 @@ interface LidarCorridorsPanelProps {
 /// so the robot follows the recorded boundary next to e.g. a hedge instead of
 /// being pushed off it. Everywhere else the LiDAR keeps working normally.
 export const LidarCorridorsPanel = ({
-    corridors, busy, editable, drawing, drawPointCount, onFinishDraw, onCancelDraw, onChangeWidth,
+    corridors, busy, editable, drawing, drawPointCount, onFinishDraw, onCancelDraw,
     onSelect, selectedIndex, onSmooth, onSimplify,
 }: LidarCorridorsPanelProps) => {
     const {colors} = useThemeMode();
@@ -93,26 +91,16 @@ export const LidarCorridorsPanel = ({
                             background: selectedIndex === index ? `${CORRIDOR_COLOR}22` : 'transparent',
                             cursor: 'pointer',
                         }}>
-                        <div style={{flex: 1, fontSize: 12, color: colors.text, minWidth: 0}}>
+                        <div style={{flex: 1, fontSize: 12, color: colors.text, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
                             {corridor.name || t('mapLidarCorridors.unnamed', {id: corridor.id ?? index + 1})}
                         </div>
-                        <InputNumber
-                            size="small"
-                            style={{width: 84}}
-                            min={5}
-                            max={100}
-                            step={5}
-                            precision={0}
-                            addonAfter="cm"
-                            disabled={busy || !editable}
-                            value={Math.round((corridor.width_m ?? 0.2) * 100)}
-                            aria-label={t('mapLidarCorridors.widthLabel')}
-                            title={t('mapLidarCorridors.widthTooltip')}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(value) => {
-                                if (typeof value === 'number') onChangeWidth(index, value / 100);
-                            }}
-                        />
+                        {/* Read-only here — name + distance are both edited the same way an
+                            area is: select the row (or the line on the map), then "Edit
+                            properties" in the toolbar opens EditLidarCorridorModal. That
+                            also works on mobile, where this list doesn't exist at all. */}
+                        <div style={{fontSize: 11, color: colors.muted, flexShrink: 0}}>
+                            {Math.round((corridor.width_m ?? 0.2) * 100)} cm
+                        </div>
                     </div>
                 ))}
             </div>

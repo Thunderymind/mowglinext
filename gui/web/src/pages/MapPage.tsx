@@ -1357,10 +1357,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             <EditLidarCorridorModal
                 corridor={corridorWidthModalIndex !== null ? lidarCorridors.corridors[corridorWidthModalIndex] ?? null : null}
                 busy={lidarCorridors.busy}
-                onSave={(widthM) => {
+                onSave={(name, widthM) => {
                     if (corridorWidthModalIndex === null) return;
                     void handleCorridorChange(lidarCorridors.corridors.map((c, i) =>
-                        i === corridorWidthModalIndex ? {...c, width_m: widthM} : c));
+                        i === corridorWidthModalIndex ? {...c, name, width_m: widthM} : c));
                     setCorridorWidthModalIndex(null);
                 }}
                 onCancel={() => setCorridorWidthModalIndex(null)}
@@ -1739,8 +1739,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 drawPointCount={corridorDraw?.length ?? 0}
                                 onFinishDraw={() => void handleFinishCorridor()}
                                 onCancelDraw={() => setCorridorDraw(null)}
-                                onChangeWidth={(index, widthM) => void handleCorridorChange(
-                                    lidarCorridors.corridors.map((c, i) => i === index ? {...c, width_m: widthM} : c))}
                                 onSelect={(index) => {
                                     const c = lidarCorridors.corridors[index];
                                     if (c) handleAreaSelect(corridorDrawId(c));

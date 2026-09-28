@@ -320,6 +320,45 @@ export const MapToolbarMobile = ({
         </AsyncButton>
     );
 
+    // While placing points for a LiDAR-ignore line, the toolbar becomes just
+    // Cancel / point-count / Finish — nothing else in the normal row is
+    // usable mid-draw anyway (undo/redo, other draw tools, dock placement),
+    // and burying Finish/Cancel at the tail of a long horizontally-scrolling
+    // row meant they were easy to miss entirely on a phone, right when the
+    // operator is mid-tap on the map and least likely to go hunting for a
+    // button off-screen. This mirrors how the RECORDING state already hands
+    // Finish/Cancel/Home to JoystickOverlay instead of sharing the row.
+    if (editMap && lidarCorridorDrawing) {
+        return (
+            <>
+                <div style={toolbarStyle}>
+                    <Button
+                        size="large"
+                        icon={<CloseOutlined />}
+                        onClick={onCancelLidarCorridor}
+                        aria-label={t("mapLidarCorridors.cancel")}
+                        style={touchTarget}
+                    />
+                    <div style={{flex: 1, fontSize: 13, color: colors.text, whiteSpace: "nowrap"}}>
+                        {t("mapLidarCorridors.drawing", {count: lidarCorridorDrawPointCount})}
+                    </div>
+                    <Button
+                        type="primary"
+                        size="large"
+                        icon={<CheckOutlined />}
+                        disabled={lidarCorridorDrawPointCount < 2}
+                        onClick={onFinishLidarCorridor}
+                        aria-label={t("mapLidarCorridors.finish")}
+                        style={touchTarget}
+                    >
+                        {t("mapLidarCorridors.finish")}
+                    </Button>
+                </div>
+                {stopButton}
+            </>
+        );
+    }
+
     if (editMap) {
         return (
             <>
@@ -399,33 +438,6 @@ export const MapToolbarMobile = ({
                         aria-label={t("mapToolbarMobile.placeDock")}
                         style={touchTarget}
                     />
-
-                    {/* LiDAR-ignore line: started from the "+ Add" dropdown above (tap
-                        points on the map after picking it there), same entry point as
-                        a shape/emoji. While drawing, this becomes Finish/Cancel (mirrors
-                        Save/Cancel above) — the running point count is shown via the
-                        aria-label since there is no room for a text counter in this
-                        scrolling row. There is no standalone start button any more. */}
-                    {lidarCorridorDrawing && (
-                        <Space.Compact size="large">
-                            <Button
-                                type="primary"
-                                size="large"
-                                icon={<CheckOutlined />}
-                                disabled={lidarCorridorDrawPointCount < 2}
-                                onClick={onFinishLidarCorridor}
-                                aria-label={t("mapLidarCorridors.finish") + ` (${lidarCorridorDrawPointCount})`}
-                                style={touchTarget}
-                            />
-                            <Button
-                                size="large"
-                                icon={<CloseOutlined />}
-                                onClick={onCancelLidarCorridor}
-                                aria-label={t("mapLidarCorridors.cancel")}
-                                style={touchTarget}
-                            />
-                        </Space.Compact>
-                    )}
 
                     {/* Combine/Subtract/Split now live inside this More menu
                         (editMenuItems) to keep the top row uncluttered. */}

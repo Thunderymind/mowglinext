@@ -1,22 +1,25 @@
-import {Modal, InputNumber, Form} from "antd";
+import {Modal, InputNumber, Input, Form} from "antd";
 import {useTranslation} from "react-i18next";
 import type {LidarIgnoreCorridor} from "../../../types/ros.ts";
 
 interface EditLidarCorridorModalProps {
     corridor: LidarIgnoreCorridor | null;
     busy: boolean;
-    onSave: (widthM: number) => void;
+    onSave: (name: string, widthM: number) => void;
     onCancel: () => void;
 }
 
-/// Mobile-friendly stand-in for the desktop LidarCorridorsPanel's inline width
-/// field: there is no side panel on mobile, so "Edit properties" on a
-/// selected ignore line opens this instead. Position/points are still edited
-/// by dragging on the map (same DrawControl session as desktop) - only the
-/// width needs a control that isn't a drag gesture.
+/// The one place a line's name and ignore distance are edited, on both
+/// desktop and mobile — same pattern as EditAreaModal: select the line (row
+/// click in the list, or on the map), then "Edit properties" in the toolbar
+/// opens this. Replaces the old per-row inline width field in
+/// LidarCorridorsPanel, which had nowhere to put a name input and doesn't
+/// exist on mobile at all. Position/points are still edited by dragging on
+/// the map (same DrawControl session as desktop) — only name + width need a
+/// control that isn't a drag gesture.
 export const EditLidarCorridorModal = ({corridor, busy, onSave, onCancel}: EditLidarCorridorModalProps) => {
     const {t} = useTranslation();
-    const [form] = Form.useForm<{widthCm: number}>();
+    const [form] = Form.useForm<{name: string; widthCm: number}>();
 
     if (!corridor) return null;
 
@@ -29,14 +32,17 @@ export const EditLidarCorridorModal = ({corridor, busy, onSave, onCancel}: EditL
             confirmLoading={busy}
             onCancel={onCancel}
             onOk={() => {
-                const widthCm = form.getFieldValue('widthCm') as number;
-                onSave(widthCm / 100);
+                const {name, widthCm} = form.getFieldsValue();
+                onSave(name.trim(), widthCm / 100);
             }}
         >
-            <Form form={form} layout="vertical" initialValues={{widthCm: Math.round((corridor.width_m ?? 0.2) * 100)}}>
+            <Form form={form} layout="vertical" initialValues={{name: corridor.name ?? '', widthCm: Math.round((corridor.width_m ?? 0.2) * 100)}}>
+                <Form.Item name="name" label={t('mapLidarCorridors.nameLabel')}>
+                    <Input placeholder={t('mapLidarCorridors.namePlaceholder')} autoFocus maxLength={64}/>
+                </Form.Item>
                 <Form.Item name="widthCm" label={t('mapLidarCorridors.widthLabel')}
                     tooltip={t('mapLidarCorridors.widthTooltip')}>
-                    <InputNumber min={5} max={100} step={5} precision={0} addonAfter="cm" style={{width: '100%'}} autoFocus/>
+                    <InputNumber min={5} max={100} step={5} precision={0} addonAfter="cm" style={{width: '100%'}}/>
                 </Form.Item>
             </Form>
         </Modal>
