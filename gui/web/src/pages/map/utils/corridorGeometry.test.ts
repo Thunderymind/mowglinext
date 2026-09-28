@@ -1,6 +1,7 @@
 import {describe, expect, it} from "vitest";
 import {
     buildCorridorBandPolygon,
+    buildCorridorSideRuns,
     insertMidpoint,
     polylineLengthM,
     removeVertex,
@@ -88,5 +89,58 @@ describe("corridorGeometry", () => {
 
     it("returns nothing for a single point (no line to band)", () => {
         expect(buildCorridorBandPolygon([{x: 0, y: 0}], 0.5)).toEqual([]);
+    });
+
+    it("side runs: a side fully inside the area gives one strip spanning the whole line", () => {
+        const points = [{x: 0, y: 0}, {x: 10, y: 0}];
+        const strips = buildCorridorSideRuns(points, 1.0, 'left', () => true);
+        expect(strips).toHaveLength(1);
+        // Strip = the 2 centerline points + the 2 (reversed) offset points, closed.
+        expect(strips[0]).toHaveLength(2 + 2 + 1);
+    });
+
+    it("side runs: a side fully outside the area gives no strips", () => {
+        const points = [{x: 0, y: 0}, {x: 10, y: 0}];
+        const strips = buildCorridorSideRuns(points, 1.0, 'left', () => false);
+        expect(strips).toEqual([]);
+    });
+
+    it("side runs: only the side whose offset the predicate accepts produces strips", () => {
+        // A predicate that's only true for negative-y offset points — i.e.
+        // only the RIGHT bank of a line running along y=0 (right = -y here,
+        // since right.push({..., y: cur.y - offset.y}) and offset.y is
+        // positive for the left-hand normal of a line pointing +x).
+        const points = [{x: 0, y: 0}, {x: 10, y: 0}];
+        const insideArea = (p: {x: number; y: number}) => p.y < 0;
+        expect(buildCorridorSideRuns(points, 1.0, 'left', insideArea)).toEqual([]);
+        expect(buildCorridorSideRuns(points, 1.0, 'right', insideArea)).toHaveLength(1);
+    });
+
+    it("side runs: breaks into separate strips where the area is interrupted", () => {
+        // 4 points along a line; only the middle two are "inside" -> one
+        // strip covering just that middle segment, not the whole line.
+        // The predicate is called once per index, in index order, so an
+        // explicit allow-list keyed by call count reproduces "only indices
+        // 1 and 2 are inside" without having to predict exact mitred
+        // offset coordinates.
+        const points = [{x: 0, y: 0}, {x: 1, y: 0}, {x: 2, y: 0}, {x: 3, y: 0}];
+        const insideByIndex = [false, true, true, false];
+        let callCount = 0;
+        const strips = buildCorridorSideRuns(points, 0.4, 'left', () => insideByIndex[callCount++]);
+        expect(strips).toHaveLength(1);
+        // The one strip covers exactly the 2-point middle run: 2 centerline
+        // + 2 offset + closing point.
+        expect(strips[0]).toHaveLength(2 + 2 + 1);
+    });
+
+    it("side runs: a lone included vertex between two excluded ones is dropped", () => {
+        const points = [{x: 0, y: 0}, {x: 1, y: 0}, {x: 2, y: 0}];
+        const allow = [false, true, false];
+        let i = -1;
+        const strips = buildCorridorSideRuns(points, 0.4, 'left', () => {
+            i++;
+            return allow[i];
+        });
+        expect(strips).toEqual([]);
     });
 });

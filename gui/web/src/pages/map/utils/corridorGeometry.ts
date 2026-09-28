@@ -115,19 +115,14 @@ const leftNormal = (dx: number, dy: number): XY => {
     return len < 1e-9 ? {x: 0, y: 0} : {x: -dy / len, y: dx / len};
 };
 
-/// Build the visible "ignore band" for a corridor: ONE continuous polygon
-/// (not a quad per segment — see git history for the earlier, blockier
-/// version), offset `widthM / 2` to each side of the polyline with a mitred
-/// join at every interior vertex so the band flows smoothly through a bend
-/// instead of showing per-segment seams. This is a visual aid only, not a
-/// proper geometric buffer (no self-intersection repair for a very tight,
-/// sharply doubling-back line) — costmap_scan_filter_node's own point-to-
-/// segment test remains the ground truth for what's actually suppressed.
-/// Returns a single closed ring wrapped in an array (kept as XY[][] so
-/// existing callers — one Feature per ring — don't need to change), or []
-/// for a degenerate (<2-point) input.
-export const buildCorridorBandPolygon = (points: XY[], widthM: number): XY[][] => {
-    if (points.length < 2) return [];
+/// Per-vertex mitred offset on both sides of a polyline, `widthM / 2` out —
+/// the shared geometry behind buildCorridorBandPolygon (the WHOLE band) and
+/// buildCorridorSideRuns (one side, only where it overlaps a recorded
+/// area). `left`/`right` are index-aligned with `points`: left[i]/right[i]
+/// are the two offset points of points[i]. See buildCorridorBandPolygon's
+/// doc comment for the mitre/degenerate-neighbour rules.
+export const buildCorridorSideOffsets = (points: XY[], widthM: number): {left: XY[]; right: XY[]} => {
+    if (points.length < 2) return {left: [], right: []};
     const halfW = Math.max(0.01, widthM) / 2;
     const n = points.length;
     const left: XY[] = [];
@@ -180,7 +175,72 @@ export const buildCorridorBandPolygon = (points: XY[], widthM: number): XY[][] =
         left.push({x: cur.x + offset.x, y: cur.y + offset.y});
         right.push({x: cur.x - offset.x, y: cur.y - offset.y});
     }
+    return {left, right};
+};
+
+/// Build the visible "ignore band" for a corridor: ONE continuous polygon
+/// (not a quad per segment — see git history for the earlier, blockier
+/// version), offset `widthM / 2` to each side of the polyline with a mitred
+/// join at every interior vertex so the band flows smoothly through a bend
+/// instead of showing per-segment seams. This is a visual aid only, not a
+/// proper geometric buffer (no self-intersection repair for a very tight,
+/// sharply doubling-back line) — costmap_scan_filter_node's own point-to-
+/// segment test remains the ground truth for what's actually suppressed,
+/// and (since the area-side restriction) buildCorridorSideRuns below is the
+/// one that actually matches what gets suppressed; this whole-band version
+/// is kept for the in-progress draft preview, which has no area to check
+/// against yet.
+/// Returns a single closed ring wrapped in an array (kept as XY[][] so
+/// existing callers — one Feature per ring — don't need to change), or []
+/// for a degenerate (<2-point) input.
+export const buildCorridorBandPolygon = (points: XY[], widthM: number): XY[][] => {
+    const {left, right} = buildCorridorSideOffsets(points, widthM);
+    if (left.length < 2) return [];
     const ring = [...left, ...right.reverse()];
     ring.push(ring[0]);
     return [ring];
+};
+
+/// Build one strip polygon per contiguous run of vertices on `side` whose
+/// OFFSET point (not the centerline point) satisfies `insideArea` — the
+/// costmap_scan_filter_node area-side restriction (a beam is only ever
+/// suppressed when it lands within reach of the line AND inside a recorded
+/// area), reflected in the map so the visualization doesn't show ignore
+/// coverage the filter doesn't actually grant. A run's strip is the
+/// quadrilateral-chain between that stretch of the centerline and its
+/// offset — smooth/mitred within the run, since it reuses the same offset
+/// vertices as buildCorridorBandPolygon — and the strip naturally breaks
+/// (a real gap, not a rendering artefact) wherever the area boundary
+/// interrupts the run. A lone included vertex with excluded neighbours on
+/// both sides has no segment to fill and is dropped.
+export const buildCorridorSideRuns = (
+    points: XY[],
+    widthM: number,
+    side: 'left' | 'right',
+    insideArea: (p: XY) => boolean,
+): XY[][] => {
+    const {left, right} = buildCorridorSideOffsets(points, widthM);
+    if (left.length < 2) return [];
+    const offsets = side === 'left' ? left : right;
+    const strips: XY[][] = [];
+    let runStart = -1;
+    const flush = (end: number) => {
+        if (runStart >= 0 && end - runStart >= 2) {
+            const centerRun = points.slice(runStart, end);
+            const offsetRun = offsets.slice(runStart, end).reverse();
+            const ring = [...centerRun, ...offsetRun];
+            ring.push(ring[0]);
+            strips.push(ring);
+        }
+        runStart = -1;
+    };
+    for (let i = 0; i < points.length; i++) {
+        if (insideArea(offsets[i])) {
+            if (runStart < 0) runStart = i;
+        } else {
+            flush(i);
+        }
+    }
+    flush(points.length);
+    return strips;
 };

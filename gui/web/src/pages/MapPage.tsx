@@ -13,7 +13,7 @@ import type {Feature} from 'geojson';
 import {FeatureCollection, Position} from "geojson";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {MapStyle} from "./MapStyle.tsx";
-import {drawLine, itranspose, transpose} from "../utils/map.tsx";
+import {drawLine, isRingInsidePolygon, itranspose, transpose} from "../utils/map.tsx";
 import {getDockAppearanceResetForMowerChange, resolveDockAppearance, resolveMowerAppearance, shouldDisplayMapImage, shouldDisplayMowerImage, type DockAppearanceId, type MowerAppearanceId} from "../constants/mowerAppearances.ts";
 import {useSettings} from "../hooks/useSettings.ts";
 import {useConfig} from "../hooks/useConfig.tsx";
@@ -38,7 +38,7 @@ import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.ts
 import {CORRIDOR_COLOR, LidarCorridorsPanel} from "./map/components/LidarCorridorsPanel.tsx";
 import {EditLidarCorridorModal} from "./map/components/EditLidarCorridorModal.tsx";
 import {DEFAULT_CORRIDOR_WIDTH_M, useLidarCorridors} from "./map/hooks/useLidarCorridors.ts";
-import {buildCorridorBandPolygon, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
+import {buildCorridorBandPolygon, buildCorridorSideRuns, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
 import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
 import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapImageMarker} from "./map/components/MapImageMarker.tsx";
@@ -992,13 +992,35 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         return {type: "FeatureCollection", features};
     }, [lidarCorridors.corridors, corridorDraw, editMap, datum, offsetX, offsetY]);
 
+    // Recorded (working + navigation) area outer rings, lng/lat — used to
+    // restrict the rendered band below to the side of each corridor that
+    // actually overlaps a recorded area, matching costmap_scan_filter_node's
+    // point_in_any_area restriction (a beam is only ever suppressed there;
+    // the visualization must not claim more coverage than that).
+    const recordedAreaRings = useMemo((): Position[][] =>
+        Object.values(features)
+            .filter((f): f is MowingAreaFeature | NavigationFeature =>
+                f instanceof MowingAreaFeature || f instanceof NavigationFeature)
+            .map((f) => f.geometry.coordinates[0] ?? [])
+            .filter((ring) => ring.length >= 3),
+    [features]);
+    const insideRecordedArea = useCallback((lng: number, lat: number): boolean =>
+        recordedAreaRings.some((ring) => isRingInsidePolygon([[lng, lat]], ring)),
+    [recordedAreaRings]);
+
     // The actual ignored BAND (width_m wide), not just the centerline the
     // operator clicked — so it's visible on the map exactly what area gets
     // an ignore, not only where. Shown in both view and edit mode (DrawControl
-    // itself only ever renders the thin centerline + vertex handles).
-    // Geometry is built in ROS metres (buildCorridorBandPolygon), then each
-    // vertex is transposed to lng/lat for rendering — corridors persist in
-    // ROS map-frame points, so this stays exact regardless of map projection.
+    // itself only ever renders the thin centerline + vertex handles). A saved
+    // corridor's band only ever covers the recorded-area side of the line
+    // (buildCorridorSideRuns, gated on insideRecordedArea above) — the other
+    // side is never suppressed by the filter either, so drawing it would be
+    // actively misleading. The in-progress draft (not yet saved) falls back
+    // to the plain symmetric band: it has no saved width/id yet and is only
+    // a rough preview while the operator is still clicking points.
+    // Geometry is built in ROS metres, then each vertex is transposed to
+    // lng/lat for rendering — corridors persist in ROS map-frame points, so
+    // this stays exact regardless of map projection.
     const corridorBandFeatures = useMemo((): FeatureCollection => {
         const features: Feature[] = [];
         if (datum[0] !== 0) {
@@ -1006,14 +1028,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 const pts = (corridor.polyline?.points ?? []).map((p) => ({x: p.x ?? 0, y: p.y ?? 0}));
                 if (pts.length < 2) return;
                 const widthM = corridor.width_m ?? DEFAULT_CORRIDOR_WIDTH_M;
-                buildCorridorBandPolygon(pts, widthM).forEach((ring) => features.push({
-                    type: "Feature",
-                    properties: {kind: "band"},
-                    geometry: {
-                        type: "Polygon",
-                        coordinates: [ring.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x))],
-                    },
-                }));
+                const insideAreaRos = (p: XY): boolean => {
+                    const [lng, lat] = transpose(offsetX, offsetY, datum, p.y, p.x);
+                    return insideRecordedArea(lng, lat);
+                };
+                (['left', 'right'] as const).forEach((side) => {
+                    buildCorridorSideRuns(pts, widthM, side, insideAreaRos).forEach((ring) => features.push({
+                        type: "Feature",
+                        properties: {kind: "band"},
+                        geometry: {
+                            type: "Polygon",
+                            coordinates: [ring.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x))],
+                        },
+                    }));
+                });
             });
             if (corridorDraw && corridorDraw.length >= 2) {
                 const rosPts = corridorDraw.map(([lng, lat]) => {
