@@ -70,18 +70,26 @@ export const applyFirmwareModelDefaults = <T extends FirmwareSelection>(
 };
 
 /**
- * Convert persisted field provenance to the conservative override policy used
- * by the form. Missing/unknown provenance is treated as legacy, so a saved
- * value is never silently replaced with a guessed firmware target.
+ * Convert persisted field provenance to the override policy used by the form.
+ * Missing/unknown provenance is treated as legacy, except that selecting the
+ * newly supported RM1000 migrates targetless legacy configs to its known-safe
+ * board, panel, and firmware target defaults.
  */
 export const manualOverridesFromProvenance = (
     selection: FirmwareSelection,
+    mowerModel?: unknown,
 ): Partial<Record<"boardType" | "panelType" | "firmwareTarget", boolean>> => ({
-    boardType: selection.boardTypeOrigin !== "auto",
-    panelType: selection.panelTypeOrigin !== "auto",
-    // The target field is new. A legacy config cannot contain a user's
-    // explicit target override, so infer it from the model while keeping the
-    // existing legacy board and panel values untouched.
+    // A targetless config predates the RM1000 target. Once RM1000 has been
+    // selected, its known board and SA900ECO panel defaults replace legacy
+    // values unless a modern provenance marker says the user chose them.
+    boardType: mowerModel === "BiltemaRM1000" && !selection.firmwareTarget
+        ? selection.boardTypeOrigin === "manual"
+        : selection.boardTypeOrigin !== "auto",
+    panelType: mowerModel === "BiltemaRM1000" && !selection.firmwareTarget
+        ? selection.panelTypeOrigin === "manual"
+        : selection.panelTypeOrigin !== "auto",
+    // The target field is new. A targetless legacy config cannot contain an
+    // explicit target override, so infer the target from the selected model.
     firmwareTarget: selection.firmwareTargetOrigin !== undefined
         ? selection.firmwareTargetOrigin !== "auto"
         : selection.firmwareTarget !== undefined,

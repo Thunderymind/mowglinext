@@ -322,10 +322,16 @@ func firmwareEnvironment(board, target string) (string, error) {
 // requireExplicitRM1000Target prevents targetless RM1000 configs from falling
 // back to the ordinary Yardforce500B environment or its prebuilt binary.
 func validateFirmwareTargetSelection(model, board, panel, target string) error {
-	if model == "BiltemaRM1000" && target == "" {
-		return xerrors.Errorf("Biltema RM1000 requires the explicit BiltemaRM1000 firmware target")
+	if model == "BiltemaRM1000" && target != "BiltemaRM1000" {
+		return xerrors.Errorf("Biltema RM1000 requires the explicit and exact BiltemaRM1000 firmware target, got %q", target)
 	}
 	if target == "BiltemaRM1000" {
+		// CUSTOM represents user-defined mower hardware, so an expert can
+		// deliberately select this target for a custom-configured RM1000.
+		// A known, named non-RM1000 model must never route to RM1000 firmware.
+		if model != "" && model != "BiltemaRM1000" && model != "CUSTOM" {
+			return xerrors.Errorf("BiltemaRM1000 firmware is incompatible with mower model %q", model)
+		}
 		if board != "BOARD_YARDFORCE500B" {
 			return xerrors.Errorf("BiltemaRM1000 firmware requires board BOARD_YARDFORCE500B, got %q", board)
 		}

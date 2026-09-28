@@ -161,7 +161,7 @@ describe("FlashBoardComponent model/default integration", () => {
         expect(selectedLabel(1)).toBe("YardForce 500B Classic");
     });
 
-    it("adds the new RM1000 target to a legacy targetless config without changing its board or panel", async () => {
+    it("migrates a targetless legacy config to the RM1000 board, SA900ECO panel, and target", async () => {
         state.savedConfig = JSON.stringify({
             boardType: "BOARD_YARDFORCE500B",
             panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
@@ -169,7 +169,7 @@ describe("FlashBoardComponent model/default integration", () => {
         renderComponent("BiltemaRM1000");
         await waitFor(() => {
             expect(selectedLabel(0)).toBe("Mowgli - Biltema RM1000");
-            expect(selectedLabel(1)).toBe("YardForce 500B Classic");
+            expect(selectedLabel(1)).toBe("YardForce 900 ECO");
         });
 
         fireEvent.click(screen.getByRole("button", {name: /flash firmware/i}));
@@ -182,7 +182,7 @@ describe("FlashBoardComponent model/default integration", () => {
             firmwareTarget?: string;
         };
         expect(payload.boardType).toBe("BOARD_YARDFORCE500B");
-        expect(payload.panelType).toBe("PANEL_TYPE_YARDFORCE_500B_CLASSIC");
+        expect(payload.panelType).toBe("PANEL_TYPE_YARDFORCE_900_ECO");
         expect(payload.firmwareTarget).toBe("BiltemaRM1000");
     });
 

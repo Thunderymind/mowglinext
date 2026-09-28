@@ -153,9 +153,12 @@ func TestFirmwareEnvironmentSelectsNativeRM1000Target(t *testing.T) {
 }
 
 func TestRM1000RequiresExplicitTarget(t *testing.T) {
-	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", ""), "explicit BiltemaRM1000")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", ""), "exact BiltemaRM1000")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "Yardforce500B"), "exact BiltemaRM1000")
 	assert.NoError(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "BiltemaRM1000"))
 	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "BiltemaRM1000"), "requires panel PANEL_TYPE_YARDFORCE_900_ECO")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForce500B", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "BiltemaRM1000"), "incompatible with mower model")
+	assert.NoError(t, validateFirmwareTargetSelection("CUSTOM", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "BiltemaRM1000"))
 	assert.NoError(t, validateFirmwareTargetSelection("YardForce500B", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", ""))
 }
 

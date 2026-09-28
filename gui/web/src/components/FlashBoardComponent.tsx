@@ -178,7 +178,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     // request is submitted (including failed flash attempts).
                     // Unknown/legacy configs are deliberately conservative:
                     // preserve both saved fields instead of guessing a board.
-                    manualOverridesRef.current = manualOverridesFromProvenance(saved);
+                    manualOverridesRef.current = manualOverridesFromProvenance(saved, model);
                     // If the model/settings lookup is unavailable, restoring
                     // the saved config must still work. In particular, do not
                     // turn a previously known automatic value into an empty
