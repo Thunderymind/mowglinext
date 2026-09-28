@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math"
@@ -512,6 +513,25 @@ func (r *RosProvider) pollMap() {
 
 	data, err := json.Marshal(mapData)
 	if err != nil {
+		return
+	}
+
+	// pollMap runs on a fixed 5s ticker regardless of whether anything
+	// actually changed, and the payload is the WHOLE map (every area,
+	// obstacle and corridor point) — easily >1 MB with a real garden's
+	// worth of areas/ignore lines. fanOut() itself has no dedup (by design:
+	// other logicalKeys legitimately want every tick delivered even when
+	// byte-identical, e.g. high-frequency sensor topics), so skip the
+	// broadcast here specifically when nothing changed since the last poll,
+	// rather than pushing an unchanged multi-MB payload to every connected
+	// browser tab every 5s. Field-reported 2026-09-28: this was the other
+	// half of a "map updates twice, always huge" slowdown — see the paired
+	// frontend fix (useMapStreams.ts) for the actual duplicate-subscribe
+	// half of that report.
+	r.mtx.Lock()
+	unchanged := bytes.Equal(r.lastMessage["map"], data)
+	r.mtx.Unlock()
+	if unchanged {
 		return
 	}
 
