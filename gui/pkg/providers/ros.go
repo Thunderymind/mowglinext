@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math"
@@ -430,6 +431,21 @@ func (r *RosProvider) initDockPoseSubscription() {
 
 // initMapPolling periodically fetches mowing areas from the map_server_node
 // and publishes the result to the virtual "map" topic for the GUI.
+//
+// pollMap() makes one sequential CallService round-trip per area
+// (get_mowing_area), and each of those competes with the rest of the ROS2
+// stack for foxglove_bridge/DDS bandwidth. Field-reported 2026-09-28: while
+// actively mowing, each call was taking ~4s, so a poll with several areas
+// ran well past the 5s tick interval. This loop is already single-threaded
+// (pollMap always runs to completion before the next `range` iteration reads
+// the channel, so pollMap can never actually run twice AT ONCE) — the
+// symptom is different: time.Ticker's channel buffers at most one pending
+// tick, and while a slow pollMap() is still running, that one tick fires
+// and sits waiting. The MOMENT pollMap() returns, the loop reads that
+// already-fired tick immediately — giving a second, near-back-to-back poll
+// with almost no gap — before the normal 5s cadence resumes. Drain that one
+// stale tick (if any) right after pollMap() returns, so a slow poll costs
+// one lost tick instead of a rapid-fire double one.
 func (r *RosProvider) initMapPolling() {
 	go func() {
 		// Wait for foxglove_bridge to be ready
@@ -439,7 +455,22 @@ func (r *RosProvider) initMapPolling() {
 		defer ticker.Stop()
 
 		for range ticker.C {
+			start := time.Now()
 			r.pollMap()
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				logrus.WithField("elapsed", elapsed).Warn(
+					"pollMap: took longer than the 5s poll interval (ROS2 service " +
+						"calls contended, likely while actively mowing)")
+			}
+			// Unconditional, non-blocking: drain a tick that already fired while
+			// pollMap() was running (there is at most one — see the comment
+			// above), so an overrun costs one lost tick instead of an
+			// immediate back-to-back poll. A no-op (does nothing, costs
+			// nothing) on every normal, on-time cycle.
+			select {
+			case <-ticker.C:
+			default:
+			}
 		}
 	}()
 }
@@ -512,6 +543,25 @@ func (r *RosProvider) pollMap() {
 
 	data, err := json.Marshal(mapData)
 	if err != nil {
+		return
+	}
+
+	// pollMap runs on a fixed 5s ticker regardless of whether anything
+	// actually changed, and the payload is the WHOLE map (every area,
+	// obstacle and corridor point) — easily >1 MB with a real garden's
+	// worth of areas/ignore lines. fanOut() itself has no dedup (by design:
+	// other logicalKeys legitimately want every tick delivered even when
+	// byte-identical, e.g. high-frequency sensor topics), so skip the
+	// broadcast here specifically when nothing changed since the last poll,
+	// rather than pushing an unchanged multi-MB payload to every connected
+	// browser tab every 5s. Field-reported 2026-09-28: this was the other
+	// half of a "map updates twice, always huge" slowdown — see the paired
+	// frontend fix (useMapStreams.ts) for the actual duplicate-subscribe
+	// half of that report.
+	r.mtx.Lock()
+	unchanged := bytes.Equal(r.lastMessage["map"], data)
+	r.mtx.Unlock()
+	if unchanged {
 		return
 	}
 
