@@ -198,16 +198,22 @@ Older releases without a deployment descriptor are comparison-only.
 
 ### Forcing a firmware protocol change
 
-`POST /v1/plan` with `allow_firmware_protocol_change: true` plans a target
-whose `firmware_protocol` differs from the protocol the board reported in its
-handshake (`/api/system/update-readiness` → `firmware_protocol`; a board with
-no handshake, protocol 0, is never forced past). The plan records the pair as
-`firmware_protocol_change: {from, to}`, and `POST /v1/apply` must then carry
-`firmware_protocol_acknowledged: true` — the review dialog is where the
-consequence is read, so the acknowledgement is repeated at install like the
-custom-image one. Capability `firmware-protocol-change` advertises support; an
-older agent rejects the unknown field, so the GUI tells the operator to update
-the agent first.
+`POST /v1/plan` plans a target whose `firmware_protocol` differs from the
+protocol the board reported in its handshake (`/api/system/update-readiness`
+→ `firmware_protocol`; a board with no handshake, protocol 0, is never forced
+past) unless `allow_firmware_protocol_change: false` is sent. The plan records
+the pair as `firmware_protocol_change: {from, to}`, and `POST /v1/apply`
+installs it unless `firmware_protocol_acknowledged: false` is sent. **Both
+flags are tri-state and an ABSENT flag means allowed**: the GUI that predates
+them is precisely the one that can only obtain the matching firmware from the
+image it is installing, so it must not be locked out — after its update the
+new GUI shows the flash alert. A GUI that knows the flags always sends an
+explicit value and does its own gating: a warning with an "install anyway"
+checkbox at review, and a second acknowledgement in the review dialog (the
+consequence is read there, so it is repeated at install like the custom-image
+one). Capability `firmware-protocol-change` advertises the flags; an older
+agent rejects them as unknown fields, so the GUI never sends them to it and
+tells the operator to update the agent first.
 
 This is the **update-first** counterpart of the protocol-first transition
 described under *Recovery and updater self-updates*: same readiness contract,

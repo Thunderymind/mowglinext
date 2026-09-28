@@ -2,7 +2,9 @@ package updater
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -195,5 +197,48 @@ func TestMatchingFirmwareProtocolNeedsNoAcknowledgement(t *testing.T) {
 	}
 	if len(b.gateChanges) != 1 || b.gateChanges[0] != nil {
 		t.Fatalf("gate received a change for a matching protocol: %+v", b.gateChanges)
+	}
+}
+
+// A GUI that predates the firmware flags omits them, and it is precisely the
+// GUI that can only get the matching firmware from the image it is installing:
+// omission must not lock it out. A GUI that knows the flags sends explicit
+// values and keeps its own gating.
+func TestLegacyGUIForcesProtocolChangeByOmission(t *testing.T) {
+	newer := fixture()
+	newer.ID, newer.ReleaseTag, newer.FirmwareProtocol = "deployment-v7", "deployment-v7", 7
+	b := &fakeBackend{fingerprint: "original"}
+	m, err := Open(t.TempDir(), []string{"mowglinext/mowglinext"}, b, &fakeSource{releases: []Deployment{newer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Check(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	post := func(path, body string) (int, string) {
+		w := httptest.NewRecorder()
+		m.Handler(HostConfig{}).ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
+		return w.Code, w.Body.String()
+	}
+	// New GUI, allowance not ticked: explicit false is refused.
+	if code, body := post("/v1/plan", `{"deployment":"deployment-v7","allow_firmware_protocol_change":false}`); code != 409 || !strings.Contains(body, "different mainboard firmware protocol") {
+		t.Fatalf("explicit refusal lost: %d %s", code, body)
+	}
+	// Legacy GUI: no flag at all plans the change.
+	code, body := post("/v1/plan", `{"deployment":"deployment-v7"}`)
+	var plan Plan
+	if code != 200 || json.Unmarshal([]byte(body), &plan) != nil || plan.FirmwareProtocolChange == nil || *plan.FirmwareProtocolChange != (FirmwareProtocolChange{From: 6, To: 7}) {
+		t.Fatalf("legacy plan did not force the change: %d %s", code, body)
+	}
+	// New GUI, acknowledgement not ticked: explicit false is refused at install.
+	if code, body = post("/v1/apply", `{"plan":"`+plan.ID+`","firmware_protocol_acknowledged":false}`); code != 409 || !strings.Contains(body, "firmware") {
+		t.Fatalf("explicit install refusal lost: %d %s", code, body)
+	}
+	// Legacy GUI installs without the field.
+	if code, body = post("/v1/apply", `{"plan":"`+plan.ID+`"}`); code != 200 {
+		t.Fatalf("legacy install refused: %d %s", code, body)
+	}
+	if state := settled(t, m); state.Job.Phase != "succeeded" {
+		t.Fatalf("%s: %s", state.Job.Phase, state.Job.Error)
 	}
 }

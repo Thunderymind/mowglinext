@@ -72,6 +72,8 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
     // then blocks mowing until the firmware is flashed from the NEW interface.
     // The allowance is offered when the mismatch is visible up front, or when the
     // updater has just refused for that reason (board protocol not known yet).
+    // The updater treats an ABSENT flag as allowed (a GUI predating the flag must
+    // not be locked out), so this GUI always sends an explicit value.
     const runningProtocol = firmwareProtocol && firmwareProtocol > 0 ? firmwareProtocol : undefined;
     const targetProtocol = !custom && !sameDeployment ? target?.firmware_protocol : undefined;
     const visibleMismatch = targetProtocol !== undefined && runningProtocol !== undefined && targetProtocol !== runningProtocol;
@@ -164,7 +166,7 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
                     <Button type="primary" disabled={pending || (custom ? !data.capabilities?.includes('custom-images') || !customAccepted || Object.keys(customImages).length === 0 || Object.values(customImages).some(v => !v.trim()) : !target || dirty || firmwareChangeBlocked || (sameDeployment && (!advanced || pinned === installedPin)))} loading={busy} onClick={() => void act(async () => {
                         setReviewAccepted(false); setFirmwareInstallAccepted(false);
                         if (custom) setPlan(await updaterRequest<UpdatePlan>('custom-plan', {images:customImages,acknowledged:customAccepted}));
-                        else if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {}), ...(supportsFirmwareChange && firmwareChangeAccepted ? {allow_firmware_protocol_change: true} : {})}));
+                        else if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {}), ...(supportsFirmwareChange ? {allow_firmware_protocol_change: firmwareChangeAccepted} : {})}));
                     })}>{custom ? t('hostUpdater.downloadReview') : advanced && ['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
                 </Space>
                 <Typography.Text type="secondary">{t('hostUpdater.lastCheck', {time: date(data.state.last_check)})}</Typography.Text>

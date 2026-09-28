@@ -487,14 +487,16 @@ test('firmware protocol change without an updated agent cannot be reviewed',asyn
     await expect(panel.getByRole('button',{name:'Review update'})).toBeDisabled();
     expect(posts).toEqual([]);
 });
-test('matching firmware protocol shows no allowance and sends no flag',async({page})=>{
+// The updater treats an absent flag as allowed (legacy GUIs), so this GUI must
+// always send an explicit refusal when the operator has not ticked anything.
+test('matching firmware protocol shows no allowance and sends an explicit refusal',async({page})=>{
     const data=fixture();data.capabilities.push('firmware-protocol-change');
     const {panel,posts}=await open(page,data,false,boardStatus(6));
     await expect(page.getByTestId('firmware-change')).toHaveCount(0);
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0])}));
     await panel.getByRole('button',{name:'Review update'}).click();
     await expect(page.getByRole('dialog')).toBeVisible();
-    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true}}]);
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true,allow_firmware_protocol_change:false}}]);
 });
 for(const protocol of [6,7])test(`after a forced install the flash reminder ${protocol===6?'stays until the board is flashed':'clears once the board runs the new protocol'}`,async({page})=>{
     const data=fixture();data.capabilities.push('firmware-protocol-change');
