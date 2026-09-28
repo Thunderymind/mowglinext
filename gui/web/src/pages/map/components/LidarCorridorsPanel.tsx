@@ -1,4 +1,4 @@
-import {CheckOutlined, CloseOutlined, EditOutlined, InfoCircleOutlined} from "@ant-design/icons";
+import {CheckOutlined, CloseOutlined, InfoCircleOutlined} from "@ant-design/icons";
 import {Button, InputNumber, Tooltip} from "antd";
 import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
@@ -17,7 +17,9 @@ interface LidarCorridorsPanelProps {
     /// True while the operator is clicking points onto the map.
     drawing: boolean;
     drawPointCount: number;
-    onStartDraw: () => void;
+    /// Drawing is started from the map editor toolbar's "+ Add" menu now
+    /// (works on mobile too), not from a button in this panel — there is no
+    /// onStartDraw prop here any more.
     onFinishDraw: () => void;
     onCancelDraw: () => void;
     /// Width in METRES (the panel edits centimetres).
@@ -40,7 +42,7 @@ interface LidarCorridorsPanelProps {
 /// so the robot follows the recorded boundary next to e.g. a hedge instead of
 /// being pushed off it. Everywhere else the LiDAR keeps working normally.
 export const LidarCorridorsPanel = ({
-    corridors, busy, editable, drawing, drawPointCount, onStartDraw, onFinishDraw, onCancelDraw, onChangeWidth,
+    corridors, busy, editable, drawing, drawPointCount, onFinishDraw, onCancelDraw, onChangeWidth,
     onSelect, selectedIndex, onSmooth, onSimplify,
 }: LidarCorridorsPanelProps) => {
     const {colors} = useThemeMode();
@@ -84,7 +86,11 @@ export const LidarCorridorsPanel = ({
                             gap: 6,
                             padding: '6px 12px',
                             borderLeft: `3px solid ${CORRIDOR_COLOR}`,
-                            background: selectedIndex === index ? colors.bgElevated : 'transparent',
+                            // Very light tint of the same pink used for the line/band on
+                            // the map (CORRIDOR_COLOR), not the generic bgElevated highlight
+                            // — that one was nearly invisible against this panel's dark
+                            // background and gave no clue which line was selected.
+                            background: selectedIndex === index ? `${CORRIDOR_COLOR}22` : 'transparent',
                             cursor: 'pointer',
                         }}>
                         <div style={{flex: 1, fontSize: 12, color: colors.text, minWidth: 0}}>
@@ -126,11 +132,6 @@ export const LidarCorridorsPanel = ({
                     </>
                 ) : (
                     <>
-                        {editable && (
-                            <Button size="small" icon={<EditOutlined aria-hidden="true"/>} disabled={busy} onClick={onStartDraw}>
-                                {t('mapLidarCorridors.draw')}
-                            </Button>
-                        )}
                         {selectedIndex !== null && editable && (
                             <>
                                 <Button size="small" disabled={busy} onClick={onSmooth}

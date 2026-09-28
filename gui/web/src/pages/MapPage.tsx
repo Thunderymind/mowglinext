@@ -1654,6 +1654,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onDrawPolygon={handleDrawPolygon}
                         onDrawShape={handleDrawShape}
                         onDrawEmoji={handleDrawEmoji}
+                        onDrawLidarCorridor={() => setCorridorDraw([])}
                         onTrash={handleTrash}
                         onCombine={handleCombine}
                         onSubtract={handleSubtract}
@@ -1722,14 +1723,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 />
                             </div>
                         )}
-                        <div style={{borderTop: `1px solid ${colors.borderSubtle}`}}>
+                        {/* This wrapper must itself be a shrinkable flex participant
+                            (flex + minHeight:0), same as AreasListPanel's own root div
+                            above — otherwise it sizes to its content's natural (auto)
+                            height regardless of the panel's internal flex:1 list, the
+                            list never gets a bounded height to overflow against, and
+                            long corridor lists silently clip against this column's
+                            overflow:hidden instead of scrolling. */}
+                        <div style={{borderTop: `1px solid ${colors.borderSubtle}`, display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0}}>
                             <LidarCorridorsPanel
                                 corridors={lidarCorridors.corridors}
                                 busy={lidarCorridors.busy}
                                 editable={editMap}
                                 drawing={corridorDraw !== null}
                                 drawPointCount={corridorDraw?.length ?? 0}
-                                onStartDraw={() => setCorridorDraw([])}
                                 onFinishDraw={() => void handleFinishCorridor()}
                                 onCancelDraw={() => setCorridorDraw(null)}
                                 onChangeWidth={(index, widthM) => void handleCorridorChange(

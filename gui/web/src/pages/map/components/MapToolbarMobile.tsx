@@ -33,7 +33,6 @@ import {
     ThunderboltOutlined,
     ImportOutlined,
     CheckOutlined,
-    RadarChartOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import AsyncButton from "../../../components/AsyncButton.tsx";
@@ -377,6 +376,7 @@ export const MapToolbarMobile = ({
                         <ShapePickerDropdown
                             onDrawShape={onDrawShape}
                             onDrawEmoji={onDrawEmoji}
+                            onDrawLidarCorridor={onDrawLidarCorridor}
                             placement="top"
                         >
                             <Button size="large" icon={<PlusOutlined />} aria-label={t("mapToolbarMobile.addShape")} style={touchTarget} />
@@ -400,11 +400,13 @@ export const MapToolbarMobile = ({
                         style={touchTarget}
                     />
 
-                    {/* LiDAR-ignore line: tap to start, then tap points on the map.
-                        While drawing, this becomes Finish/Cancel (mirrors Save/Cancel above) —
-                        the running point count is shown via the aria-label since there is no
-                        room for a text counter in this scrolling row. */}
-                    {lidarCorridorDrawing ? (
+                    {/* LiDAR-ignore line: started from the "+ Add" dropdown above (tap
+                        points on the map after picking it there), same entry point as
+                        a shape/emoji. While drawing, this becomes Finish/Cancel (mirrors
+                        Save/Cancel above) — the running point count is shown via the
+                        aria-label since there is no room for a text counter in this
+                        scrolling row. There is no standalone start button any more. */}
+                    {lidarCorridorDrawing && (
                         <Space.Compact size="large">
                             <Button
                                 type="primary"
@@ -423,14 +425,6 @@ export const MapToolbarMobile = ({
                                 style={touchTarget}
                             />
                         </Space.Compact>
-                    ) : (
-                        <Button
-                            size="large"
-                            icon={<RadarChartOutlined />}
-                            onClick={onDrawLidarCorridor}
-                            aria-label={t("mapLidarCorridors.draw")}
-                            style={touchTarget}
-                        />
                     )}
 
                     {/* Combine/Subtract/Split now live inside this More menu

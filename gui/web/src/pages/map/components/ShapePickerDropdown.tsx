@@ -1,7 +1,7 @@
 import {useState} from 'react';
 import {Dropdown, InputNumber} from 'antd';
 import {useTranslation} from 'react-i18next';
-import {BorderOutlined, RadiusSettingOutlined, PlusOutlined} from '@ant-design/icons';
+import {BorderOutlined, RadiusSettingOutlined, PlusOutlined, RadarChartOutlined} from '@ant-design/icons';
 import type {ShapeType} from '../hooks/useMapEditing';
 import {useThemeMode} from '../../../theme/ThemeContext.tsx';
 
@@ -10,6 +10,11 @@ const POPULAR_EMOJI = ['⭐', '❤️', '🌙', '🔔', '💎', '🍀', '🦋', 
 interface ShapePickerDropdownProps {
     onDrawShape?: (shape: ShapeType, sizeMeters: number) => void;
     onDrawEmoji?: (emoji: string, sizeMeters: number) => void;
+    /// Starts a LiDAR-ignore line (click-to-place polyline, no fixed size) —
+    /// listed alongside the geometry shapes below so it's reachable from the
+    /// same "+ Add" entry point on both desktop and mobile, instead of its
+    /// own standalone button.
+    onDrawLidarCorridor?: () => void;
     children?: React.ReactNode;
     placement?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight' | 'top' | 'bottom';
 }
@@ -23,6 +28,7 @@ const shapes: {key: ShapeType; labelKey: string; icon: React.ReactNode}[] = [
 export const ShapePickerDropdown = ({
     onDrawShape,
     onDrawEmoji,
+    onDrawLidarCorridor,
     children,
     placement = 'topLeft',
 }: ShapePickerDropdownProps) => {
@@ -94,6 +100,21 @@ export const ShapePickerDropdown = ({
                     {t(s.labelKey)}
                 </button>
             ))}
+
+            {/* LiDAR-ignore line — a click-to-place polyline, not a fixed-size
+                stamp, so it ignores the size control above; still listed here
+                (not a separate toolbar button) so it's one tap away on mobile too. */}
+            {onDrawLidarCorridor && (
+                <button
+                    onClick={() => onDrawLidarCorridor()}
+                    style={menuItemStyle}
+                    onMouseOver={hoverOn}
+                    onMouseOut={hoverOff}
+                >
+                    <RadarChartOutlined />
+                    {t('mapLidarCorridors.draw')}
+                </button>
+            )}
 
             <div style={{height: 1, background: colors.borderSubtle, margin: '4px'}} />
 
