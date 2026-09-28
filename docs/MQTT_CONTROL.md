@@ -95,8 +95,8 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/command` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/high_level_control` | — |
 | `<prefix>/start_area` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/start_in_area` | — |
 | `<prefix>/schedules` | out | yes | the GUI's schedule database (not ROS2 — see above) | on any create/update/delete |
-| `<prefix>/schedules/set` | **in** | — | → GUI schedule database | — |
-| `<prefix>/schedules/delete` | **in** | — | → GUI schedule database | — |
+| `<prefix>/schedules/set` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
+| `<prefix>/schedules/delete` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
 
 ### `<prefix>/high_level_status` — the primary "is it mowing?" topic
 
