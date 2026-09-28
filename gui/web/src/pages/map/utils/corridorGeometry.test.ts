@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest";
 import {
-    buildCorridorBandQuads,
+    buildCorridorBandPolygon,
     insertMidpoint,
     polylineLengthM,
     removeVertex,
@@ -53,22 +53,40 @@ describe("corridorGeometry", () => {
     });
 
     it("bands a straight segment as a widthM-wide rectangle, closed", () => {
-        const quads = buildCorridorBandQuads([{x: 0, y: 0}, {x: 10, y: 0}], 1.0);
-        expect(quads).toHaveLength(1);
-        const [ring] = quads;
+        const bands = buildCorridorBandPolygon([{x: 0, y: 0}, {x: 10, y: 0}], 1.0);
+        expect(bands).toHaveLength(1);
+        const [ring] = bands;
         expect(ring[0]).toEqual(ring[ring.length - 1]); // closed
         expect(ring.every((p) => Math.abs(p.y) <= 0.5 + 1e-9)).toBe(true);
         expect(ring.some((p) => Math.abs(p.y - 0.5) < 1e-9)).toBe(true);
         expect(ring.some((p) => Math.abs(p.y + 0.5) < 1e-9)).toBe(true);
     });
 
-    it("bands one quad per segment and skips degenerate (repeated) points", () => {
-        const quads = buildCorridorBandQuads([{x: 0, y: 0}, {x: 0, y: 0}, {x: 5, y: 0}, {x: 5, y: 5}], 0.4);
-        expect(quads).toHaveLength(2);
+    it("bands a bent polyline as ONE continuous, mitred ring — not one piece per segment", () => {
+        const bands = buildCorridorBandPolygon([{x: 0, y: 0}, {x: 5, y: 0}, {x: 5, y: 5}], 0.4);
+        expect(bands).toHaveLength(1);
+        const [ring] = bands;
+        // 3 input vertices -> 3 left-bank + 3 right-bank points, ring-closed.
+        expect(ring).toHaveLength(3 + 3 + 1);
+        // The outer corner (mitred) sits further than half-width from the
+        // bend vertex (5, 0) — that's the whole point of mitring instead of
+        // leaving a gap/overlap between two independent quads.
+        const outerCorner = ring.find((p) => p.x > 5.05 && p.y < -0.05);
+        expect(outerCorner).toBeDefined();
+    });
+
+    it("does not choke on a degenerate (repeated) point", () => {
+        const bands = buildCorridorBandPolygon([{x: 0, y: 0}, {x: 0, y: 0}, {x: 5, y: 0}], 0.4);
+        expect(bands).toHaveLength(1);
+        expect(bands[0].every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))).toBe(true);
     });
 
     it("clamps a zero or negative width to a thin sliver rather than collapsing", () => {
-        const quads = buildCorridorBandQuads([{x: 0, y: 0}, {x: 1, y: 0}], 0);
-        expect(quads[0].some((p) => p.y !== 0)).toBe(true);
+        const bands = buildCorridorBandPolygon([{x: 0, y: 0}, {x: 1, y: 0}], 0);
+        expect(bands[0].some((p) => p.y !== 0)).toBe(true);
+    });
+
+    it("returns nothing for a single point (no line to band)", () => {
+        expect(buildCorridorBandPolygon([{x: 0, y: 0}], 0.5)).toEqual([]);
     });
 });

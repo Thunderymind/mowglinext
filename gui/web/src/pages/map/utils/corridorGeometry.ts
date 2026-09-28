@@ -104,32 +104,62 @@ export const simplifyPolyline = (points: XY[], toleranceM = 0.15): XY[] => {
     return points.filter((_, i) => keep[i]);
 };
 
-/// Build the visible "ignore band" for a corridor: one rectangular quad per
-/// segment, offset `widthM / 2` to each side (perpendicular to the segment).
-/// This is a rough approximation, not a proper buffered polygon — quads from
-/// adjacent segments simply overlap at a bend rather than mitring cleanly —
-/// but that is exactly what we want here: the fill is only a translucent
-/// visual aid so the operator can see roughly how wide a band is actually
-/// suppressed (costmap_scan_filter_node's real point-to-segment test is the
-/// ground truth), and overlapping translucent quads at a corner just read as
-/// slightly more opaque there, not as a rendering bug. Returns one closed
-/// ring (5 points, first === last) per segment; a degenerate (zero-length)
-/// segment is skipped.
-export const buildCorridorBandQuads = (points: XY[], widthM: number): XY[][] => {
+/// A mitred offset (see buildCorridorBandPolygon) can shoot arbitrarily far
+/// out at a very sharp bend (the classic "stroke spike" problem) — cap it at
+/// this multiple of the half-width, same idea as an SVG/canvas miterLimit.
+const MITER_LIMIT = 4;
+
+/// Left-hand perpendicular unit normal of a direction vector.
+const leftNormal = (dx: number, dy: number): XY => {
+    const len = Math.hypot(dx, dy);
+    return len < 1e-9 ? {x: 0, y: 0} : {x: -dy / len, y: dx / len};
+};
+
+/// Build the visible "ignore band" for a corridor: ONE continuous polygon
+/// (not a quad per segment — see git history for the earlier, blockier
+/// version), offset `widthM / 2` to each side of the polyline with a mitred
+/// join at every interior vertex so the band flows smoothly through a bend
+/// instead of showing per-segment seams. This is a visual aid only, not a
+/// proper geometric buffer (no self-intersection repair for a very tight,
+/// sharply doubling-back line) — costmap_scan_filter_node's own point-to-
+/// segment test remains the ground truth for what's actually suppressed.
+/// Returns a single closed ring wrapped in an array (kept as XY[][] so
+/// existing callers — one Feature per ring — don't need to change), or []
+/// for a degenerate (<2-point) input.
+export const buildCorridorBandPolygon = (points: XY[], widthM: number): XY[][] => {
+    if (points.length < 2) return [];
     const halfW = Math.max(0.01, widthM) / 2;
-    const quads: XY[][] = [];
-    for (let i = 0; i + 1 < points.length; i++) {
-        const a = points[i], b = points[i + 1];
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const len = Math.hypot(dx, dy);
-        if (len < 1e-6) continue;
-        const nx = (-dy / len) * halfW;
-        const ny = (dx / len) * halfW;
-        const p1 = {x: a.x + nx, y: a.y + ny};
-        const p2 = {x: b.x + nx, y: b.y + ny};
-        const p3 = {x: b.x - nx, y: b.y - ny};
-        const p4 = {x: a.x - nx, y: a.y - ny};
-        quads.push([p1, p2, p3, p4, p1]);
+    const n = points.length;
+    const left: XY[] = [];
+    const right: XY[] = [];
+    for (let i = 0; i < n; i++) {
+        const prev = points[Math.max(i - 1, 0)];
+        const cur = points[i];
+        const next = points[Math.min(i + 1, n - 1)];
+        const nIn = leftNormal(cur.x - prev.x, cur.y - prev.y);
+        const nOut = leftNormal(next.x - cur.x, next.y - cur.y);
+        // Endpoints (or a zero-length neighbour segment) only have one real
+        // normal — the other came back {0,0} and drops out of the sum.
+        let bx = nIn.x + nOut.x, by = nIn.y + nOut.y;
+        const bLen = Math.hypot(bx, by);
+        if (bLen < 1e-9) {
+            // Both neighbours degenerate (an isolated duplicate point) —
+            // nothing sensible to offset; place both banks on the vertex.
+            left.push(cur);
+            right.push(cur);
+            continue;
+        }
+        bx /= bLen;
+        by /= bLen;
+        // cos(half the turn angle) = dot(bisector, either normal) — the
+        // miter scale factor (1/cos) blows up as the turn approaches 180°,
+        // so clamp it (MITER_LIMIT) rather than let a hairpin spike out.
+        const cosHalfAngle = Math.max(bx * nIn.x + by * nIn.y, 1 / MITER_LIMIT);
+        const miter = halfW / cosHalfAngle;
+        left.push({x: cur.x + bx * miter, y: cur.y + by * miter});
+        right.push({x: cur.x - bx * miter, y: cur.y - by * miter});
     }
-    return quads;
+    const ring = [...left, ...right.reverse()];
+    ring.push(ring[0]);
+    return [ring];
 };

@@ -38,7 +38,7 @@ import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.ts
 import {CORRIDOR_COLOR, LidarCorridorsPanel} from "./map/components/LidarCorridorsPanel.tsx";
 import {EditLidarCorridorModal} from "./map/components/EditLidarCorridorModal.tsx";
 import {DEFAULT_CORRIDOR_WIDTH_M, useLidarCorridors} from "./map/hooks/useLidarCorridors.ts";
-import {buildCorridorBandQuads, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
+import {buildCorridorBandPolygon, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
 import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
 import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapImageMarker} from "./map/components/MapImageMarker.tsx";
@@ -996,7 +996,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // operator clicked — so it's visible on the map exactly what area gets
     // an ignore, not only where. Shown in both view and edit mode (DrawControl
     // itself only ever renders the thin centerline + vertex handles).
-    // Geometry is built in ROS metres (buildCorridorBandQuads), then each
+    // Geometry is built in ROS metres (buildCorridorBandPolygon), then each
     // vertex is transposed to lng/lat for rendering — corridors persist in
     // ROS map-frame points, so this stays exact regardless of map projection.
     const corridorBandFeatures = useMemo((): FeatureCollection => {
@@ -1006,12 +1006,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 const pts = (corridor.polyline?.points ?? []).map((p) => ({x: p.x ?? 0, y: p.y ?? 0}));
                 if (pts.length < 2) return;
                 const widthM = corridor.width_m ?? DEFAULT_CORRIDOR_WIDTH_M;
-                buildCorridorBandQuads(pts, widthM).forEach((quad) => features.push({
+                buildCorridorBandPolygon(pts, widthM).forEach((ring) => features.push({
                     type: "Feature",
                     properties: {kind: "band"},
                     geometry: {
                         type: "Polygon",
-                        coordinates: [quad.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x))],
+                        coordinates: [ring.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x))],
                     },
                 }));
             });
@@ -1020,12 +1020,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     const [x, y] = itranspose(offsetX, offsetY, datum, lat, lng);
                     return {x, y};
                 });
-                buildCorridorBandQuads(rosPts, DEFAULT_CORRIDOR_WIDTH_M).forEach((quad) => features.push({
+                buildCorridorBandPolygon(rosPts, DEFAULT_CORRIDOR_WIDTH_M).forEach((ring) => features.push({
                     type: "Feature",
                     properties: {kind: "draft-band"},
                     geometry: {
                         type: "Polygon",
-                        coordinates: [quad.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x))],
+                        coordinates: [ring.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x))],
                     },
                 }));
             }
