@@ -2700,7 +2700,15 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     fleet_wrap_pending_ = false;
     max_areas_ = std::min(max_areas_, fleet_wrap_limit_);
     current_area_idx_ = 0;
-    while (current_area_idx_ < max_areas_ && isSkippedArea(*ctx, current_area_idx_))
+    // mowglinext#637 phase 2: same isSkipVerified() gate as onStart()'s and
+    // advanceAndProbe()'s skip loops. Without it this wrap is the one path
+    // that still trusts a per-index flag no probe ever confirmed: an area
+    // re-indexed into the lower range [0, preferred) inherits the previous
+    // occupant's completed/attempted flag and is skipped for the rest of the
+    // session, with no probe left to reconcile it — exactly the failure the
+    // id reconciliation exists to prevent, just on the fleet-rotation path.
+    while (current_area_idx_ < max_areas_ && isSkipVerified(*ctx, current_area_idx_) &&
+           isSkippedArea(*ctx, current_area_idx_))
     {
       current_area_idx_++;
       skipped_before_probe_++;
@@ -2789,6 +2797,14 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     ctx->area_last_coverage.erase(current_area_idx_);
     ctx->area_start_blocked_count.erase(current_area_idx_);
     ctx->area_guard_halt_count.erase(current_area_idx_);
+    // These three are per-index too, and leaving them behind outlives the
+    // area they described. incomplete_retired_areas keeps
+    // exhaustedRunIsComplete() false, so a fully-mowed run ends as
+    // COVERAGE_FAILED_DOCKING instead of MOWING_COMPLETE; the two fleet sets
+    // keep a brand-new area assigned to, or yielded by, another member.
+    ctx->incomplete_retired_areas.erase(current_area_idx_);
+    ctx->fleet_excluded_areas.erase(current_area_idx_);
+    ctx->fleet_yielded_areas.erase(current_area_idx_);
   }
   ctx->area_ids[current_area_idx_] = response->area.id;
   // This index is now verified against the CURRENT area-list generation (the
