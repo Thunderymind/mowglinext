@@ -512,3 +512,88 @@ export type Status = {
   stamp?: { sec: number; nanosec: number };
   mower_status?: number;
   reset_cause?: number;
+  reset_cause_name?: string;
+  raspberry_pi_power?: boolean;
+  is_charging?: boolean;
+  esc_power?: boolean;
+  rain_detected?: boolean;
+  sound_module_available?: boolean;
+  sound_module_busy?: boolean;
+  ui_board_available?: boolean;
+  mow_enabled?: boolean;
+  firmware_debug_enabled?: boolean;
+  dig_escalated?: boolean;
+  dig_escalated_distance_m?: number;
+  dig_escalated_required_distance_m?: number;
+  mower_esc_status?: number;
+  mower_esc_temperature?: number;
+  mower_esc_current?: number;
+  mower_motor_temperature?: number;
+  mower_motor_rpm?: number;
+  blade_status_stamp?: { sec: number; nanosec: number };
+  blade_requested_direction?: string;
+  firmware_version?: string;
+  firmware_protocol_version?: number;
+  firmware_compatible?: boolean;
+};
+
+export const enum TrackedObstacleConstants {
+  TRANSIENT = 0,
+  PERSISTENT = 1,
+};
+
+export type TrackedObstacle = {
+  id?: number;
+  polygon?: Polygon;
+  centroid?: Point;
+  radius?: number;
+  first_seen?: { sec: number; nanosec: number };
+  observation_count?: number;
+  status?: number;
+};
+
+export const enum WheelTickConstants {
+  WHEEL_VALID_FL = 1,
+  WHEEL_VALID_FR = 2,
+  WHEEL_VALID_RL = 4,
+  WHEEL_VALID_RR = 8,
+};
+
+export type WheelTick = {
+  stamp?: { sec: number; nanosec: number };
+  wheel_tick_factor?: number;
+  valid_wheels?: number;
+  wheel_direction_fl?: number;
+  wheel_ticks_fl?: number;
+  wheel_direction_fr?: number;
+  wheel_ticks_fr?: number;
+  wheel_direction_rl?: number;
+  wheel_ticks_rl?: number;
+  wheel_direction_rr?: number;
+  wheel_ticks_rr?: number;
+};
+
+// --- Additional types not from .msg files ---
+
+export type Joy = {
+  axes?: number[];
+  buttons?: number[];
+};
+
+export type Map = {
+  map_width?: number;
+  map_height?: number;
+  map_center_x?: number;
+  map_center_y?: number;
+  navigation_areas?: MapArea[];
+  working_area?: MapArea[];
+  working_area_indices?: number[];
+  dock_x?: number;
+  dock_y?: number;
+  dock_heading?: number;
+};
+
+export type DockingSensor = {
+  dock_present?: boolean;
+  dock_distance?: number;
+};
