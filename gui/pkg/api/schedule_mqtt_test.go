@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,7 @@ import (
 type fakeMqttClient struct {
 	mu           sync.Mutex
 	published    []fakePublication
-	handlers     map[string]func(payload []byte)
+	handlers     map[string]func(payload []byte, retained bool)
 	disconnected bool
 }
 
@@ -28,7 +29,7 @@ type fakePublication struct {
 }
 
 func newFakeMqttClient() *fakeMqttClient {
-	return &fakeMqttClient{handlers: map[string]func(payload []byte){}}
+	return &fakeMqttClient{handlers: map[string]func(payload []byte, retained bool){}}
 }
 
 func (f *fakeMqttClient) Publish(topic string, payload []byte, retained bool) error {
@@ -38,7 +39,7 @@ func (f *fakeMqttClient) Publish(topic string, payload []byte, retained bool) er
 	return nil
 }
 
-func (f *fakeMqttClient) Subscribe(topic string, handler func(payload []byte)) error {
+func (f *fakeMqttClient) Subscribe(topic string, handler func(payload []byte, retained bool)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.handlers[topic] = handler
@@ -49,11 +50,18 @@ func (f *fakeMqttClient) Disconnect() { f.disconnected = true }
 
 func (f *fakeMqttClient) fire(t *testing.T, topic string, payload []byte) {
 	t.Helper()
+	f.fireRetained(t, topic, payload, false)
+}
+
+// fireRetained delivers a message the way the broker replays a RETAINED one on
+// (re)subscribe, as opposed to a live publish.
+func (f *fakeMqttClient) fireRetained(t *testing.T, topic string, payload []byte, retained bool) {
+	t.Helper()
 	f.mu.Lock()
 	h, ok := f.handlers[topic]
 	f.mu.Unlock()
 	require.True(t, ok, "no handler subscribed for %s", topic)
-	h(payload)
+	h(payload, retained)
 }
 
 func (f *fakeMqttClient) lastPublished(topic string) (fakePublication, bool) {
@@ -318,4 +326,100 @@ func TestNewScheduleMqttBridge_DisabledIsInertAndDoesNotPanic(t *testing.T) {
 		b := NewScheduleMqttBridge(db)
 		assert.Nil(t, b.client)
 	})
+}
+
+// ===========================================================================
+// Retained inbound commands are stale operator intent, not new instructions
+// ===========================================================================
+
+func TestScheduleMqttBridge_RetainedSetIsIgnored(t *testing.T) {
+	db := types.NewMockDBProvider()
+	client := newFakeMqttClient()
+	newScheduleMqttBridgeWithClient(db, "mowgli", client)
+
+	// A client published schedules/set with retain=1 once; the broker replays
+	// it on every GUI start. Since an absent id CREATES, honouring the replay
+	// silently adds another enabled mowing schedule per boot — a schedule the
+	// operator deleted would come back, and multiply.
+	payload, err := json.Marshal(Schedule{Area: 1, Time: "06:00", DaysOfWeek: []int{1}, Enabled: true})
+	require.NoError(t, err)
+	client.fireRetained(t, "mowgli/schedules/set", payload, true)
+
+	all, err := getAllSchedules(db)
+	require.NoError(t, err)
+	assert.Empty(t, all, "a retained schedules/set must not create a schedule")
+}
+
+func TestScheduleMqttBridge_RetainedDeleteIsIgnored(t *testing.T) {
+	db := types.NewMockDBProvider()
+	require.NoError(t, saveSchedule(db, &Schedule{ID: "keep-me", Area: 1, Time: "06:00", DaysOfWeek: []int{1}, Enabled: true}))
+	client := newFakeMqttClient()
+	newScheduleMqttBridgeWithClient(db, "mowgli", client)
+
+	client.fireRetained(t, "mowgli/schedules/delete", []byte("keep-me"), true)
+
+	all, err := getAllSchedules(db)
+	require.NoError(t, err)
+	require.Len(t, all, 1, "a retained schedules/delete must not delete a schedule")
+	assert.Equal(t, "keep-me", all[0].ID)
+}
+
+func TestScheduleMqttBridge_LiveSetIsStillHonoured(t *testing.T) {
+	db := types.NewMockDBProvider()
+	client := newFakeMqttClient()
+	newScheduleMqttBridgeWithClient(db, "mowgli", client)
+
+	payload, err := json.Marshal(Schedule{Area: 1, Time: "06:00", DaysOfWeek: []int{1}, Enabled: true})
+	require.NoError(t, err)
+	client.fireRetained(t, "mowgli/schedules/set", payload, false)
+
+	all, err := getAllSchedules(db)
+	require.NoError(t, err)
+	assert.Len(t, all, 1, "rejecting retained deliveries must not reject live ones")
+}
+
+// ===========================================================================
+// Broker settings: mqtt_use_ssl selects the scheme
+// ===========================================================================
+
+func TestNewPahoMqttClient_DoesNotBlockWhenTheBrokerIsUnreachable(t *testing.T) {
+	// main.go builds this bridge BEFORE api.NewAPI, so a blocking connect
+	// against an unreachable broker means the GUI never serves — and the
+	// mqtt_enabled toggle that would undo it only exists in that GUI.
+	// Port 1 is reserved and refuses immediately; with ConnectRetry paho
+	// retries forever, which is exactly the case an unbounded Wait() hung on.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := newPahoMqttClient(mqttBrokerSettings{host: "127.0.0.1", port: 1, topicPrefix: "mowgli"})
+		if err == nil && c != nil {
+			c.Disconnect()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("newPahoMqttClient blocked on an unreachable broker; GUI startup would hang")
+	}
+}
+
+func TestLoadMqttBrokerSettings_ReadsUseSSL(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "mowgli_robot.yaml")
+	require.NoError(t, os.WriteFile(yamlPath, []byte(`mowgli:
+  ros__parameters:
+    mqtt_enabled: true
+    mqtt_host: "broker.example"
+    mqtt_port: 8883
+    mqtt_use_ssl: true
+`), 0o644))
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlPath))
+
+	settings, err := loadMqttBrokerSettings(db)
+	require.NoError(t, err)
+	assert.True(t, settings.enabled)
+	assert.True(t, settings.useSSL, "mqtt_use_ssl must be read, or the password goes out in the clear")
+	assert.Equal(t, 8883, settings.port)
 }

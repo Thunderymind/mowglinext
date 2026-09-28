@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -46,8 +47,16 @@ type ScheduleMqttBridge struct {
 // pattern (RecordingMqttClient / StubMqttClient) already used in this repo.
 type mqttClient interface {
 	Publish(topic string, payload []byte, retained bool) error
-	Subscribe(topic string, handler func(payload []byte)) error
+	Subscribe(topic string, handler func(payload []byte, retained bool)) error
 	Disconnect()
+}
+
+// reconnectNotifier is implemented by the real paho client only: it lets the
+// bridge re-publish its retained snapshot after the client has re-established
+// a dropped connection. The test fake is always "connected" and does not
+// implement it.
+type reconnectNotifier interface {
+	SetOnReconnect(func())
 }
 
 // NewScheduleMqttBridge connects if (and only if) mqtt_enabled is true in
@@ -82,6 +91,11 @@ func newScheduleMqttBridgeWithClient(dbProvider types.IDBProvider, prefix string
 	return b
 }
 
+// start wires the subscriptions, the HTTP-side listener and the first publish.
+// It must stay non-blocking: main.go calls NewScheduleMqttBridge BEFORE
+// api.NewAPI, so anything that waits here delays the HTTP server — and an
+// operator whose broker is unreachable would get no GUI at all, hence no way
+// to switch mqtt_enabled back off (it only exists in the GUI).
 func (b *ScheduleMqttBridge) start() {
 	if err := b.client.Subscribe(b.prefix+"/schedules/set", b.handleSet); err != nil {
 		logrus.Error(fmt.Errorf("schedule mqtt bridge: subscribing to schedules/set: %w", err))
@@ -93,6 +107,12 @@ func (b *ScheduleMqttBridge) start() {
 	// Schedules page) must also reach MQTT — registerScheduleChangeListener is
 	// schedules.go's only awareness that this bridge exists.
 	registerScheduleChangeListener(b.publish)
+	// The schedule list is a RETAINED snapshot. A reconnect starts a fresh
+	// session with the broker, so re-publish it rather than leaving whatever
+	// the broker retained from the previous connection standing.
+	if rn, ok := b.client.(reconnectNotifier); ok {
+		rn.SetOnReconnect(b.publish)
+	}
 	b.publish()
 }
 
@@ -123,7 +143,17 @@ func (b *ScheduleMqttBridge) publish() {
 
 // handleSet creates a schedule (no "id", or an "id" that does not exist yet)
 // or updates one (an "id" that does), exactly like POST/PUT /schedules.
-func (b *ScheduleMqttBridge) handleSet(payload []byte) {
+func (b *ScheduleMqttBridge) handleSet(payload []byte, retained bool) {
+	// Same rule as mqtt_bridge_node's inbound control topics: a retained
+	// command is the broker replaying old operator intent, not a new
+	// instruction. Without this, one `schedules/set` published with retain=1
+	// is re-delivered on every GUI start and — since an absent/unknown id
+	// CREATES — silently adds another enabled mowing schedule each time, so a
+	// schedule the operator deleted comes back, and multiplies.
+	if retained {
+		logrus.Warn("schedule mqtt bridge: retained schedules/set ignored as stale operator intent")
+		return
+	}
 	var sched Schedule
 	if err := json.Unmarshal(payload, &sched); err != nil {
 		logrus.Error(fmt.Errorf("schedule mqtt bridge: invalid schedules/set payload: %w", err))
@@ -154,7 +184,11 @@ func (b *ScheduleMqttBridge) handleSet(payload []byte) {
 
 // handleDelete accepts either a bare id ("1758...") or {"id":"1758..."}, so a
 // simple MQTT client can publish plain text without building JSON for it.
-func (b *ScheduleMqttBridge) handleDelete(payload []byte) {
+func (b *ScheduleMqttBridge) handleDelete(payload []byte, retained bool) {
+	if retained {
+		logrus.Warn("schedule mqtt bridge: retained schedules/delete ignored as stale operator intent")
+		return
+	}
 	id := parseScheduleID(payload)
 	if id == "" {
 		logrus.Error("schedule mqtt bridge: schedules/delete payload has no id")
@@ -189,6 +223,7 @@ type mqttBrokerSettings struct {
 	username    string
 	password    string
 	topicPrefix string
+	useSSL      bool
 }
 
 // loadMqttBrokerSettings reads the same mqtt_* keys mqtt_bridge_node's launch
@@ -223,6 +258,7 @@ func loadMqttBrokerSettings(dbProvider types.IDBProvider) (mqttBrokerSettings, e
 		username:    asString(get("mqtt_username"), ""),
 		password:    asString(get("mqtt_password"), ""),
 		topicPrefix: asString(get("mqtt_topic_prefix"), "mowgli"),
+		useSSL:      asBool(get("mqtt_use_ssl"), false),
 	}, nil
 }
 
@@ -257,38 +293,118 @@ func asInt(v any, fallback int) int {
 
 // --- the real client, wrapping paho.mqtt.golang -----------------------------
 
+// brokerOpTimeout bounds every broker round-trip. paho's bare token.Wait()
+// is unbounded, and with AutoReconnect IsConnected() stays true while the
+// client is reconnecting, so a QoS-1 publish issued during a broker outage
+// parks until the broker returns. publish() runs synchronously inside the
+// gin handlers for the Schedules page (notifyScheduleChanged), so an
+// unbounded wait there hangs create/update/delete in the browser.
+const brokerOpTimeout = 2 * time.Second
+
 type pahoMqttClient struct {
 	client mqtt.Client
+
+	mu          sync.Mutex
+	subs        map[string]func(payload []byte, retained bool)
+	onReconnect func()
 }
 
+// newPahoMqttClient never blocks. With SetConnectRetry(true) paho's Connect
+// token does not complete until a connection actually succeeds, so waiting on
+// it against an unreachable broker waits forever — and this is called before
+// the HTTP server starts. Instead the connection is left to paho's own retry
+// loop and everything session-scoped (subscriptions, the retained snapshot) is
+// (re-)established from the OnConnect handler, which also covers reconnects:
+// a resubscribe is required because each new session starts with none.
 func newPahoMqttClient(s mqttBrokerSettings) (*pahoMqttClient, error) {
+	c := &pahoMqttClient{subs: map[string]func(payload []byte, retained bool){}}
+
+	// mqtt_use_ssl must be honoured here exactly as mqtt_bridge_node honours
+	// it (mosquitto_tls_set against the system CA store, refusing to fall back
+	// to plaintext). Ignoring it would send mqtt_password in the clear against
+	// the operator's explicit setting, and against a TLS-only listener the
+	// plaintext connect can never succeed.
+	scheme := "tcp"
+	if s.useSSL {
+		scheme = "ssl"
+	}
 	opts := mqtt.NewClientOptions().
-		AddBroker(fmt.Sprintf("tcp://%s:%d", s.host, s.port)).
+		AddBroker(fmt.Sprintf("%s://%s:%d", scheme, s.host, s.port)).
 		SetClientID("mowgli-gui-schedules").
 		SetAutoReconnect(true).
-		SetConnectRetry(true)
+		SetConnectRetry(true).
+		SetOnConnectHandler(c.onConnected)
+	if s.useSSL {
+		// System CA store (nil RootCAs), same trust model as the C++ bridge.
+		opts.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12})
+	}
 	if s.username != "" {
 		opts.SetUsername(s.username)
 		opts.SetPassword(s.password)
 	}
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		return nil, token.Error()
+	c.client = mqtt.NewClient(opts)
+	c.client.Connect()
+	return c, nil
+}
+
+// onConnected re-establishes everything that is scoped to a broker session.
+func (c *pahoMqttClient) onConnected(_ mqtt.Client) {
+	c.mu.Lock()
+	subs := make(map[string]func(payload []byte, retained bool), len(c.subs))
+	for topic, handler := range c.subs {
+		subs[topic] = handler
 	}
-	return &pahoMqttClient{client: client}, nil
+	onReconnect := c.onReconnect
+	c.mu.Unlock()
+
+	for topic, handler := range subs {
+		if err := c.subscribeNow(topic, handler); err != nil {
+			logrus.Error(fmt.Errorf("schedule mqtt bridge: resubscribing to %s: %w", topic, err))
+		}
+	}
+	if onReconnect != nil {
+		// Off the paho callback goroutine: onReconnect publishes, and paho
+		// documents that a callback must not call back into the package.
+		go onReconnect()
+	}
+}
+
+func (c *pahoMqttClient) SetOnReconnect(f func()) {
+	c.mu.Lock()
+	c.onReconnect = f
+	c.mu.Unlock()
 }
 
 func (c *pahoMqttClient) Publish(topic string, payload []byte, retained bool) error {
 	token := c.client.Publish(topic, 1, retained, payload)
-	token.Wait()
+	if !token.WaitTimeout(brokerOpTimeout) {
+		return fmt.Errorf("publish to %s timed out after %s", topic, brokerOpTimeout)
+	}
 	return token.Error()
 }
 
-func (c *pahoMqttClient) Subscribe(topic string, handler func(payload []byte)) error {
+// Subscribe records the handler and establishes it now when the client is
+// already connected; otherwise onConnected does it. A not-yet-connected
+// client is the normal case at startup and is not an error.
+func (c *pahoMqttClient) Subscribe(topic string, handler func(payload []byte, retained bool)) error {
+	c.mu.Lock()
+	c.subs[topic] = handler
+	c.mu.Unlock()
+	if !c.client.IsConnected() {
+		return nil
+	}
+	return c.subscribeNow(topic, handler)
+}
+
+func (c *pahoMqttClient) subscribeNow(topic string, handler func(payload []byte, retained bool)) error {
 	token := c.client.Subscribe(topic, 1, func(_ mqtt.Client, msg mqtt.Message) {
-		handler(msg.Payload())
+		// paho routes messages on a goroutine that must not block, so the
+		// handler (which publishes) runs off it.
+		go handler(msg.Payload(), msg.Retained())
 	})
-	token.Wait()
+	if !token.WaitTimeout(brokerOpTimeout) {
+		return fmt.Errorf("subscribe to %s timed out after %s", topic, brokerOpTimeout)
+	}
 	return token.Error()
 }
 
