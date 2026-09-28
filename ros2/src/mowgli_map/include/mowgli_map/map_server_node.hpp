@@ -56,6 +56,7 @@
 #include <mowgli_interfaces/msg/lidar_ignore_corridor_array.hpp>
 #include <mowgli_interfaces/msg/map_obstacle_info.hpp>
 #include <mowgli_interfaces/msg/obstacle_array.hpp>
+#include <mowgli_interfaces/msg/recorded_area_polygon_array.hpp>
 #include <mowgli_interfaces/msg/status.hpp>
 #include <mowgli_interfaces/srv/add_lidar_ignore_corridor.hpp>
 #include <mowgli_interfaces/srv/add_mowing_area.hpp>
@@ -515,6 +516,15 @@ private:
   /// (transient_local) — called after every add/clear/load, so a late
   /// subscriber always has the current list.
   void publish_lidar_ignore_corridors();
+
+  /// Republish every recorded (working + navigation) area's outer boundary
+  /// on recorded_area_polygons_pub_ (transient_local) — called after every
+  /// area-list change (add/clear/load/datum migration), same shape as
+  /// publish_lidar_ignore_corridors. Consumed by costmap_scan_filter_node's
+  /// LiDAR-ignore-corridor area-side restriction; defined in
+  /// area_manager.cpp (unlike the corridor publish above, this one needs
+  /// direct access to areas_, which area_manager.cpp already owns).
+  void publish_recorded_area_polygons();
 
   /// ~/capture_dock_antenna: average the RAW antenna position while seated on
   /// the dock (charging + RTK gates) and hold it, unpersisted, for the
@@ -1217,6 +1227,12 @@ private:
   /// round-trip needed" shape as keepout_mask_pub_.
   rclcpp::Publisher<mowgli_interfaces::msg::LidarIgnoreCorridorArray>::SharedPtr
       lidar_ignore_corridors_pub_;
+  /// Full current set of recorded (working + navigation) area outer
+  /// boundaries, transient_local — costmap_scan_filter_node's input for the
+  /// LiDAR-ignore-corridor area-side restriction. Same "always latest, no
+  /// service round-trip" shape as lidar_ignore_corridors_pub_ above.
+  rclcpp::Publisher<mowgli_interfaces::msg::RecordedAreaPolygonArray>::SharedPtr
+      recorded_area_polygons_pub_;
 
   // ── Subscribers ───────────────────────────────────────────────────────────
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_sub_;

@@ -467,6 +467,7 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   res->success = true;
   res->message = "All map layers and areas cleared.";
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
+  publish_recorded_area_polygons();
 }
 
 void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
@@ -589,6 +590,25 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   }
 
   res->success = true;
+  publish_recorded_area_polygons();
+}
+
+void MapServerNode::publish_recorded_area_polygons()
+{
+  mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
+  msg.header.stamp = get_clock()->now();
+  msg.header.frame_id = "map";
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    msg.areas.reserve(areas_.size());
+    for (const auto& area : areas_)
+    {
+      mowgli_interfaces::msg::RecordedAreaPolygon entry;
+      entry.area = area.polygon;
+      msg.areas.push_back(std::move(entry));
+    }
+  }
+  recorded_area_polygons_pub_->publish(msg);
 }
 
 void MapServerNode::on_get_mowing_area(
@@ -2113,6 +2133,7 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // — a redundant publish is a no-op for subscribers); unconditional so a
   // load with no migration still announces the loaded corridor list.
   publish_lidar_ignore_corridors();
+  publish_recorded_area_polygons();
 }
 
 void MapServerNode::migrate_areas_datum(double file_datum_lat,
@@ -2252,6 +2273,7 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
   }
 
   publish_lidar_ignore_corridors();
+  publish_recorded_area_polygons();
 
   RCLCPP_WARN(get_logger(),
               "Datum changed (%.9f, %.9f) → (%.9f, %.9f): re-projected %zu area(s), "

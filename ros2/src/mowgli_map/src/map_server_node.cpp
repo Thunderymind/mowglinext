@@ -261,6 +261,10 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   lidar_ignore_corridors_pub_ = create_publisher<mowgli_interfaces::msg::LidarIgnoreCorridorArray>(
       "/mowgli/lidar_ignore_corridors", transient_qos);
 
+  recorded_area_polygons_pub_ =
+      create_publisher<mowgli_interfaces::msg::RecordedAreaPolygonArray>(
+          "/mowgli/recorded_area_polygons", transient_qos);
+
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/map",
