@@ -270,8 +270,10 @@ namespace
 // by every test that isn't specifically exercising the area-side
 // restriction, so it keeps testing what it says it tests (distance, pose,
 // extrinsics) without also having to reason about area geometry.
-const std::vector<mowgli_localization::Point2DForTest> kEverywhereArea{
-    {-100.0, -100.0}, {100.0, -100.0}, {100.0, 100.0}, {-100.0, 100.0}};
+const std::vector<mowgli_localization::Point2DForTest> kEverywhereArea{{-100.0, -100.0},
+                                                                       {100.0, -100.0},
+                                                                       {100.0, 100.0},
+                                                                       {-100.0, 100.0}};
 }  // namespace
 
 namespace
@@ -631,8 +633,10 @@ TEST(CostmapScanFilterCorridor, WidthMIsHonouredInFullOnTheAreaSideNotHalved)
   mowgli_localization::CorridorForTest corridor{{mowgli_localization::Point2DForTest{-5.0, 0.0},
                                                  mowgli_localization::Point2DForTest{5.0, 0.0}},
                                                 1.0};
-  const std::vector<mowgli_localization::Point2DForTest> lawn_side{
-      {-5.0, 0.0}, {5.0, 0.0}, {5.0, 5.0}, {-5.0, 5.0}};
+  const std::vector<mowgli_localization::Point2DForTest> lawn_side{{-5.0, 0.0},
+                                                                   {5.0, 0.0},
+                                                                   {5.0, 5.0},
+                                                                   {-5.0, 5.0}};
 
   sensor_msgs::msg::LaserScan on_lawn_side;
   on_lawn_side.angle_min = static_cast<float>(M_PI / 2.0);
@@ -738,9 +742,11 @@ TEST(CostmapScanFilterCorridor, PointInPolygonHandlesAConcaveRing)
 TEST(CostmapScanFilterCorridor, PointInAnyAreaChecksEveryRingAndRejectsDegenerateOnes)
 {
   const std::vector<mowgli_localization::Point2DForTest> too_few_points{{0.0, 0.0}, {1.0, 0.0}};
-  const std::vector<mowgli_localization::Point2DForTest> square{
-      {10.0, 10.0}, {11.0, 10.0}, {11.0, 11.0}, {10.0, 11.0}};
-  EXPECT_TRUE(mowgli_localization::point_in_any_area_for_test(
-      10.5, 10.5, {too_few_points, square}));
+  const std::vector<mowgli_localization::Point2DForTest> square{{10.0, 10.0},
+                                                                {11.0, 10.0},
+                                                                {11.0, 11.0},
+                                                                {10.0, 11.0}};
+  EXPECT_TRUE(
+      mowgli_localization::point_in_any_area_for_test(10.5, 10.5, {too_few_points, square}));
   EXPECT_FALSE(mowgli_localization::point_in_any_area_for_test(0.0, 0.0, {too_few_points, square}));
 }
