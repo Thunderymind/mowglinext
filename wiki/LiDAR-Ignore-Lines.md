@@ -4,7 +4,7 @@ Some gardens have a **hedge, a row of ornamental grasses or a similar soft plant
 
 A **LiDAR ignore line** tells the mower: *along this line, do not treat what the LiDAR sees as an obstacle.* Everywhere else the LiDAR keeps working normally.
 
-> **Safety trade-off — read this first.** Inside an ignore line the LiDAR returns are dropped for **both** the obstacle costmap (what FTC and Nav2 use to steer around things) **and** `collision_monitor` (the near-field safety stop). Nothing in software will stop the mower for an obstacle inside the line. The accuracy of the line and its width are the only thing standing between the mower and whatever is really there. Only draw a line where you know the only thing inside it is the plant edge.
+> **Safety trade-off — read this first.** Inside an ignore line's distance, **on the side that overlaps a mowing or navigation area**, the LiDAR returns are dropped for **both** the obstacle costmap (what FTC and Nav2 use to steer around things) **and** `collision_monitor` (the near-field safety stop). Nothing in software will stop the mower for an obstacle there. The accuracy of the line and its distance are the only thing standing between the mower and whatever is really there. Only draw a line where you know the only thing within that distance is the plant edge. (The far side of the line — outside every recorded area — is never affected; the mower is never physically there anyway.)
 
 ## When to use it
 
@@ -20,7 +20,7 @@ Do **not** use it for a real obstacle you want to mow around (a tree, a pot, a f
 
 1. Open the **Map** page and switch to **edit mode**. The ignore-line panel is read-only outside edit mode.
 2. In the **LiDAR ignore lines** panel, press **Draw ignore line** and click points on the map along the plant edge. Finish with **Finish line** (Escape cancels).
-3. Set the **width** in the panel (in cm). This is the *total* width, half on each side of the line.
+3. Set the **distance** in the panel (in cm). This is how close the mower can get to the line, measured on the side that overlaps a recorded (mowing or navigation) area — the far side of the line (e.g. into the hedge itself) is never affected, since the mower is never physically there.
 4. To reshape a line, select it on the map and double-click it. Then, like an area: drag a point to move it, drag the small midpoint of a segment to add a point (this gives you gentle bends), select a point and press Delete to remove it. Changes are saved as soon as you finish the edit.
 5. **Make curved** rounds the selected line through its points, **Simplify** thins it out again.
 
@@ -38,12 +38,12 @@ The line only helps **where it is**. The mower does not need the line at the spo
 - At a corner, put an extra point on the corner itself so the line follows the bend instead of cutting across it.
 - Corners are where it matters most: the mower body overhangs the recorded line most in a turn (roughly half a metre in front of the axle), so a corner reads as blocked long before the mower reaches it.
 
-### 2. Make the width wider rather than narrower
+### 2. Make the distance wider rather than narrower
 
-The default of 20 cm total only removes LiDAR returns within 10 cm of the line. The foliage of a hedge or grass clump reaches much further than that: in our garden the avoidance offsets were 0.5-0.6 m. A 40 cm line helped along a straight stretch but not at a corner.
+The default is 20 cm, and — since a September 2026 change — that is the *full* distance on the area side, not a 20 cm band split in half. Even so, the foliage of a hedge or grass clump often reaches further than that: in our garden the avoidance offsets were 0.5-0.6 m. A 40 cm line helped along a straight stretch but not at a corner.
 
-- Start at **80-100 cm total** (the maximum is 100 cm). If the mower still avoids the plant edge, the line is either too narrow or does not cover that spot.
-- A wider band only affects what is *near the line*; it does not blind the LiDAR elsewhere.
+- Start at **80-100 cm** (the maximum is 100 cm). If the mower still avoids the plant edge, the line is either too narrow or does not cover that spot.
+- A wider distance only affects what is *near the line, on the area side*; it does not blind the LiDAR elsewhere, and it never affects the far side of the line at all.
 
 ### 3. The line does not clean up what was already seen
 
@@ -58,16 +58,19 @@ The map, the recorded boundary and the mower position are RTK-accurate. If the m
 While the mower has a fresh position, `costmap_scan_filter` logs every 5 seconds:
 
 ```
-corridor filter: robot (1.12, -13.26) is 0.42 m from the nearest line, 11 beam(s) suppressed this scan
+corridor filter: robot (1.12, -13.26) is 0.42 m from the nearest line, 11 beam(s) suppressed this scan (3 more were within reach but outside every recorded area)
 ```
 
 - **Distance to the nearest line is large (metres)** at the spot where it misbehaves → the line does not cover that spot. Extend it.
-- **Distance is small but `0 beam(s) suppressed`** → the line is on the wrong side or too narrow for where the plant edge actually is.
+- **Distance is small but `0 beam(s) suppressed`** → check the trailing `(N more were within reach but outside every recorded area)` count first:
+  - **N is large** → the line is close enough, but the beams that matter are landing *outside every recorded area* — usually because the line (or the area boundary itself) doesn't actually run where you think, or the foliage overhangs INTO the area while the line was drawn along the hedge's own base, past the area edge. Check where the recorded area boundary actually is relative to the line.
+  - **N is also 0** → the line is on the wrong side or too narrow for where the plant edge actually is.
 - **Beams are suppressed and the mower still avoids** → widen the line, and check the `FTCController: lattice profile ... peak offset` lines: if the offsets disappear along the line, it works.
 - `corridor filter idle: last fused pose ... old` → the position was stale, so the filter deliberately passed everything through (fail-safe).
 
 ## Technical notes
 
-- Implemented in `costmap_scan_filter_node` (`mowgli_localization`) as a third filter stage after the dock blank and before the collision-scan publish. It projects every beam into the map frame with the fused pose (`/odometry/filtered_map`) and the LiDAR mount offset, and sets ranges within `width/2` of any line to +inf.
+- Implemented in `costmap_scan_filter_node` (`mowgli_localization`) as a third filter stage after the dock blank and before the collision-scan publish. It projects every beam into the map frame with the fused pose (`/odometry/filtered_map`) and the LiDAR mount offset, and sets a range to +inf when the projected point is within `width_m` of a line **and** inside a recorded (working or navigation) area — see `/mowgli/recorded_area_polygons`, republished by `map_server_node` on every area-list change. `width_m` is honoured in full (not halved): in practice it only ever matters on the side of the line that overlaps a recorded area, since the mower is never physically on the other side.
 - Lines are `mowgli_interfaces/LidarIgnoreCorridor` (polyline + `width_m`), managed by `map_server_node` (`~/add_lidar_ignore_corridor`, `~/get_lidar_ignore_corridors`, `~/clear_lidar_ignore_corridors`) and published transient_local on `/mowgli/lidar_ignore_corridors`. `width_m` is clamped server-side to 0.05-1.0 m.
-- With no lines drawn the filter is a no-op.
+- With no lines drawn, or no recorded area yet, the filter is a no-op.
+- The map's Map page also draws the actual ignored band as a translucent fill next to the thin line (in both view and edit mode), so it's visible at a glance how far a line's distance reaches — compare it against the satellite imagery to see whether it actually covers the plant edge.
