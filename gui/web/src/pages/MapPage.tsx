@@ -1726,8 +1726,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 onCancelDraw={() => setCorridorDraw(null)}
                                 onChangeWidth={(index, widthM) => void handleCorridorChange(
                                     lidarCorridors.corridors.map((c, i) => i === index ? {...c, width_m: widthM} : c))}
-                                onDelete={(index) => void handleCorridorChange(
-                                    lidarCorridors.corridors.filter((_, i) => i !== index))}
+                                onSelect={(index) => {
+                                    const c = lidarCorridors.corridors[index];
+                                    if (c) handleAreaSelect(corridorDrawId(c));
+                                }}
                                 selectedIndex={selectedCorridorIndex >= 0 ? selectedCorridorIndex : null}
                                 onSmooth={() => handleReshapeSelectedCorridor((pts) => smoothPolyline(pts))}
                                 onSimplify={() => handleReshapeSelectedCorridor((pts) => simplifyPolyline(pts))}
