@@ -171,19 +171,6 @@ describe("FlashBoardComponent model/default integration", () => {
             expect(selectedLabel(0)).toBe("Mowgli - Biltema RM1000");
             expect(selectedLabel(1)).toBe("YardForce 900 ECO");
         });
-
-        fireEvent.click(screen.getByRole("button", {name: /flash firmware/i}));
-        fireEvent.click(await screen.findByRole("button", {name: /^Flash$/}));
-        await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
-        const request = vi.mocked(fetchEventSource).mock.calls[0]?.[1] as {body?: string};
-        const payload = JSON.parse(request.body ?? "{}") as {
-            boardType?: string;
-            panelType?: string;
-            firmwareTarget?: string;
-        };
-        expect(payload.boardType).toBe("BOARD_YARDFORCE500B");
-        expect(payload.panelType).toBe("PANEL_TYPE_YARDFORCE_900_ECO");
-        expect(payload.firmwareTarget).toBe("BiltemaRM1000");
     });
 
     it("restores a saved config when settings lookup fails", async () => {

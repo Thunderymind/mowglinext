@@ -137,10 +137,17 @@ describe("firmware model defaults", () => {
     });
 
     it("migrates targetless legacy fields to RM1000 defaults while retaining modern manual overrides", () => {
-        expect(manualOverridesFromProvenance({
+        const legacy = {
             boardType: "BOARD_YARDFORCE500B",
             panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
-        }, "BiltemaRM1000")).toEqual({boardType: false, panelType: false, firmwareTarget: false});
+        };
+        const legacyOverrides = manualOverridesFromProvenance(legacy, "BiltemaRM1000");
+        expect(legacyOverrides).toEqual({boardType: false, panelType: false, firmwareTarget: false});
+        expect(applyFirmwareModelDefaults("BiltemaRM1000", legacy, legacyOverrides)).toEqual({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+            firmwareTarget: "BiltemaRM1000",
+        });
 
         expect(manualOverridesFromProvenance({
             boardType: "BOARD_LUV1000RI",
