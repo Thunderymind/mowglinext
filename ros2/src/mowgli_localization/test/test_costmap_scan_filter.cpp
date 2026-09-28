@@ -135,7 +135,9 @@ struct Pose2DForTest
 struct CorridorForTest
 {
   std::vector<Point2DForTest> polyline;
-  double half_width_m{0.0};
+  /// Full width_m the operator entered, not halved — see the production
+  /// Corridor::reach_m doc comment.
+  double reach_m{0.0};
 };
 
 struct LidarExtrinsicsForTest
@@ -143,6 +145,12 @@ struct LidarExtrinsicsForTest
   double x_m{0.0};
   double y_m{0.0};
   double mount_yaw{0.0};
+};
+
+struct CorridorFilterStatsForTest
+{
+  std::size_t suppressed{0};
+  std::size_t distance_matched_outside_area{0};
 };
 
 double distance_point_to_segment_for_test(double px,
@@ -167,19 +175,52 @@ bool point_within_corridor_for_test(double px, double py, const CorridorForTest&
   for (std::size_t i = 0; i + 1 < corridor.polyline.size(); ++i)
   {
     if (distance_point_to_segment_for_test(
-            px, py, corridor.polyline[i], corridor.polyline[i + 1]) <= corridor.half_width_m)
+            px, py, corridor.polyline[i], corridor.polyline[i + 1]) <= corridor.reach_m)
       return true;
   }
   return false;
 }
 
-void apply_corridor_ignore_filter_for_test(sensor_msgs::msg::LaserScan& io,
-                                           const std::vector<CorridorForTest>& corridors,
-                                           const std::optional<Pose2DForTest>& robot_pose_map,
-                                           const LidarExtrinsicsForTest& extrinsics)
+bool point_in_polygon_for_test(double px, double py, const std::vector<Point2DForTest>& ring)
 {
+  if (ring.size() < 3)
+    return false;
+  bool inside = false;
+  for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
+  {
+    const Point2DForTest& pi = ring[i];
+    const Point2DForTest& pj = ring[j];
+    if ((pi.y > py) == (pj.y > py))
+      continue;
+    const double x_at_py = pi.x + (py - pi.y) * (pj.x - pi.x) / (pj.y - pi.y);
+    if (px < x_at_py)
+      inside = !inside;
+  }
+  return inside;
+}
+
+bool point_in_any_area_for_test(double px,
+                                double py,
+                                const std::vector<std::vector<Point2DForTest>>& areas)
+{
+  for (const auto& ring : areas)
+  {
+    if (point_in_polygon_for_test(px, py, ring))
+      return true;
+  }
+  return false;
+}
+
+CorridorFilterStatsForTest apply_corridor_ignore_filter_for_test(
+    sensor_msgs::msg::LaserScan& io,
+    const std::vector<CorridorForTest>& corridors,
+    const std::vector<std::vector<Point2DForTest>>& recorded_areas,
+    const std::optional<Pose2DForTest>& robot_pose_map,
+    const LidarExtrinsicsForTest& extrinsics)
+{
+  CorridorFilterStatsForTest stats;
   if (corridors.empty() || !robot_pose_map.has_value())
-    return;
+    return stats;
   const Pose2DForTest& pose = *robot_pose_map;
   const float inf = std::numeric_limits<float>::infinity();
   const double a0 = io.angle_min;
@@ -198,17 +239,40 @@ void apply_corridor_ignore_filter_for_test(sensor_msgs::msg::LaserScan& io,
     const double psi = alpha + extrinsics.mount_yaw + pose.yaw;
     const double px = lidar_map_x + static_cast<double>(r) * std::cos(psi);
     const double py = lidar_map_y + static_cast<double>(r) * std::sin(psi);
+    bool near_any_corridor = false;
     for (const auto& corridor : corridors)
     {
       if (point_within_corridor_for_test(px, py, corridor))
       {
-        r = inf;
+        near_any_corridor = true;
         break;
       }
     }
+    if (!near_any_corridor)
+      continue;
+    if (point_in_any_area_for_test(px, py, recorded_areas))
+    {
+      r = inf;
+      ++stats.suppressed;
+    }
+    else
+    {
+      ++stats.distance_matched_outside_area;
+    }
   }
+  return stats;
 }
 }  // namespace mowgli_localization
+
+namespace
+{
+// A big square covering everywhere these tests place a beam endpoint — used
+// by every test that isn't specifically exercising the area-side
+// restriction, so it keeps testing what it says it tests (distance, pose,
+// extrinsics) without also having to reason about area geometry.
+const std::vector<mowgli_localization::Point2DForTest> kEverywhereArea{
+    {-100.0, -100.0}, {100.0, -100.0}, {100.0, 100.0}, {-100.0, 100.0}};
+}  // namespace
 
 namespace
 {
@@ -500,7 +564,7 @@ TEST(CostmapScanFilterCorridor, NoOpWithNoCorridors)
   std::optional<mowgli_localization::Pose2DForTest> pose =
       mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
   mowgli_localization::apply_corridor_ignore_filter_for_test(
-      in, {}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+      in, {}, {kEverywhereArea}, pose, mowgli_localization::LidarExtrinsicsForTest{});
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
 }
 
@@ -514,31 +578,92 @@ TEST(CostmapScanFilterCorridor, NoOpWithStalePose)
   auto in = make_forward_only_scan(2.0f);
   std::optional<mowgli_localization::Pose2DForTest> pose;  // empty = stale
   mowgli_localization::apply_corridor_ignore_filter_for_test(
-      in, {corridor}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+      in, {corridor}, {kEverywhereArea}, pose, mowgli_localization::LidarExtrinsicsForTest{});
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
 }
 
-TEST(CostmapScanFilterCorridor, SuppressesAReturnInsideTheCorridor)
+TEST(CostmapScanFilterCorridor, SuppressesAReturnInsideTheCorridorWhenOnTheAreaSide)
 {
   // Robot at map origin, facing +X, LIDAR at base_link (no offset). A
-  // corridor running along Y=0..? crossing X=2 with width 1.0 m (half 0.5)
-  // must swallow a forward return landing at (2, 0).
+  // corridor running along Y=0..? crossing X=2 with reach 0.5 m must swallow
+  // a forward return landing at (2, 0) — but only because kEverywhereArea
+  // also covers that point; see the next two tests for the area-side split.
   mowgli_localization::CorridorForTest corridor{{mowgli_localization::Point2DForTest{2.0, -5.0},
                                                  mowgli_localization::Point2DForTest{2.0, 5.0}},
                                                 0.5};
   auto in = make_forward_only_scan(2.0f);  // lands at (2, 0) in map frame
   std::optional<mowgli_localization::Pose2DForTest> pose =
       mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
-  mowgli_localization::apply_corridor_ignore_filter_for_test(
-      in, {corridor}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+  const auto stats = mowgli_localization::apply_corridor_ignore_filter_for_test(
+      in, {corridor}, {kEverywhereArea}, pose, mowgli_localization::LidarExtrinsicsForTest{});
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
+  EXPECT_EQ(stats.suppressed, 1u);
+  EXPECT_EQ(stats.distance_matched_outside_area, 0u);
+}
+
+TEST(CostmapScanFilterCorridor, WithinReachButOutsideEveryRecordedAreaIsNotSuppressed)
+{
+  // Same corridor/return as above, but no recorded area at all — this is
+  // the whole point of the area-side restriction: a beam that lands beyond
+  // every recorded area (e.g. into the hedge itself) is never suppressed,
+  // because the robot is never physically there either.
+  mowgli_localization::CorridorForTest corridor{{mowgli_localization::Point2DForTest{2.0, -5.0},
+                                                 mowgli_localization::Point2DForTest{2.0, 5.0}},
+                                                0.5};
+  auto in = make_forward_only_scan(2.0f);
+  std::optional<mowgli_localization::Pose2DForTest> pose =
+      mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
+  const auto stats = mowgli_localization::apply_corridor_ignore_filter_for_test(
+      in, {corridor}, {}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+  EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
+  EXPECT_EQ(stats.suppressed, 0u);
+  EXPECT_EQ(stats.distance_matched_outside_area, 1u);
+}
+
+TEST(CostmapScanFilterCorridor, WidthMIsHonouredInFullOnTheAreaSideNotHalved)
+{
+  // A corridor of reach 1.0 m (what the operator enters as width_m,
+  // unhalved — see Corridor::reach_m) along X=0, with a recorded area
+  // covering only Y >= 0 (the "lawn" side). A beam landing at (0, 0.9) is
+  // within the full 1.0 m reach and on the area side -> suppressed. The
+  // mirror-image point (0, -0.9) is within the same 1.0 m reach but on the
+  // NON-area side -> must stay untouched.
+  mowgli_localization::CorridorForTest corridor{{mowgli_localization::Point2DForTest{-5.0, 0.0},
+                                                 mowgli_localization::Point2DForTest{5.0, 0.0}},
+                                                1.0};
+  const std::vector<mowgli_localization::Point2DForTest> lawn_side{
+      {-5.0, 0.0}, {5.0, 0.0}, {5.0, 5.0}, {-5.0, 5.0}};
+
+  sensor_msgs::msg::LaserScan on_lawn_side;
+  on_lawn_side.angle_min = static_cast<float>(M_PI / 2.0);
+  on_lawn_side.angle_max = on_lawn_side.angle_min;
+  on_lawn_side.angle_increment = 0.0f;
+  on_lawn_side.range_min = 0.05f;
+  on_lawn_side.range_max = 12.0f;
+  on_lawn_side.ranges = {0.9f};  // lands at (0, 0.9)
+  std::optional<mowgli_localization::Pose2DForTest> pose =
+      mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
+  mowgli_localization::apply_corridor_ignore_filter_for_test(
+      on_lawn_side, {corridor}, {lawn_side}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+  EXPECT_FALSE(std::isfinite(on_lawn_side.ranges[0]));
+
+  sensor_msgs::msg::LaserScan into_the_hedge;
+  into_the_hedge.angle_min = static_cast<float>(-M_PI / 2.0);
+  into_the_hedge.angle_max = into_the_hedge.angle_min;
+  into_the_hedge.angle_increment = 0.0f;
+  into_the_hedge.range_min = 0.05f;
+  into_the_hedge.range_max = 12.0f;
+  into_the_hedge.ranges = {0.9f};  // lands at (0, -0.9)
+  mowgli_localization::apply_corridor_ignore_filter_for_test(
+      into_the_hedge, {corridor}, {lawn_side}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+  EXPECT_FLOAT_EQ(into_the_hedge.ranges[0], 0.9f);
 }
 
 TEST(CostmapScanFilterCorridor, KeepsAReturnOutsideTheCorridorWidth)
 {
-  // Same corridor, but the return lands 0.6 m past the half-width (0.5) of
+  // Same corridor, but the return lands 0.6 m past the reach (0.5) of
   // a corridor running along X=0..? at Y=0 — the perpendicular beam at
-  // (0, 1.1) is 1.1 m from the line, outside width/2.
+  // (0, 1.1) is 1.1 m from the line, outside the reach.
   mowgli_localization::CorridorForTest corridor{{mowgli_localization::Point2DForTest{-5.0, 0.0},
                                                  mowgli_localization::Point2DForTest{5.0, 0.0}},
                                                 0.5};
@@ -552,7 +677,7 @@ TEST(CostmapScanFilterCorridor, KeepsAReturnOutsideTheCorridorWidth)
   std::optional<mowgli_localization::Pose2DForTest> pose =
       mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
   mowgli_localization::apply_corridor_ignore_filter_for_test(
-      in, {corridor}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+      in, {corridor}, {kEverywhereArea}, pose, mowgli_localization::LidarExtrinsicsForTest{});
   EXPECT_FLOAT_EQ(in.ranges[0], 1.1f);
 }
 
@@ -569,7 +694,8 @@ TEST(CostmapScanFilterCorridor, RobotPoseAndLidarOffsetAreBothApplied)
   std::optional<mowgli_localization::Pose2DForTest> pose =
       mowgli_localization::Pose2DForTest{5.0, 0.0, M_PI / 2.0};
   mowgli_localization::LidarExtrinsicsForTest extrinsics{0.3, 0.0, 0.0};
-  mowgli_localization::apply_corridor_ignore_filter_for_test(in, {corridor}, pose, extrinsics);
+  mowgli_localization::apply_corridor_ignore_filter_for_test(
+      in, {corridor}, {kEverywhereArea}, pose, extrinsics);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
 }
 
@@ -580,7 +706,7 @@ TEST(CostmapScanFilterCorridor, NonFiniteRangesUntouchedByCorridorFilter)
   mowgli_localization::CorridorForTest corridor{
       {mowgli_localization::Point2DForTest{-5.0, 0.0},
        mowgli_localization::Point2DForTest{5.0, 0.0}},
-      5.0};  // huge width — would swallow everything if it touched non-finite
+      5.0};  // huge reach — would swallow everything if it touched non-finite
   sensor_msgs::msg::LaserScan in;
   in.angle_min = 0.0f;
   in.angle_max = static_cast<float>(M_PI / 2.0);
@@ -591,7 +717,30 @@ TEST(CostmapScanFilterCorridor, NonFiniteRangesUntouchedByCorridorFilter)
   std::optional<mowgli_localization::Pose2DForTest> pose =
       mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
   mowgli_localization::apply_corridor_ignore_filter_for_test(
-      in, {corridor}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+      in, {corridor}, {kEverywhereArea}, pose, mowgli_localization::LidarExtrinsicsForTest{});
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
   EXPECT_TRUE(std::isnan(in.ranges[1]));
+}
+
+TEST(CostmapScanFilterCorridor, PointInPolygonHandlesAConcaveRing)
+{
+  // An L-shaped (concave) area: (0,0)-(4,0)-(4,2)-(2,2)-(2,4)-(0,4). A point
+  // in the notch (3, 3) must read as OUTSIDE despite being within the
+  // bounding box, and a point in either arm of the L must read as inside.
+  const std::vector<mowgli_localization::Point2DForTest> l_shape{
+      {0.0, 0.0}, {4.0, 0.0}, {4.0, 2.0}, {2.0, 2.0}, {2.0, 4.0}, {0.0, 4.0}};
+  EXPECT_FALSE(mowgli_localization::point_in_polygon_for_test(3.0, 3.0, l_shape));
+  EXPECT_TRUE(mowgli_localization::point_in_polygon_for_test(3.0, 1.0, l_shape));
+  EXPECT_TRUE(mowgli_localization::point_in_polygon_for_test(1.0, 3.0, l_shape));
+  EXPECT_FALSE(mowgli_localization::point_in_polygon_for_test(-1.0, -1.0, l_shape));
+}
+
+TEST(CostmapScanFilterCorridor, PointInAnyAreaChecksEveryRingAndRejectsDegenerateOnes)
+{
+  const std::vector<mowgli_localization::Point2DForTest> too_few_points{{0.0, 0.0}, {1.0, 0.0}};
+  const std::vector<mowgli_localization::Point2DForTest> square{
+      {10.0, 10.0}, {11.0, 10.0}, {11.0, 11.0}, {10.0, 11.0}};
+  EXPECT_TRUE(mowgli_localization::point_in_any_area_for_test(
+      10.5, 10.5, {too_few_points, square}));
+  EXPECT_FALSE(mowgli_localization::point_in_any_area_for_test(0.0, 0.0, {too_few_points, square}));
 }
