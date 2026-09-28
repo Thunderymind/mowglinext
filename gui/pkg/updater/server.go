@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// absentMeansTrue reads a tri-state request flag whose omission comes from a
+// client that predates it. See the firmware flags on /v1/plan and /v1/apply.
+func absentMeansTrue(flag *bool) bool {
+	return flag == nil || *flag
+}
 func Client(socket string) *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
@@ -61,12 +66,16 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		w.WriteHeader(202)
 	})
 	mux.HandleFunc("POST /v1/plan", func(w http.ResponseWriter, r *http.Request) {
+		// Both firmware flags are tri-state: a GUI that knows about them sends
+		// an explicit value and does its own gating; a GUI that predates them
+		// sends nothing and MUST NOT be locked out — it is exactly the GUI that
+		// can only get the matching firmware from the image it is installing.
 		var req struct {
 			Deployment                  string            `json:"deployment"`
 			Pinned                      bool              `json:"pinned"`
 			GUI                         string            `json:"gui_deployment"`
 			Components                  map[string]string `json:"component_deployments"`
-			AllowFirmwareProtocolChange bool              `json:"allow_firmware_protocol_change"`
+			AllowFirmwareProtocolChange *bool             `json:"allow_firmware_protocol_change"`
 		}
 		if decode(w, r, &req) {
 			if req.Components == nil {
@@ -79,7 +88,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 				}
 				req.Components["gui"] = req.GUI
 			}
-			p, e := m.MakeServicePlan(r.Context(), req.Deployment, req.Pinned, req.Components, PlanOptions{AllowFirmwareProtocolChange: req.AllowFirmwareProtocolChange})
+			p, e := m.MakeServicePlan(r.Context(), req.Deployment, req.Pinned, req.Components, PlanOptions{AllowFirmwareProtocolChange: absentMeansTrue(req.AllowFirmwareProtocolChange)})
 			respond(w, PublicPlan(p), e)
 		}
 	})
@@ -97,10 +106,10 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		var req struct {
 			Plan                         string `json:"plan"`
 			CustomAcknowledged           bool   `json:"custom_acknowledged"`
-			FirmwareProtocolAcknowledged bool   `json:"firmware_protocol_acknowledged"`
+			FirmwareProtocolAcknowledged *bool  `json:"firmware_protocol_acknowledged"`
 		}
 		if decode(w, r, &req) {
-			id, e := m.StartAcknowledged(req.Plan, req.CustomAcknowledged, req.FirmwareProtocolAcknowledged)
+			id, e := m.StartAcknowledged(req.Plan, req.CustomAcknowledged, absentMeansTrue(req.FirmwareProtocolAcknowledged))
 			respond(w, map[string]string{"job": id}, e)
 		}
 	})
