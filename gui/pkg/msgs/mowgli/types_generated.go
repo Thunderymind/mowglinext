@@ -245,6 +245,17 @@ type Power struct {
 	ChargerStatus             string                         `json:"charger_status"`
 }
 
+// RecordedAreaPolygon matches mowgli_interfaces/msg/RecordedAreaPolygon.
+type RecordedAreaPolygon struct {
+	Area                      geometry.Polygon               `json:"area"`
+}
+
+// RecordedAreaPolygonArray matches mowgli_interfaces/msg/RecordedAreaPolygonArray.
+type RecordedAreaPolygonArray struct {
+	Header                    geometry.Header                `json:"header"`
+	Areas                     []RecordedAreaPolygon          `json:"areas"`
+}
+
 // Status matches mowgli_interfaces/msg/Status.
 type Status struct {
 	Stamp                     geometry.Stamp                 `json:"stamp"`
