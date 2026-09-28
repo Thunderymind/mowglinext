@@ -133,31 +133,52 @@ export const buildCorridorBandPolygon = (points: XY[], widthM: number): XY[][] =
     const left: XY[] = [];
     const right: XY[] = [];
     for (let i = 0; i < n; i++) {
-        const prev = points[Math.max(i - 1, 0)];
         const cur = points[i];
-        const next = points[Math.min(i + 1, n - 1)];
-        const nIn = leftNormal(cur.x - prev.x, cur.y - prev.y);
-        const nOut = leftNormal(next.x - cur.x, next.y - cur.y);
-        // Endpoints (or a zero-length neighbour segment) only have one real
-        // normal — the other came back {0,0} and drops out of the sum.
-        let bx = nIn.x + nOut.x, by = nIn.y + nOut.y;
-        const bLen = Math.hypot(bx, by);
-        if (bLen < 1e-9) {
-            // Both neighbours degenerate (an isolated duplicate point) —
-            // nothing sensible to offset; place both banks on the vertex.
-            left.push(cur);
-            right.push(cur);
-            continue;
+        // nIn/nOut come back {0,0} — "no real direction" — both at a true
+        // endpoint (no i-1 / no i+1) AND when the neighbouring point is a
+        // duplicate of `cur` (a zero-length segment); either way there is
+        // nothing to mitre against on that side.
+        const nIn = i > 0 ? leftNormal(cur.x - points[i - 1].x, cur.y - points[i - 1].y) : {x: 0, y: 0};
+        const nOut = i < n - 1 ? leftNormal(points[i + 1].x - cur.x, points[i + 1].y - cur.y) : {x: 0, y: 0};
+        const inLen = Math.hypot(nIn.x, nIn.y);
+        const outLen = Math.hypot(nOut.x, nOut.y);
+        let offset: XY;
+        if (inLen < 1e-9 && outLen < 1e-9) {
+            // Neither neighbour has a real direction (an isolated duplicate
+            // point) — nothing sensible to offset; collapse both banks onto
+            // the vertex itself.
+            offset = {x: 0, y: 0};
+        } else if (inLen < 1e-9 || outLen < 1e-9) {
+            // Exactly one real neighbouring direction — a true endpoint, or
+            // an interior vertex whose OTHER neighbour happens to be a
+            // duplicate point. There is no bend to mitre: offset straight
+            // along the one direction that exists (this is what a 2-point
+            // straight line hits at BOTH its vertices, and must reduce to a
+            // plain widthM-wide rectangle, not a mitred spike).
+            const single = inLen >= 1e-9 ? nIn : nOut;
+            offset = {x: single.x * halfW, y: single.y * halfW};
+        } else {
+            let bx = nIn.x + nOut.x, by = nIn.y + nOut.y;
+            const bLen = Math.hypot(bx, by);
+            if (bLen < 1e-9) {
+                // Near-180° reversal — the bisector direction is undefined;
+                // fall back to a plain perpendicular offset along nIn rather
+                // than divide by (near) zero.
+                offset = {x: nIn.x * halfW, y: nIn.y * halfW};
+            } else {
+                bx /= bLen;
+                by /= bLen;
+                // cos(half the turn angle) = dot(bisector, either normal) —
+                // the miter scale factor (1/cos) blows up as the turn
+                // approaches 180°, so clamp it (MITER_LIMIT) rather than let
+                // a hairpin spike out.
+                const cosHalfAngle = Math.max(bx * nIn.x + by * nIn.y, 1 / MITER_LIMIT);
+                const miter = halfW / cosHalfAngle;
+                offset = {x: bx * miter, y: by * miter};
+            }
         }
-        bx /= bLen;
-        by /= bLen;
-        // cos(half the turn angle) = dot(bisector, either normal) — the
-        // miter scale factor (1/cos) blows up as the turn approaches 180°,
-        // so clamp it (MITER_LIMIT) rather than let a hairpin spike out.
-        const cosHalfAngle = Math.max(bx * nIn.x + by * nIn.y, 1 / MITER_LIMIT);
-        const miter = halfW / cosHalfAngle;
-        left.push({x: cur.x + bx * miter, y: cur.y + by * miter});
-        right.push({x: cur.x - bx * miter, y: cur.y - by * miter});
+        left.push({x: cur.x + offset.x, y: cur.y + offset.y});
+        right.push({x: cur.x - offset.x, y: cur.y - offset.y});
     }
     const ring = [...left, ...right.reverse()];
     ring.push(ring[0]);
