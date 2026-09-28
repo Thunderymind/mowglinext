@@ -1059,7 +1059,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             }
         }
         return {type: "FeatureCollection", features};
-    }, [lidarCorridors.corridors, corridorDraw, datum, offsetX, offsetY]);
+    // insideRecordedArea (and transitively recordedAreaRings/features) was
+    // missing here: corridors and areas load from two independent sources
+    // (lidarCorridors polls its own endpoint; features comes from the /map
+    // WS stream) — whichever arrives first left this memo permanently
+    // cached against a stale (often empty) area list, since none of the
+    // OTHER deps necessarily change again afterwards. The band then never
+    // recovered until something unrelated (e.g. editing a corridor) forced
+    // a recompute. Field-reported 2026-09-28: no band drawn at all.
+    }, [lidarCorridors.corridors, corridorDraw, datum, offsetX, offsetY, insideRecordedArea]);
 
     const handleMapClick = useCallback((e: {lngLat: {lng: number; lat: number}}) => {
         if (corridorDraw !== null) {
