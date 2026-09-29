@@ -40,6 +40,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/u_int64.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
@@ -236,6 +237,12 @@ public:
   /// Test-only: round-trip persistence through save/load_areas_to_file.
   void save_areas_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
+
+  /// Test-only: current area-list generation (mowglinext#637 phase 2).
+  uint64_t area_list_generation_for_test() const
+  {
+    return area_list_generation_;
+  }
 
   /// Test-only: inspect the in-memory dock pose after a datum migration.
   const geometry_msgs::msg::Pose& docking_pose_for_test() const
@@ -493,6 +500,14 @@ private:
 
   void on_add_area(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
                    mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res);
+
+  /// Increment area_list_generation_ and publish it on
+  /// area_list_generation_pub_ (mowglinext#637 phase 2). Called once per
+  /// successful ~/add_area. Not called at startup: area_list_generation_
+  /// always starts at 0 (not persisted), matching the default a fresh
+  /// subscriber already assumes, so there is nothing to announce before the
+  /// first edit.
+  void bump_area_list_generation();
 
   void on_get_mowing_area(const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,
                           mowgli_interfaces::srv::GetMowingArea::Response::SharedPtr res);
@@ -1029,6 +1044,20 @@ private:
   /// never reset by ~/clear_map or ~/clear_lidar_ignore_corridors).
   uint32_t next_lidar_corridor_id_{1};
 
+  /// Bumped on every successful ~/add_area (mowglinext#637 phase 2) and
+  /// published on area_list_generation_pub_ (transient_local — a late
+  /// subscriber gets the current value immediately). NOT persisted: a fresh
+  /// boot starts at 0, which is fine — GetNextUnmowedArea's per-index
+  /// area_verified_generation map starts empty too, so nothing is trusted as
+  /// "verified at the current generation" until it has actually been probed
+  /// at least once this process lifetime. The counter exists purely so the
+  /// BT can tell, independently of its own probe cadence, whether the area
+  /// list has been rebuilt (clear_map + re-add, the GUI's edit/delete/save
+  /// flow) since it last confirmed a given index's identity — without it,
+  /// a synchronous "skip already-completed/attempted indices" fast path has
+  /// no way to know its cached flags might now describe a DIFFERENT area.
+  uint64_t area_list_generation_{0};
+
   /// Obstacle polygons: regions within the allowed areas that are off-limits
   /// (trees, flower beds, etc.). Marked as lethal in the keepout mask.
   /// Single source of truth: area YAML on disk + ~/promote_obstacle. Not
@@ -1233,6 +1262,12 @@ private:
   /// service round-trip" shape as lidar_ignore_corridors_pub_ above.
   rclcpp::Publisher<mowgli_interfaces::msg::RecordedAreaPolygonArray>::SharedPtr
       recorded_area_polygons_pub_;
+  /// Area-list generation counter (mowglinext#637 phase 2) — see
+  /// area_list_generation_'s doc comment. transient_local so a subscriber
+  /// started after the last bump (e.g. behavior_tree_node on its own
+  /// restart) still gets the current value without waiting for the next
+  /// edit.
+  rclcpp::Publisher<std_msgs::msg::UInt64>::SharedPtr area_list_generation_pub_;
 
   // ── Subscribers ───────────────────────────────────────────────────────────
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_sub_;

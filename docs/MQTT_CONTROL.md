@@ -11,6 +11,14 @@ internal REST/WebSocket API on `:4006` (unauthenticated, unversioned, an impleme
 the bundled frontend) and not the GUI's own separate embedded MQTT broker
 (`gui/pkg/providers/mqtt.go`, a different prefix/payload shape used by the web UI).
 
+**One exception to "mqtt_bridge_node publishes everything":** the `<prefix>/schedules*` topics
+(below) are published by the **GUI backend itself** (`gui/pkg/api/schedule_mqtt.go`), not
+`mqtt_bridge_node` — mowing schedules live only in the GUI's own database, with no ROS2
+representation at all, so there is nothing for a ROS2 node to relay. The GUI backend connects to
+the *same* broker, using the *same* `mqtt_enabled`/`mqtt_host`/`mqtt_port`/`mqtt_username`/
+`mqtt_password`/`mqtt_topic_prefix` settings, so from an external tool's point of view it is one
+contract on one broker — which process publishes a given topic is an implementation detail.
+
 ## Enabling it
 
 1. Set the broker connection in the GUI: **Settings → MQTT / Home Assistant**. Toggling it on
@@ -86,6 +94,9 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
 | `<prefix>/command` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/high_level_control` | — |
 | `<prefix>/start_area` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/start_in_area` | — |
+| `<prefix>/schedules` | out | yes | the GUI's schedule database (not ROS2 — see above) | on any create/update/delete |
+| `<prefix>/schedules/set` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
+| `<prefix>/schedules/delete` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
 
 ### `<prefix>/high_level_status` — the primary "is it mowing?" topic
 
@@ -405,6 +416,63 @@ unrecognised/out-of-range payload is logged and dropped, and the command is drop
 `/behavior_tree_node/start_in_area` isn't available. Poll `<prefix>/high_level_status` afterwards
 to confirm it took effect. Subject to the same index-staleness caveat as `<prefix>/areas` above —
 targeting a stale index can start the wrong area.
+
+### `<prefix>/schedules` (mowing schedules)
+
+Published by the **GUI backend**, not `mqtt_bridge_node` — see the note at the top of this document.
+Retained, republished on every create/update/delete (from MQTT *or* the GUI's own Schedules page —
+both go through the exact same validation and storage, so this is never stale relative to the GUI).
+
+```json
+{
+  "schedules": [
+    {
+      "id": "1758901234567890000",
+      "area": 0,
+      "time": "06:00",
+      "daysOfWeek": [1, 2, 3, 4, 5],
+      "enabled": true,
+      "createdAt": "2026-09-20T08:00:00Z",
+      "lastRun": "2026-09-26T06:00:03Z",
+      "lastSkipReason": "soil wet",
+      "lastSkippedAt": "2026-09-25T06:00:00Z"
+    }
+  ]
+}
+```
+
+`id` is an opaque string (a nanosecond timestamp today — treat it as opaque, not as a sortable
+time). `area` is the *same* raw, positional index as `<prefix>/areas` — subject to the identical
+staleness caveat: re-fetch `<prefix>/areas` and resolve by name before writing a schedule for a
+specific area, don't cache the index. `daysOfWeek` is `0`=Sunday…`6`=Saturday. `lastRun` and
+`lastSkipReason`/`lastSkippedAt` are written by the scheduler itself (the latter when IrriSense
+reports wet soil at a due run) — a client may read them but writing them via `schedules/set` (below)
+has no effect; they are always carried over from the existing schedule.
+
+A due, enabled schedule triggers autonomous mowing the same way pressing "Start" in the GUI does
+(after the same emergency/already-mowing/soil checks) — an open, reachable broker can therefore
+create a schedule that starts the mower unattended, exactly as consequential as `<prefix>/command`'s
+`COMMAND_START` (see the security note near the top of this document).
+
+### `<prefix>/schedules/set` (inbound — create or update a schedule)
+
+```json
+{"area": 0, "time": "06:00", "daysOfWeek": [1, 2, 3, 4, 5], "enabled": true}
+```
+
+Omit `id` (or send an `id` that does not exist yet) to **create** a schedule — the server assigns
+the `id`. Send an existing `id` to **update** that schedule; `createdAt`/`lastRun`/
+`lastSkipReason`/`lastSkippedAt` are preserved from the existing record regardless of what the
+payload contains. `time` must be `HH:mm` and `daysOfWeek` must have at least one entry in `0`–`6` —
+the same validation `POST/PUT /schedules` applies; an invalid payload is logged and dropped with no
+error published back to MQTT (there is no ack/result topic here either — subscribe to
+`<prefix>/schedules` to see whether it took effect).
+
+### `<prefix>/schedules/delete` (inbound — delete a schedule)
+
+Payload is the schedule's `id`, either as plain text (`1758901234567890000`) or as
+`{"id": "1758901234567890000"}`. A payload with no id (including `{}`) is ignored rather than
+deleting everything.
 
 ## Parameters
 

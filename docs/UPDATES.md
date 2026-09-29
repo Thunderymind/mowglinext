@@ -188,8 +188,49 @@ ROS2, GUI, GPS and the installed supported LiDAR variant participate by default.
 Additional installed first-party services opt in through Compose labels (below).
 Unmanaged services, including MQTT by default and the optional remote-access sidecar `mowgli-remote` (GUI-owned, see `docs/REMOTE_ACCESS.md`), remain outside this transaction. Firmware, host OS and Docker
 upgrades are excluded; custom/LFP firmware is not flashed. Targets requiring a
-different firmware protocol, updater API, layout or data schema are rejected.
+different updater API, layout or data schema are rejected. A target built for a
+**different mainboard firmware protocol** is rejected by default, because the
+containers cannot flash the STM32 and the bridge refuses a board speaking
+another protocol — but that refusal would otherwise strand every robot on the
+old protocol, since the matching firmware ships INSIDE the new GUI image (the
+one it refuses to install). The operator can therefore force it (below).
 Older releases without a deployment descriptor are comparison-only.
+
+### Forcing a firmware protocol change
+
+`POST /v1/plan` plans a target whose `firmware_protocol` differs from the
+protocol the board reported in its handshake (`/api/system/update-readiness`
+→ `firmware_protocol`; a board with no handshake, protocol 0, is never forced
+past) unless `allow_firmware_protocol_change: false` is sent. The plan records
+the pair as `firmware_protocol_change: {from, to}`, and `POST /v1/apply`
+installs it unless `firmware_protocol_acknowledged: false` is sent. **Both
+flags are tri-state and an ABSENT flag means allowed**: the GUI that predates
+them is precisely the one that can only obtain the matching firmware from the
+image it is installing, so it must not be locked out — after its update the
+new GUI shows the flash alert. A GUI that knows the flags always sends an
+explicit value and does its own gating: a warning with an "install anyway"
+checkbox at review, and a second acknowledgement in the review dialog (the
+consequence is read there, so it is repeated at install like the custom-image
+one). Capability `firmware-protocol-change` advertises the flags; an older
+agent rejects them as unknown fields, so the GUI never sends them to it and
+tells the operator to update the agent first.
+
+This is the **update-first** counterpart of the protocol-first transition
+described under *Recovery and updater self-updates*: same readiness contract,
+opposite order. The recorded pair travels with the job and is the ONE unready
+state the maintenance gate and verification accept: the readiness endpoint
+reporting `maintenance_ready` (fresh firmware, blade and wheel telemetry, idle,
+stationary, blade off — everything except the bridge's compatibility bit)
+**while the board still reports `from` or `to`**. Any other unready reason, a
+missing handshake (protocol 0), a third protocol, or a GUI predating the
+`maintenance_ready` contract still fails verification and rolls back. This is
+the only exception to "maintenance-only readiness cannot release the mower",
+and it exists because the operator acknowledged it twice; the bridge blocks
+mowing regardless until the firmware matches. The same tolerance covers a
+rollback started before the board was flashed, in which the previous images
+meet the same refusal from the other side. After a successful forced install
+the GUI shows a persistent "flash the mainboard firmware now" alert (Firmware
+section, ST-Link) until the board reports the new protocol.
 
 ## Installed stack, health and component versions
 
@@ -519,6 +560,49 @@ sudo mowgli-updater recover
 sudo journalctl -u mowgli-updater.service -n 100
 ```
 
+### Protocol-first firmware transitions
+
+Install the GUI and host updater containing the protocol-transition readiness
+contract **before** the next firmware protocol change. After flashing the new
+firmware, review a complete container release whose declared protocol matches
+the live firmware. Maintenance entry may accept `maintenance_ready` from the GUI
+even while the old ROS bridge reports protocol incompatibility. This requires
+fresh firmware, blade and wheel telemetry, idle behavior, stationary wheels,
+and the blade disabled and stopped. The updater rechecks the reviewed protocol
+and the GUI's acknowledgement of the persisted maintenance gate before backup.
+It does not flash firmware or enable motion. Final verification and rollback
+release still require full `ready` compatibility; maintenance-only readiness
+cannot release the mower.
+
+An older GUI without this contract fails closed. A mower already stranded on
+such a GUI needs a controlled administrator bootstrap of matching GUI/ROS images
+under maintenance (or restoration of matching firmware), preserving configuration
+and maps, followed by normal updater verification. Updating the host worker alone
+does not teach an old GUI to provide the new safety verdict. This change is not a
+generic bypass for missing, stale or undecodable hardware telemetry.
+
+Protocol-transition hardware acceptance is **HARDWARE_REQUIRED**; unit/browser
+tests and the earlier manual recovery are not evidence for this automatic path.
+Reference reproduction: unit 192.168.1.118, Yardforce 500B LFP; firmware 1.11.93
+(`Yardforce500B_LFP_DMA_DIAG`, commit `761b5b1c29f9b5a60a54d6b9eee270033591122c`,
+binary SHA256 `a21f81755b6f2dd9929d7eb0622da69bda25f8afc1f456c779d2d87b4aa306b6`),
+protocol 7, with the old protocol-6 ROS image
+`ghcr.io/mowglinext/mowglinext/mowgli-ros2@sha256:5989e016e355942d8fc82a9bbd1fc3ce03526ba438866c51987e2ff75e7a62a1`.
+Use a GUI and host worker containing this change, and record their exact commit,
+image/binary digests, target deployment descriptor, submodule gitlinks and GNSS
+driver/receiver revision before a supervised trial. Published candidate images
+and that hardware run are still outstanding; no robot was changed for this PR.
+
+With blades removed, wheels secured, automatic starts disabled and emergency stop
+accessible, back up configuration/maps and confirm fresh idle, zero-wheel and
+blade-off readings. Review/install the matching protocol-7 container release.
+Pass only if maintenance is acknowledged before writers stop, the reviewed image
+IDs start, configuration/maps are preserved, and full compatible readiness passes
+before maintenance clears. A protocol change after review, missing/stale telemetry,
+motion, data loss, or gate release while incompatible is a failure. On failure,
+retain the gate and evidence; an old protocol-6 rollback cannot release a board
+still on protocol 7 without restoring a genuinely matching software/firmware pair.
+
 Do not remove the maintenance marker to work around a failed recovery. Managed
 `mowgli-*` helpers and `docker/stack.sh` share the updater lock, preserve the image
 override and refuse conflicting lifecycle operations during maintenance. Direct
@@ -526,7 +610,16 @@ administrator Docker commands can bypass that coordination.
 
 The UI also reports the running updater version and offers the selected
 deployment's updater binary. It validates the checksum and version/API probe,
-and journal schema, then stages the replacement. The installer-managed supervisor starts it and
+and journal schema, then stages the replacement. New publications additionally
+carry a platform-specific `build_id`: SHA256 of the worker built without VCS or
+per-release labels. It includes compiled transitive dependencies, toolchain and
+build settings. An unrelated GUI/ROS commit changes the deployment label but
+does not offer the same worker again. The installed worker reports its embedded
+identity, and the downloaded candidate must echo the descriptor's identity as
+well as pass its exact asset checksum check. Older workers/descriptors fall back
+to version comparison, so one initial upgrade can still be offered. This identity
+is for update comparison, not a replacement for download integrity or provenance.
+The installer-managed supervisor starts it and
 requires three successful API health samples. Startup failure or a 45-second
 health timeout restores the previous binary and reports an error. The worker
 cannot replace itself during a container transaction. The supervisor itself is
@@ -603,7 +696,7 @@ complete published ARM64 deployment remain required before field rollout.
 ### Journal compatibility
 
 The HTTP API remains version 1 with explicit feature capabilities (`release-compose`
-adds topology planning; `custom-images` adds explicit image selection; `external-images` supports release-approved upstream images). Journal schema 5 preserves external-image type and approved upstream version alongside custom-image provenance and topology recovery payloads.
+adds topology planning; `custom-images` adds explicit image selection; `external-images` supports release-approved upstream images; `firmware-protocol-change` accepts `allow_firmware_protocol_change` on plans and `firmware_protocol_acknowledged` on apply). Journal schema 5 preserves external-image type and approved upstream version alongside custom-image provenance and topology recovery payloads; a plan's optional `firmware_protocol_change` is an additive field older workers ignore.
 This worker reads schema 1/2/3/4 journals and writes schema 5 on mutation, preserving
 history. Older workers reject schema 5. Self-update probes require schema 5 and
 refuse unsafe worker downgrades. Existing workers using earlier journal schemas require an installer/bootstrap upgrade before using this extension. Deployment schemas 2 and 3 require the Compose bundle; schema 3 adds managed external images and is rejected by older workers.
