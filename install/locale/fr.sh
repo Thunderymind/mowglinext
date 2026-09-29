@@ -20,6 +20,7 @@ MSG_MODE_REINSTALL="Reinstaller / reconfigurer — repasser par les questions ma
 MSG_MODE_CHECK="Verifier — diagnostic uniquement"
 MSG_MODE_INVALID="Choix invalide, mise a jour lancee"
 MSG_MODE_SELECTED="Mode :"
+MSG_MODE_NO_TTY="deja installe, pas de terminal pour demander ; passez install|repair|check pour choisir"
 
 # ── System update (system.sh) ──
 MSG_SYSTEM_UPDATE="Voulez-vous mettre a jour le systeme ?"

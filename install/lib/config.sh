@@ -1013,8 +1013,19 @@ parse_args() {
 # operator wants instead of walking them through a full reinstall. Only with
 # a terminal — a composer command or a cron job keeps the documented default.
 select_mode() {
-  [[ "$MODE_EXPLICIT" != "true" && "${NON_INTERACTIVE:-false}" != "true" ]] || return 0
+  [[ "$MODE_EXPLICIT" != "true" ]] || return 0
   [ -f "$FINAL_ENV_FILE" ] || return 0
+
+  # No terminal to ask on: a bare run on an installed robot means "update",
+  # exactly what the menu would default to. Hardware flags (a composer
+  # command) still mean a reconfiguring install.
+  if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    if [[ "${CLI_PRESET:-false}" != "true" ]]; then
+      INSTALL_MODE="update"
+      info "$MSG_MODE_SELECTED update ($MSG_MODE_NO_TTY)"
+    fi
+    return 0
+  fi
 
   echo ""
   echo -e "${CYAN:-}${BOLD:-}$MSG_MODE_TITLE${NC:-}"

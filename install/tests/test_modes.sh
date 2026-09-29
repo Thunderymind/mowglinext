@@ -62,14 +62,19 @@ assert_match "datum is left as the seed placeholder (GUI-owned)" '^[[:space:]]+d
 assert_match "ntrip is left as the seed default (GUI-owned)" '^[[:space:]]+ntrip_enabled:[[:space:]]+false[[:space:]]*$' "$yaml_ni"
 assert_match "dock pose is left as the seed value (calibration output)" '^[[:space:]]+dock_pose_x:' "$yaml_ni"
 
-section "a bare non-interactive run on an installed robot never shows the mode menu"
+section "a bare non-interactive run on an installed robot means update, not a reinstall"
 repo="$SANDBOX/repo_bare"
 sandbox_repo "$repo"
 harness_init "$repo"
 mkdir -p "$repo/docker"; printf 'ROS_DOMAIN_ID=0\n' > "$repo/docker/.env"
 out="$(timeout 60 bash "$repo/install/mowglinext.sh" --non-interactive --only=env 2>&1)" && ec=0 || ec=$?
-assert_eq "bare non-interactive run exits 0" "0" "$ec"
-assert_not_contains "no mode menu without a terminal" "already installed" "$out"
+assert_eq "explicit --only run exits 0" "0" "$ec"
+assert_not_contains "no mode menu without a terminal" "What do you want to do" "$out"
+out="$(timeout 120 bash "$repo/install/mowglinext.sh" --non-interactive 2>&1)" && ec=0 || ec=$?
+assert_contains "bare no-tty run on an installed robot picks update" "Mode: update" "$out"
+assert_not_contains "bare no-tty run does not reconfigure hardware" "Configuring GNSS serial link" "$out"
+out="$(timeout 120 bash "$repo/install/mowglinext.sh" --non-interactive --lidar=none 2>&1)" && ec=0 || ec=$?
+assert_not_contains "hardware flags keep a reconfiguring install" "Mode: update" "$out"
 
 section "an existing mowgli_robot.yaml is never written, even when it is root-owned"
 repo="$SANDBOX/repo_perm"
