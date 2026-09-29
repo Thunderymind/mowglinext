@@ -20,6 +20,27 @@ MSG_MODE_REINSTALL="Reinstaller / reconfigurer — repasser par les questions ma
 MSG_MODE_CHECK="Verifier — diagnostic uniquement"
 MSG_MODE_INVALID="Choix invalide, mise a jour lancee"
 MSG_MODE_SELECTED="Mode :"
+MSG_MODE_UNINSTALL="Desinstaller — tout supprimer sauf les cartes et mowgli_robot.yaml"
+
+# ── Desinstallation (uninstall.sh) ──
+MSG_UNINSTALL_TITLE="Desinstaller MowgliNext"
+MSG_UNINSTALL_REMOVES="Cela supprime :"
+MSG_UNINSTALL_CONTAINERS="tous les conteneurs mowgli-* et leurs images (volume des cartes intact)"
+MSG_UNINSTALL_UPDATER="le service de mise a jour, son binaire, sa configuration et son etat"
+MSG_UNINSTALL_HOST="regles udev, sysctl DDS, MOTD, commandes mowgli-*, notre rc.local"
+MSG_UNINSTALL_KEEPS="Cela conserve :"
+MSG_UNINSTALL_MAPS="volume Docker : areas.dat et le graphe de localisation sauvegarde"
+MSG_UNINSTALL_NOT_OURS="Docker lui-meme et les overlays UART de /boot (pas a nous)"
+MSG_UNINSTALL_CONFIRM="Supprimer MowgliNext de cet hote ?"
+MSG_UNINSTALL_NEEDS_YES="Pas de terminal pour confirmer ; passez --yes pour desinstaller sans interaction."
+MSG_UNINSTALL_ABORTED="Desinstallation annulee ; rien n'a ete modifie."
+MSG_UNINSTALL_COMPOSE_FAILED="docker compose down a echoue ; suppression des conteneurs un par un."
+MSG_UNINSTALL_NOT_A_CHECKOUT="Refus de supprimer un repertoire qui n'est pas un depot MowgliNext :"
+MSG_UNINSTALL_REMOVED="Supprime"
+MSG_UNINSTALL_RESTORED="Restaure"
+MSG_UNINSTALL_KEPT="Conserve"
+MSG_UNINSTALL_DONE="MowgliNext supprime. Reinstallez avec la commande de https://mowgli.garden : mowgli_robot.yaml et le volume des cartes seront retrouves."
+MSG_UNINSTALL_MAPS_HINT="Pour supprimer aussi les cartes : docker volume rm"
 MSG_MODE_NO_TTY="deja installe, pas de terminal pour demander ; passez install|repair|check pour choisir"
 
 # ── System update (system.sh) ──
