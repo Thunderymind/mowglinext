@@ -2164,52 +2164,95 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
   }
 
-  // Sub-path DRIVE ORDER: minimize the blade-off Nav2 transit BETWEEN sub-paths.
-  // The sub-paths above come out in swath-chain order; on a multi-hole field that
-  // leaves the driver criss-crossing the lawn between lobes (measured 77 m of
-  // blade-off transit on the recorded 4-hole garden). Greedy nearest-neighbour
-  // over the FINISHED sub-path polylines, entering each at whichever end is
-  // nearer, mows spatially adjacent lobes consecutively (77 → 47 m there).
+  // Sub-path DRIVE ORDER: see orderSubPathsForMinimalTransit's doc comment —
+  // extracted to its own pure, unit-testable function (mowgli_coverage
+  // convention for decision logic like this; see test_coverage_planning.cpp).
+  return orderSubPathsForMinimalTransit(std::move(out));
+}
+
+std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTransit(
+    std::vector<std::vector<std::pair<double, double>>> sub_paths)
+{
+  // Minimize the blade-off Nav2 transit BETWEEN sub-paths. Sub-paths arrive in
+  // swath-chain order; on a multi-hole field that leaves the driver
+  // criss-crossing the lawn between lobes (measured 77 m of blade-off transit
+  // on the recorded 4-hole garden). Greedy nearest-neighbour over the
+  // FINISHED sub-path polylines, entering each at whichever end is nearer,
+  // mows spatially adjacent lobes consecutively (77 → 47 m there).
   //   * Reversing a FINISHED polyline is safe: the points are identical, so every
   //     turn-around / fillet stays exactly as in-bounds and trackable as before —
   //     only reversing the swath ORDER *before* the path is built relocates
-  //     U-turns (the hazard the seed-from-BoustrophedonOrder note above guards);
-  //     driving the same polyline backwards moves nothing.
-  //   * Sub-path 0 stays the seed — TransitToStrip already drives the robot to
-  //     its start, and the BT resumes by sub-path index (deterministic: a fixed
-  //     plan yields a fixed NN order, so indices are stable across re-plans).
-  //   * Adopt the NN order ONLY when it actually shortens the transit, so a field
-  //     the chain order already sequenced well can never regress.
-  if (out.size() > 1)
+  //     U-turns (the hazard the seed-from-BoustrophedonOrder note in
+  //     buildContinuousSubPaths guards); driving the same polyline backwards
+  //     moves nothing.
+  //   * The SEED (which sub-path drives first) is tried at every candidate, not
+  //     pinned to the input's own first element (mowglinext#818: with only 2
+  //     sub-paths, a fixed seed=0 can only ever reverse the OTHER one — it
+  //     structurally cannot discover that starting from the other sub-path
+  //     gives a shorter link, field-measured as a single 9.78 m gap on an
+  //     otherwise-adjacent 2-lobe area). This stays deterministic — still a
+  //     pure function of the sub-path geometries, no robot-position input — so
+  //     the BT's resume-by-index contract (a fixed plan yields a fixed order,
+  //     stable across re-plans) holds exactly as before; only the SEARCH grew,
+  //     not what makes the result reproducible. TransitToStrip has no prior
+  //     commitment to any particular sub-path — it simply reads
+  //     drivable_subpaths.front() from buildContinuousSubPaths' result
+  //     (PlanCoverageArea, mowgli_behavior/src/coverage_nodes.cpp) — so any
+  //     sub-path is free to end up there.
+  //   * The seed itself is always driven forward (front→back) — only the
+  //     NON-seed sub-paths may be reversed. Trying every sub-path as seed still
+  //     covers the reverse-the-other-one case the single-seed version had,
+  //     plus every case where the BEST link is to the seed's normally-unused
+  //     front end via a different sub-path arriving there first.
+  //   * Bounded to kMaxSeedSearchSize sub-paths (O(n^3) — every seed reruns the
+  //     O(n^2) chain): a pathological multi-hole field with more lobes than that
+  //     falls back to the single-seed=0 search instead, which is still a
+  //     strict improvement over the raw input order and was the whole behavior
+  //     before this change.
+  //   * Adopt the best seed's order ONLY when it actually shortens the transit
+  //     versus the raw input order, so a field the input order already
+  //     sequenced well can never regress.
+  if (sub_paths.size() <= 1)
   {
-    auto gap = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
-    {
-      return std::hypot(a.first - b.first, a.second - b.second);
-    };
-    double chain_transit = 0.0;
-    for (std::size_t i = 1; i < out.size(); ++i)
-    {
-      chain_transit += gap(out[i - 1].back(), out[i].front());
-    }
-    std::vector<std::size_t> order{0};
-    std::vector<bool> reversed_flag(out.size(), false);
-    std::vector<bool> used(out.size(), false);
-    used[0] = true;
-    std::pair<double, double> cur = out[0].back();
-    double nn_transit = 0.0;
-    for (std::size_t n = 1; n < out.size(); ++n)
+    return sub_paths;
+  }
+  auto gap = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+  {
+    return std::hypot(a.first - b.first, a.second - b.second);
+  };
+  double chain_transit = 0.0;
+  for (std::size_t i = 1; i < sub_paths.size(); ++i)
+  {
+    chain_transit += gap(sub_paths[i - 1].back(), sub_paths[i].front());
+  }
+
+  // Greedy NN chain starting from `seed`: at each step, enter whichever
+  // unused sub-path is nearest (forward or reversed) to the current end.
+  struct SeedResult
+  {
+    std::vector<std::size_t> order;
+    std::vector<bool> reversed_flag;
+    double transit;
+  };
+  auto chainFromSeed = [&](std::size_t seed) -> SeedResult
+  {
+    SeedResult result{{seed}, std::vector<bool>(sub_paths.size(), false), 0.0};
+    std::vector<bool> used(sub_paths.size(), false);
+    used[seed] = true;
+    std::pair<double, double> cur = sub_paths[seed].back();
+    for (std::size_t n = 1; n < sub_paths.size(); ++n)
     {
       std::size_t best = 0;
       bool best_rev = false;
       double best_d = std::numeric_limits<double>::max();
-      for (std::size_t j = 0; j < out.size(); ++j)
+      for (std::size_t j = 0; j < sub_paths.size(); ++j)
       {
         if (used[j])
         {
           continue;
         }
-        const double ds = gap(cur, out[j].front());  // enter forward
-        const double de = gap(cur, out[j].back());  // enter reversed
+        const double ds = gap(cur, sub_paths[j].front());  // enter forward
+        const double de = gap(cur, sub_paths[j].back());  // enter reversed
         if (ds < best_d)
         {
           best_d = ds;
@@ -2224,28 +2267,42 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         }
       }
       used[best] = true;
-      reversed_flag[best] = best_rev;
-      order.push_back(best);
-      nn_transit += best_d;
-      cur = best_rev ? out[best].front() : out[best].back();
+      result.reversed_flag[best] = best_rev;
+      result.order.push_back(best);
+      result.transit += best_d;
+      cur = best_rev ? sub_paths[best].front() : sub_paths[best].back();
     }
-    if (nn_transit + 1e-6 < chain_transit)
+    return result;
+  };
+
+  constexpr std::size_t kMaxSeedSearchSize = 40;
+  const std::size_t seed_count = sub_paths.size() <= kMaxSeedSearchSize ? sub_paths.size() : 1;
+  SeedResult best = chainFromSeed(0);
+  for (std::size_t seed = 1; seed < seed_count; ++seed)
+  {
+    SeedResult candidate = chainFromSeed(seed);
+    if (candidate.transit + 1e-6 < best.transit)
     {
-      std::vector<std::vector<std::pair<double, double>>> reordered;
-      reordered.reserve(out.size());
-      for (const std::size_t idx : order)
-      {
-        std::vector<std::pair<double, double>> sp = std::move(out[idx]);
-        if (reversed_flag[idx])
-        {
-          std::reverse(sp.begin(), sp.end());
-        }
-        reordered.push_back(std::move(sp));
-      }
-      out = std::move(reordered);
+      best = std::move(candidate);
     }
   }
-  return out;
+
+  if (best.transit + 1e-6 >= chain_transit)
+  {
+    return sub_paths;
+  }
+  std::vector<std::vector<std::pair<double, double>>> reordered;
+  reordered.reserve(sub_paths.size());
+  for (const std::size_t idx : best.order)
+  {
+    std::vector<std::pair<double, double>> sp = std::move(sub_paths[idx]);
+    if (best.reversed_flag[idx])
+    {
+      std::reverse(sp.begin(), sp.end());
+    }
+    reordered.push_back(std::move(sp));
+  }
+  return reordered;
 }
 
 std::vector<std::pair<double, double>> buildContinuousPath(
