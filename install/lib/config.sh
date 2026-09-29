@@ -785,6 +785,13 @@ parse_args() {
       --no-updater)
         INSTALL_UPDATER=false
         ;;
+      --mqtt=*)
+        case "${1#*=}" in
+          on|true|yes)  ENABLE_MQTT="true" ;;
+          off|false|no) ENABLE_MQTT="false" ;;
+          *) error "Unknown --mqtt value: ${1#*=} (expected on or off)"; exit 1 ;;
+        esac
+        ;;
       --help|-h)
         print_usage
         exit 0
@@ -1054,6 +1061,7 @@ Options
                              LiDAR (default: ldlidar-uart interactive, none otherwise)
   --lidar-uart=<path>        LiDAR UART device (default: /dev/ttyAMA5)
   --no-updater               Do not install the host updater service
+  --mqtt=<on|off>            Run the mosquitto MQTT broker (Home Assistant integrations; default: off)
   --only=<step>              Run one step; see the list printed on an unknown name
 
 Datum, NTRIP, the GNSS receiver profile and LiDAR mounting are configured in

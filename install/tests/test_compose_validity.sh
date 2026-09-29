@@ -64,7 +64,7 @@ section "Required services present (default mowgli + ldlidar preset)"
 
 CONTAINERS=$(grep -E '^\s+container_name:' "$COMPOSE_FILE" | awk '{print $2}' | sort)
 
-for required in mowgli-ros2 mowgli-gps mowgli-gui mowgli-lidar mowgli-mqtt mowgli-watchtower; do
+for required in mowgli-ros2 mowgli-gps mowgli-gui mowgli-lidar; do
   if printf '%s\n' "$CONTAINERS" | grep -qx "$required"; then
     pass "service: $required"
   else

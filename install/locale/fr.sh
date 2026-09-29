@@ -76,10 +76,11 @@ MSG_UPDATER_STACK_REVIEW="Choix matériels enregistrés. Consultez les mises à 
 
 # Compose baseline / legacy adoption (install/lib/compose.sh)
 MSG_COMPOSE_BASELINE_UNAVAILABLE="Impossible d'enregistrer l'empreinte du fichier Compose généré (sha256sum/shasum absents, ou docker/stack-definition.sha256 non inscriptible) ; aucune référence enregistrée."
-MSG_COMPOSE_LEGACY_EXPLAIN="docker/docker-compose.yaml a été généré avant les mises à jour gérées : aucune empreinte n'en a été enregistrée. Il diffère de la définition actuelle sur les réglages listés ci-dessus. Si vous n'avez jamais modifié ce fichier à la main, il s'agit seulement de l'évolution de la version et il peut être remplacé sans risque."
-MSG_COMPOSE_LEGACY_BACKUP="Le fichier actuel est conservé sous docker/docker-compose.yaml.legacy-<date>. Les modifications manuelles à garder vont dans docker/stack-overrides.yaml."
-MSG_COMPOSE_LEGACY_CONFIRM="Remplacer docker/docker-compose.yaml par la définition actuelle ?"
-MSG_COMPOSE_LEGACY_DECLINED="docker/docker-compose.yaml laissé intact. Déplacez vos modifications dans docker/stack-overrides.yaml puis relancez l'installateur (non interactif : MOWGLI_ADOPT_LEGACY_COMPOSE=true)."
+MSG_COMPOSE_LEGACY_EXPLAIN="Le service de mise a jour ne peut pas garantir docker/docker-compose.yaml : la raison est affichee ci-dessus (soit il precede l'empreinte enregistree et differe de la definition actuelle, soit il a ete modifie a la main apres sa generation). Si la modification n'est pas la votre, c'est seulement la version qui a evolue et il est sur de le regenerer."
+MSG_COMPOSE_LEGACY_BACKUP="Le fichier actuel est conserve a cote du nouveau sous docker/docker-compose.yaml.legacy-<date> ou .edited-<date>. Les modifications a garder vont dans docker/stack-overrides.yaml."
+MSG_COMPOSE_LEGACY_CONFIRM="Sauvegarder le docker/docker-compose.yaml actuel et le regenerer ?"
+MSG_COMPOSE_MISSING="docker/docker-compose.yaml est absent ; il sera recree depuis la definition installee (plus docker/stack-overrides.yaml s'il existe)."
+MSG_COMPOSE_LEGACY_DECLINED="docker/docker-compose.yaml laisse intact. Deplacez vos modifications dans docker/stack-overrides.yaml puis relancez (non interactif : MOWGLI_ADOPT_LEGACY_COMPOSE=true)."
 
 # Repository self-update (install/lib/deploy.sh)
 MSG_REPO_LOCAL_CHANGES="Des fichiers suivis de ce dépôt ont été modifiés localement :"
@@ -97,3 +98,5 @@ MSG_REPO_FETCH_FAILED="Dépôt distant injoignable ; poursuite avec le dépôt a
 MSG_REPO_FOREIGN_OWNER="Une partie du dépôt appartient à un autre utilisateur (souvent après un 'sudo git ...'), git ne peut donc pas le mettre à jour :"
 MSG_REPO_FOREIGN_OWNER_FIX="Poursuite avec le dépôt actuel. Pour corriger :"
 MSG_REPO_SUBMODULE_SKIPPED="Impossible de mettre à jour les sous-modules git. Ils ne servent qu'à COMPILER les sources ROS2 ; un robot qui utilise les images publiées n'en a pas besoin."
+MSG_COMPOSE_MISSING_CONFIRM="Recreer docker/docker-compose.yaml ?"
+MSG_COMPOSE_MISSING_DECLINED="docker/docker-compose.yaml non recree ; la pile ne peut pas demarrer sans lui."

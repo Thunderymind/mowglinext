@@ -87,6 +87,32 @@ chmod 0644 "$yaml"
 assert_eq "existing yaml is byte-identical after write_config" "$before" "$(cat "$yaml")"
 assert_not_contains "no python edit was attempted on the operator's file" "Could not update" "$(write_config 2>&1)"
 
+section "Watchtower is gone and the MQTT broker is opt-in"
+repo="$SANDBOX/repo_mqtt"
+sandbox_repo "$repo"
+harness_init "$repo"
+harness_set_preset gnss=auto gnss_connection=uart lidar=none
+harness_run >/dev/null 2>&1 || fail "default run" "non-zero exit"
+compose_default="$(cat "$repo/docker/docker-compose.yaml")"
+assert_not_contains "no Watchtower service in a fresh install" "mowgli-watchtower" "$compose_default"
+assert_not_contains "no mosquitto by default" "mowgli-mqtt" "$compose_default"
+assert_contains ".env records the broker as off" "ENABLE_MQTT=false" "$(cat "$repo/docker/.env")"
+harness_set_preset mqtt=true
+harness_run >/dev/null 2>&1 || fail "mqtt run" "non-zero exit"
+assert_contains "mosquitto composed when requested" "mowgli-mqtt" "$(cat "$repo/docker/docker-compose.yaml")"
+assert_contains ".env records the broker as on" "ENABLE_MQTT=true" "$(cat "$repo/docker/.env")"
+assert_file_not_exists "watchtower fragment removed" "$REPO_ROOT/install/compose/docker-compose.watchtower.yml"
+# An install that predates the toggle (.env without ENABLE_MQTT) keeps its broker.
+repo="$SANDBOX/repo_mqtt_legacy"
+sandbox_repo "$repo"
+harness_init "$repo"
+mkdir -p "$repo/docker"
+printf 'services:\n  mosquitto:\n    container_name: mowgli-mqtt\n' > "$repo/docker/docker-compose.yaml"
+harness_set_preset gnss=auto gnss_connection=uart lidar=none
+harness_run >/dev/null 2>&1 || fail "legacy mqtt run" "non-zero exit"
+assert_contains "existing broker is kept when .env has no ENABLE_MQTT" "ENABLE_MQTT=true" "$(cat "$repo/docker/.env")"
+assert_contains "existing broker stays composed" "mowgli-mqtt" "$(cat "$repo/docker/docker-compose.yaml")"
+
 section "--only= still lists the current step names"
 repo="$SANDBOX/repo_only"
 sandbox_repo "$repo"

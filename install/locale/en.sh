@@ -76,10 +76,11 @@ MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to app
 
 # Compose baseline / legacy adoption (install/lib/compose.sh)
 MSG_COMPOSE_BASELINE_UNAVAILABLE="Could not record a checksum of the generated Compose file (sha256sum/shasum missing, or docker/stack-definition.sha256 not writable); no baseline recorded."
-MSG_COMPOSE_LEGACY_EXPLAIN="docker/docker-compose.yaml was generated before managed updates existed, so no checksum of it was recorded. It differs from the current definition in the settings listed above. If you never edited that file by hand, this is only the release evolving and it is safe to replace."
-MSG_COMPOSE_LEGACY_BACKUP="The current file is kept as docker/docker-compose.yaml.legacy-<date>. Hand-made changes you want to keep belong in docker/stack-overrides.yaml."
-MSG_COMPOSE_LEGACY_CONFIRM="Replace docker/docker-compose.yaml with the current definition?"
-MSG_COMPOSE_LEGACY_DECLINED="docker/docker-compose.yaml left untouched. Move your changes into docker/stack-overrides.yaml, then rerun the installer (non-interactive: MOWGLI_ADOPT_LEGACY_COMPOSE=true)."
+MSG_COMPOSE_LEGACY_EXPLAIN="docker/docker-compose.yaml cannot be vouched for by the updater: the reason is printed above (either it predates the recorded baseline and differs from the current definition, or it was edited by hand after it was generated). If the edit was not yours, this is only the release evolving and it is safe to regenerate."
+MSG_COMPOSE_LEGACY_BACKUP="The current file is kept next to the new one as docker/docker-compose.yaml.legacy-<date> or .edited-<date>. Hand-made changes you want to keep belong in docker/stack-overrides.yaml."
+MSG_COMPOSE_LEGACY_CONFIRM="Back up the current docker/docker-compose.yaml and regenerate it?"
+MSG_COMPOSE_MISSING="docker/docker-compose.yaml is missing; it will be recreated from the installed definition (plus docker/stack-overrides.yaml if present)."
+MSG_COMPOSE_LEGACY_DECLINED="docker/docker-compose.yaml left untouched. Move your changes into docker/stack-overrides.yaml, then rerun (non-interactive: MOWGLI_ADOPT_LEGACY_COMPOSE=true)."
 
 # Repository self-update (install/lib/deploy.sh)
 MSG_REPO_LOCAL_CHANGES="Tracked files in this checkout were modified locally:"
@@ -97,3 +98,5 @@ MSG_REPO_FETCH_FAILED="Could not reach the remote; continuing with the current c
 MSG_REPO_FOREIGN_OWNER="Part of the repository belongs to another user (usually after 'sudo git ...'), so git cannot update it:"
 MSG_REPO_FOREIGN_OWNER_FIX="Continuing with the current checkout. Fix it with:"
 MSG_REPO_SUBMODULE_SKIPPED="Could not update the git submodules. They are only needed to BUILD the ROS2 sources; a robot running the published images does not use them."
+MSG_COMPOSE_MISSING_CONFIRM="Recreate docker/docker-compose.yaml?"
+MSG_COMPOSE_MISSING_DECLINED="docker/docker-compose.yaml not recreated; the stack cannot start without it."

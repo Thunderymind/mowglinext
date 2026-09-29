@@ -233,6 +233,17 @@ setup_env() {
   : "${MOWER_IP:=10.0.0.161}"
   : "${DISABLE_BLUETOOTH:=true}"
   : "${ENABLE_FOXGLOVE:=true}"
+  # mosquitto broker (Home Assistant / MQTT integrations): opt-in on a fresh
+  # install, but an existing install keeps the broker it already runs — the
+  # toggle did not exist before 2026-09-29, so an absent key must not switch
+  # off a Home Assistant integration on the next update.
+  if [[ -z "${ENABLE_MQTT:-}" ]]; then
+    if grep -qs 'mowgli-mqtt' "$FINAL_COMPOSE_FILE" 2>/dev/null; then
+      ENABLE_MQTT="true"
+    else
+      ENABLE_MQTT="false"
+    fi
+  fi
 
   # Main GNSS receiver.
   # docker/.env now carries fallback-only GNSS defaults for first boot and
@@ -328,6 +339,8 @@ setup_env() {
   upsert_env_key "$env_file" "MOWER_IP" "$MOWER_IP"
   upsert_env_key "$env_file" "DISABLE_BLUETOOTH" "$DISABLE_BLUETOOTH"
   upsert_env_key "$env_file" "ENABLE_FOXGLOVE" "$ENABLE_FOXGLOVE"
+  upsert_env_key "$env_file" "ENABLE_MQTT" "$ENABLE_MQTT"
+  remove_env_key "$env_file" "ENABLE_WATCHTOWER"
   upsert_env_key "$env_file" "IMAGE_TAG" "$IMAGE_TAG"
 
   upsert_env_key "$env_file" "GNSS_BACKEND" "$(effective_gnss_backend 2>/dev/null || printf 'universal\n')"

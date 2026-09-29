@@ -27,7 +27,8 @@ expected_runtime_services() {
   : "${LIDAR_TYPE:=unknown}"
   : "${GNSS_BACKEND:=universal}"
 
-  local services=(mowgli gui mosquitto)
+  local services=(mowgli gui)
+  [[ "${ENABLE_MQTT:-false}" == "true" ]] && services+=(mosquitto)
   local gnss_backend
   local gnss_stack
   local gnss_service
