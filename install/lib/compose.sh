@@ -270,6 +270,22 @@ run_updater_installer_stack() {
     fi
   fi
 
+  # The updater daemon renders with the directory recorded at its install
+  # (/etc/mowgli-updater.json). If this shell resolves the checkout to another
+  # spelling (symlinked home, moved checkout, MOWGLI_HOME), every bind mount
+  # source differs and the next reviewed update is refused as "adds writable
+  # storage". Say so now, with both paths, instead of later.
+  local updater_config="${MOWGLI_UPDATER_CONFIG:-/etc/mowgli-updater.json}" daemon_dir=""
+  if [[ -r "$updater_config" ]]; then
+    daemon_dir="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("directory",""))' "$updater_config" 2>/dev/null || true)"
+    if [[ -n "$daemon_dir" && "$daemon_dir" != "$DOCKER_DIR" ]]; then
+      error "$MSG_UPDATER_DIRECTORY_MISMATCH"
+      error "  updater: $daemon_dir"
+      error "  this run: $DOCKER_DIR"
+      return 1
+    fi
+  fi
+
   # The broker is a local (non-release) service: installer-stack must know
   # whether to add or drop it when it regenerates the file.
   export MOWGLI_ENABLE_MQTT="${ENABLE_MQTT:-false}"

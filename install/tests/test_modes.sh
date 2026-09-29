@@ -141,6 +141,13 @@ if compgen -G "$repo/docker/update-images.json.old.*" >/dev/null; then pass "pin
 : > "$STUB_LOG"; printf '{"services":{}}\n' > "$repo/docker/update-images.json"
 MOWGLI_REGENERATE_STACK=false write_compose_merged >/dev/null 2>&1 || true
 assert_file_exists "install (propose-only) keeps the updater pins" "$repo/docker/update-images.json"
+# The daemon's recorded directory must be this run's DOCKER_DIR.
+printf '{"directory":"/somewhere/else/docker","project":"install"}\n' > "$SANDBOX/updater.json"
+out="$(MOWGLI_UPDATER_CONFIG="$SANDBOX/updater.json" MOWGLI_REGENERATE_STACK=true write_compose_merged 2>&1)" && fail "directory mismatch refused" "returned 0" || pass "directory mismatch refused"
+assert_contains "mismatch names the updater's directory" "/somewhere/else/docker" "$out"
+assert_contains "mismatch names this run's directory" "$repo/docker" "$out"
+printf '{"directory":"%s","project":"install"}\n' "$repo/docker" > "$SANDBOX/updater.json"
+MOWGLI_UPDATER_CONFIG="$SANDBOX/updater.json" MOWGLI_REGENERATE_STACK=true write_compose_merged >/dev/null 2>&1 && pass "matching directory proceeds" || fail "matching directory proceeds" "non-zero exit"
 unset MOWGLI_UPDATER_STACK_BINARY
 
 section "--only= still lists the current step names"
