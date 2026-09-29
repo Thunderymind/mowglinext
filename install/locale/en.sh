@@ -20,6 +20,27 @@ MSG_MODE_REINSTALL="Reinstall / reconfigure — go through the hardware question
 MSG_MODE_CHECK="Check — diagnostics only"
 MSG_MODE_INVALID="Invalid choice, running an update"
 MSG_MODE_SELECTED="Mode:"
+MSG_MODE_UNINSTALL="Uninstall — remove everything except the maps and mowgli_robot.yaml"
+
+# ── Uninstall (uninstall.sh) ──
+MSG_UNINSTALL_TITLE="Uninstall MowgliNext"
+MSG_UNINSTALL_REMOVES="This removes:"
+MSG_UNINSTALL_CONTAINERS="all mowgli-* containers and their images (maps volume untouched)"
+MSG_UNINSTALL_UPDATER="the host updater service, binary, config and state"
+MSG_UNINSTALL_HOST="udev rules, DDS sysctl, MOTD, mowgli-* helper commands, our rc.local"
+MSG_UNINSTALL_KEEPS="This keeps:"
+MSG_UNINSTALL_MAPS="Docker volume: areas.dat and the saved localization graph"
+MSG_UNINSTALL_NOT_OURS="Docker itself and the /boot UART overlays (not ours)"
+MSG_UNINSTALL_CONFIRM="Remove MowgliNext from this host?"
+MSG_UNINSTALL_NEEDS_YES="No terminal to confirm on; pass --yes to uninstall non-interactively."
+MSG_UNINSTALL_ABORTED="Uninstall aborted; nothing was changed."
+MSG_UNINSTALL_COMPOSE_FAILED="docker compose down failed; removing the containers one by one."
+MSG_UNINSTALL_NOT_A_CHECKOUT="Refusing to remove a directory that is not a MowgliNext checkout:"
+MSG_UNINSTALL_REMOVED="Removed"
+MSG_UNINSTALL_RESTORED="Restored"
+MSG_UNINSTALL_KEPT="Kept"
+MSG_UNINSTALL_DONE="MowgliNext removed. Reinstall with the command from https://mowgli.garden — it will find mowgli_robot.yaml and the maps volume again."
+MSG_UNINSTALL_MAPS_HINT="To delete the maps too: docker volume rm"
 MSG_MODE_NO_TTY="already installed, no terminal to ask; pass install|repair|check to choose"
 
 # ── System update (system.sh) ──

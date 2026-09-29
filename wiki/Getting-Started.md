@@ -130,6 +130,7 @@ cd ~/mowglinext/install
 ./mowglinext.sh update --branch=dev   # ...onto another branch/image channel
 ./mowglinext.sh repair                # re-apply udev/UART/sysctl/.env/compose/helpers from the saved choices, no prompts
 ./mowglinext.sh install --non-interactive --backend=mowgli --gnss-connection=uart --lidar=ldlidar-uart
+./mowglinext.sh uninstall             # remove everything; keeps the maps volume and mowgli_robot.yaml for a later reinstall
 ```
 
 `update` is deliberately independent of the host updater (Settings > Updates): no readiness gate, no firmware-protocol check, no backup/rollback transaction — it is the escape hatch when the updater cannot or must not run. It regenerates the runtime files with the same writers as `install`, so an installed updater can adopt the result afterwards.

@@ -150,6 +150,40 @@ printf '{"directory":"%s","project":"install"}\n' "$repo/docker" > "$SANDBOX/upd
 MOWGLI_UPDATER_CONFIG="$SANDBOX/updater.json" MOWGLI_REGENERATE_STACK=true write_compose_merged >/dev/null 2>&1 && pass "matching directory proceeds" || fail "matching directory proceeds" "non-zero exit"
 unset MOWGLI_UPDATER_STACK_BINARY
 
+section "uninstall removes the stack, the updater and the checkout but keeps the maps volume and mowgli_robot.yaml"
+repo="$SANDBOX/repo_uninstall"
+sandbox_repo "$repo"
+harness_init "$repo"
+harness_set_preset gnss=auto gnss_connection=uart lidar=none
+harness_run >/dev/null 2>&1 || fail "seed run" "non-zero exit"
+yaml="$repo/docker/config/mowgli/mowgli_robot.yaml"
+printf '        ticks_per_meter: 1234.5\n' >> "$yaml"; yaml_before="$(cat "$yaml")"
+export HOST_PREFIX="$SANDBOX/host"
+mkdir -p "$HOST_PREFIX/etc/udev/rules.d" "$HOST_PREFIX/etc/systemd/system" "$HOST_PREFIX/usr/local/bin" "$HOST_PREFIX/var/lib/mowgli-updater" "$HOST_PREFIX/etc/profile.d" "$HOST_PREFIX/etc/sysctl.d"
+touch "$HOST_PREFIX/etc/udev/rules.d/50-mowgli.rules" "$HOST_PREFIX/etc/systemd/system/mowgli-updater.service" "$HOST_PREFIX/usr/local/bin/mowgli-updater" "$HOST_PREFIX/usr/local/bin/mowgli-up" "$HOST_PREFIX/etc/mowgli-updater.json" "$HOST_PREFIX/var/lib/mowgli-updater/state.json" "$HOST_PREFIX/etc/profile.d/mowgli-motd.sh" "$HOST_PREFIX/etc/sysctl.d/90-mowgli-dds.conf"
+printf '#!/bin/sh\n# MOWGLI_UART_INIT\n' > "$HOST_PREFIX/etc/rc.local"; printf 'original\n' > "$HOST_PREFIX/etc/rc.local.bak"
+# No tty and no --yes: refused, nothing touched.
+out="$(timeout 60 bash "$repo/install/mowglinext.sh" uninstall 2>&1)" && ec=0 || ec=$?
+assert_neq "uninstall without --yes and without a tty is refused" "0" "$ec"
+assert_contains "refusal explains --yes" "pass --yes" "$out"
+assert_file_exists "refused uninstall touched nothing" "$repo/install/mowglinext.sh"
+# Explicit --yes: everything goes except the yaml and the volume.
+: > "$SANDBOX/calls.log"
+out="$(timeout 120 bash "$repo/install/mowglinext.sh" uninstall --yes 2>&1)" && ec=0 || ec=$?
+assert_eq "uninstall --yes exits 0" "0" "$ec"
+assert_file_not_exists "checkout removed" "$repo/install/mowglinext.sh"
+assert_file_not_exists "docker/.env removed" "$repo/docker/.env"
+assert_eq "mowgli_robot.yaml kept byte-identical in place" "$yaml_before" "$(cat "$yaml")"
+assert_contains "stack brought down with images removed" "compose" "$(grep -a "down" "$SANDBOX/calls.log" | head -1)"
+assert_not_contains "maps volume never removed (no -v, no volume rm)" "volume rm" "$(cat "$SANDBOX/calls.log")"
+assert_not_contains "compose down does not drop volumes" "down -v" "$(cat "$SANDBOX/calls.log")"
+for f in etc/udev/rules.d/50-mowgli.rules etc/systemd/system/mowgli-updater.service usr/local/bin/mowgli-updater usr/local/bin/mowgli-up etc/mowgli-updater.json etc/profile.d/mowgli-motd.sh etc/sysctl.d/90-mowgli-dds.conf; do
+  assert_file_not_exists "host file removed: $f" "$HOST_PREFIX/$f"
+done
+assert_file_not_exists "updater state removed" "$HOST_PREFIX/var/lib/mowgli-updater/state.json"
+assert_eq "our rc.local replaced by the saved original" "original" "$(cat "$HOST_PREFIX/etc/rc.local")"
+unset HOST_PREFIX
+
 section "--only= still lists the current step names"
 repo="$SANDBOX/repo_only"
 sandbox_repo "$repo"

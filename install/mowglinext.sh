@@ -11,6 +11,8 @@
 #   mowglinext.sh repair               re-apply host artefacts (udev, UARTs, sysctl,
 #                                      .env, compose, helpers) from the SAVED choices
 #   mowglinext.sh check                diagnostics only (alias: --check)
+#   mowglinext.sh uninstall            remove everything except the maps volume and
+#                                      mowgli_robot.yaml (see lib/uninstall.sh)
 #   mowglinext.sh --only=<step>        run exactly one step (see list_only_steps)
 #
 # The installer owns the HOST side only: Docker, UARTs, udev symlinks, docker/.env,
@@ -51,6 +53,7 @@ source "${INSTALL_LIB_DIR}/checks.sh"
 source "${INSTALL_LIB_DIR}/compose.sh"
 source "${INSTALL_LIB_DIR}/tools.sh"
 source "${INSTALL_LIB_DIR}/updater.sh"
+source "${INSTALL_LIB_DIR}/uninstall.sh"
 
 
 load_preset() {
@@ -407,6 +410,10 @@ main() {
     update)  run_update  || return 1 ;;
     repair)  run_repair  || return 1 ;;
     check)   run_check_prelude || return 1 ;;
+    uninstall)
+      run_uninstall || return 1
+      return 0
+      ;;
     *)
       error "Unknown mode: $INSTALL_MODE"
       return 1

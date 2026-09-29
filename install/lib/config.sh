@@ -322,6 +322,9 @@ MODE_EXPLICIT=false
 # --non-interactive: every prompt takes its default. Also switched on
 # automatically when no controlling terminal is available (parse_args).
 NON_INTERACTIVE=false
+# Distinguishes an explicit --yes from a missing tty: only the former may
+# confirm a destructive mode (uninstall).
+NON_INTERACTIVE_EXPLICIT=false
 # --no-updater: install without the host updater service (manual updates only).
 INSTALL_UPDATER=true
 CLI_PRESET=false
@@ -766,7 +769,7 @@ compose_gnss_container_name() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      install|update|repair|check)
+      install|update|repair|check|uninstall)
         INSTALL_MODE="$1"
         MODE_EXPLICIT=true
         ;;
@@ -781,6 +784,7 @@ parse_args() {
         ;;
       --non-interactive|--yes|-y)
         NON_INTERACTIVE=true
+        NON_INTERACTIVE_EXPLICIT=true
         ;;
       --no-updater)
         INSTALL_UPDATER=false
@@ -1033,6 +1037,7 @@ select_mode() {
   echo "  2) $MSG_MODE_REPAIR"
   echo "  3) $MSG_MODE_REINSTALL"
   echo "  4) $MSG_MODE_CHECK"
+  echo "  5) $MSG_MODE_UNINSTALL"
   echo ""
   prompt "$MSG_CHOICE" "1"
   case "$REPLY" in
@@ -1040,6 +1045,7 @@ select_mode() {
     2|repair)  INSTALL_MODE="repair" ;;
     3|install|reinstall) INSTALL_MODE="install" ;;
     4|check)   INSTALL_MODE="check" ;;
+    5|uninstall) INSTALL_MODE="uninstall" ;;
     *) warn "$MSG_MODE_INVALID"; INSTALL_MODE="update" ;;
   esac
   info "$MSG_MODE_SELECTED $INSTALL_MODE"
@@ -1047,7 +1053,7 @@ select_mode() {
 
 print_usage() {
   cat <<'EOF'
-Usage: mowglinext.sh [install|update|repair|check] [options]
+Usage: mowglinext.sh [install|update|repair|check|uninstall] [options]
 
 Modes
   install (default)  Full installation. Interactive when a terminal is attached.
@@ -1057,6 +1063,9 @@ Modes
   repair             Re-apply udev rules, UART overlays, sysctl, .env, compose and the
                      helper commands from the saved choices. Never asks anything.
   check              Diagnostics only (alias: --check).
+  uninstall          Remove containers, images, the host updater, host files and the checkout.
+                     Keeps the maps volume and docker/config/mowgli/mowgli_robot.yaml in place.
+                     Asks for confirmation; without a terminal only an explicit --yes counts.
 
 Options
   --non-interactive, --yes   Every unset choice takes its default (automatic without a tty)

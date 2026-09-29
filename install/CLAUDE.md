@@ -43,6 +43,9 @@ bash install/mowglinext.sh update           # MANUAL update: sync checkout, rege
 bash install/mowglinext.sh update --branch=dev
 bash install/mowglinext.sh repair           # re-apply udev/UART/sysctl/.env/compose/helpers from saved choices, never prompts
 bash install/mowglinext.sh check            # diagnostics only (alias --check)
+bash install/mowglinext.sh uninstall        # remove everything (stack+images, updater, host files, checkout);
+                                            # KEEPS the maps volume + docker/config/mowgli/mowgli_robot.yaml in place;
+                                            # confirms on a tty, needs an explicit --yes without one (lib/uninstall.sh)
 # also: --lang= --gnss-baud= --gnss-receiver-family= --lidar-uart= --no-updater
 #       --gps= / --gps-uart= / --channel= / --tfluna* (deprecated, parsed and ignored)
 # The installer asks ONLY host wiring. Datum, NTRIP, the GNSS receiver profile
