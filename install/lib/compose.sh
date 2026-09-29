@@ -62,7 +62,11 @@ build_compose_stack() {
 
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.base.yml")
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gui.yml")
-  COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mqtt.yml")
+  # The mosquitto broker only matters to operators integrating Home Assistant
+  # or another MQTT client (docs/MQTT_CONTROL.md); it is opt-in (--mqtt=on).
+  if [[ "${ENABLE_MQTT:-false}" == "true" ]]; then
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mqtt.yml")
+  fi
 
   # In Mowgli mode, select one direct GNSS stack.
   # In MAVROS mode, GPS is handled via Pixhawk/MAVROS + NTRIP sidecar,
@@ -111,9 +115,9 @@ build_compose_stack() {
     fi
   fi
 
-  if [[ ! -f "$DOCKER_DIR/.updater-managed" ]]; then
-    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.watchtower.yml")
-  fi
+  # Watchtower is gone: the host updater does managed releases and
+  # `mowglinext.sh update` does everything else. install_host_updater still
+  # removes a Watchtower container left by an older install.
 
   if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
     COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.updater.yml")
@@ -242,15 +246,33 @@ record_compose_baseline() {
   fi
 }
 
-# Exit status 3 from `installer-stack` means: the installed Compose file has no
-# recorded baseline and differs from the current definition, so the updater
-# cannot tell a hand edit from fragments that evolved. Ask the operator; on
-# consent the updater keeps the old file as docker-compose.yaml.legacy-<UTC>.
-# A non-interactive run consents with MOWGLI_ADOPT_LEGACY_COMPOSE=true.
+# Exit status 3 from `installer-stack` means the updater cannot vouch for the
+# installed Compose file: either it has no recorded baseline and differs from
+# the current definition (a hand edit and evolved fragments look the same), or
+# its checksum no longer matches the baseline (a hand edit). Ask the operator;
+# on consent the updater keeps the exact old file next to the new one
+# (docker-compose.yaml.legacy-<UTC> / .edited-<UTC>) and regenerates it.
+# A non-interactive run consents with MOWGLI_ADOPT_LEGACY_COMPOSE=true (or
+# implicitly, since confirm() answers yes without a terminal — the old file
+# is kept either way).
 run_updater_installer_stack() {
   local selected_gnss="$1" selected_lidar="$2" status=0
   local binary="${MOWGLI_UPDATER_STACK_BINARY:-/usr/local/bin/mowgli-updater}"
   local stack_args=(installer-stack "$DOCKER_DIR" "${COMPOSE_PROJECT_NAME:-install}" "$COMPOSE_SRC_DIR" "$selected_gnss" "$selected_lidar")
+
+  # A deleted compose file is recreated from the installed definition; there
+  # is nothing to keep, but the operator is told before it happens.
+  if [[ ! -f "$FINAL_COMPOSE_FILE" ]]; then
+    warn "$MSG_COMPOSE_MISSING"
+    if ! confirm "$MSG_COMPOSE_MISSING_CONFIRM"; then
+      error "$MSG_COMPOSE_MISSING_DECLINED"
+      return 1
+    fi
+  fi
+
+  # The broker is a local (non-release) service: installer-stack must know
+  # whether to add or drop it when it regenerates the file.
+  export MOWGLI_ENABLE_MQTT="${ENABLE_MQTT:-false}"
 
   if [[ "${MOWGLI_ADOPT_LEGACY_COMPOSE:-}" == "true" ]]; then
     MOWGLI_ADOPT_LEGACY_COMPOSE=true "$binary" "${stack_args[@]}"
@@ -306,7 +328,7 @@ write_compose_merged() {
   # `config --no-interpolate` keeps `${MOWGLI_ROS2_IMAGE}` and friends as
   # literal references in the generated compose file instead of baking
   # the values from .env at install time. Without it, editing .env later
-  # (image-tag bumps, switching `:main` ↔ `:dev`, watchtower picking up
+  # (image-tag bumps, switching `:main` ↔ `:dev`, the updater picking up
   # a new pin) was silently ignored — the compose file shipped with the
   # values resolved at first install.
   if ! (

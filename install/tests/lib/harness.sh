@@ -41,7 +41,7 @@ harness_init() {
         GNSS_SERIAL_DEVICE_CLI_PRESET GNSS_SERIAL_BAUD_CLI_PRESET \
         GNSS_FRAME_ID_CLI_PRESET GNSS_NTRIP_GGA_ENABLED_CLI_PRESET \
         GNSS_NTRIP_GGA_INTERVAL_S_CLI_PRESET \
-        IMAGE_TAG \
+        IMAGE_TAG ENABLE_MQTT \
         LIDAR_ENABLED LIDAR_TYPE LIDAR_MODEL LIDAR_CONNECTION \
         LIDAR_PORT LIDAR_UART_DEVICE LIDAR_BAUD LIDAR_IMAGE \
         MOWGLI_ROS2_IMAGE GPS_IMAGE UNIVERSAL_GNSS_IMAGE \
@@ -207,6 +207,7 @@ harness_set_preset() {
         esac
         ;;
       gnss_device) GNSS_SERIAL_DEVICE_CLI_PRESET=true; GNSS_SERIAL_DEVICE="$val" ;;
+      mqtt) ENABLE_MQTT="$val" ;;
       gnss_baud) GNSS_SERIAL_BAUD_CLI_PRESET=true; GNSS_SERIAL_BAUD="$val" ;;
       lidar)
         case "$val" in

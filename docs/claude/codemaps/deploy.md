@@ -71,7 +71,6 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `compose/docker-compose.gui.yml` | 36 | `gui` (mowgli-gui), `pid: host`, docker socket, `FOXGLOVE_URL=ws://localhost:8765` |
 | `compose/docker-compose.gps.yml` | 68 | `gps` (mowgli-gps) — canonical Universal GNSS sidecar; passes `GNSS_*` with **no** hard defaults |
 | `compose/docker-compose.mqtt.yml` | 19 | `mosquitto` (mowgli-mqtt), ports 1883/9001 |
-| `compose/docker-compose.watchtower.yml` | 16 | `watchtower` (mowgli-watchtower), label-gated, 4 h poll |
 | `compose/docker-compose.lidar-ldlidar.yml` | 37 | `lidar` (mowgli-lidar), no command override — image CMD |
 | `compose/docker-compose.lidar-rplidar.yml` | 38 | `lidar` with `rplidar_a2m8_launch.py` + `LIDAR_PORT`/`LIDAR_BAUD` |
 | `compose/docker-compose.lidar-stl27l.yml` | 38 | `lidar` with `ldlidar_stl_ros2_node` + `LIDAR_MODEL`/`LIDAR_PORT`/`LIDAR_BAUD` |
@@ -161,14 +160,14 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION`, `CYCLONEDDS_URI`, `ROS_AUTOMATIC_DISCOVERY_RANGE` | `x-ros2-env` anchor in every ROS fragment (base/gps/lidar-*/mavros/vesc; gui, mqtt, watchtower and tfluna carry none) | ROS services | container env | Cyclone DDS via `/cyclonedds.xml` |
 | `TFLUNA_FRONT_ENABLED` / `TFLUNA_EDGE_ENABLED` | `compose.sh` L119–125 via `effective_tfluna_*` | `mowgli-tfluna-front/-edge` | — | **gated off**: `range_services_available` (`config.sh` L354) returns 1 while the fragments carry the `ghcr.io/...` placeholder |
 | `ENABLE_VESC` | `compose.sh` L130 via `effective_vesc_enabled` | `mowgli-vesc` | `VESC_CAN_INTERFACE` | **gated off**: `vesc_service_available` L373 always returns 1 |
-| `ENABLE_MQTT` / `ENABLE_WATCHTOWER` | `docker/stack.sh` `filter_optional_fragments` L88–103 only | `mowgli-mqtt` / `mowgli-watchtower` | — | the full installer always includes both (`compose.sh` L60, L97) |
+| `ENABLE_MQTT` | `compose.sh` `build_compose_stack` and `docker/stack.sh` `filter_optional_fragments` | `mowgli-mqtt` | — | opt-in broker (`--mqtt=on`); `installer-stack` honours `MOWGLI_ENABLE_MQTT` on regeneration |
 | `MOWER_IP` | — | — | — | printed by the MOTD only (`lib/motd.sh` L76) |
 | `DISABLE_BLUETOOTH` | — | — | — | written but never read (Bluetooth is disabled unconditionally, `uart.sh` L146) |
 | `GNSS_BACKEND`, `GPS_PROTOCOL`, `HARDWARE_BACKEND` in `docker-compose.base.yml` L19–24 | — | `mowgli-ros2` | container env | **inert** — no file under `ros2/src` reads them |
 
 ### Compose services (container names, from `install/lib/checks.sh` L3–19)
 
-`mowgli`→`mowgli-ros2`, `gps`→`mowgli-gps`, `lidar`→`mowgli-lidar`, `gui`→`mowgli-gui`, `mosquitto`→`mowgli-mqtt`, `mavros`→`mowgli-mavros`, `ntrip`→`mowgli-ntrip`, `vesc`→`mowgli-vesc`, `tfluna_front`/`tfluna_edge`→`mowgli-tfluna-front`/`-edge`. Always composed: base + gui + mqtt + watchtower (`compose.sh` L58–60, L97). Named volume `mowgli_maps` → `/ros2_ws/maps` (base L47, L61) and also mounted into `gui` (gui L33).
+`mowgli`→`mowgli-ros2`, `gps`→`mowgli-gps`, `lidar`→`mowgli-lidar`, `gui`→`mowgli-gui`, `mosquitto`→`mowgli-mqtt`, `mavros`→`mowgli-mavros`, `ntrip`→`mowgli-ntrip`, `vesc`→`mowgli-vesc`, `tfluna_front`/`tfluna_edge`→`mowgli-tfluna-front`/`-edge`. Always composed: base + gui; mqtt only with `ENABLE_MQTT=true`; Watchtower removed 2026-09-29 (`compose.sh` `build_compose_stack`). Named volume `mowgli_maps` → `/ros2_ws/maps` (base L47, L61) and also mounted into `gui` (gui L33).
 
 ### Bind mounts (host → container)
 

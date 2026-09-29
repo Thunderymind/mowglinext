@@ -109,6 +109,7 @@ GNSS_BAUD_FLAG=""
 BACKEND_FLAG=""
 IMAGE_TAG_FLAG=""
 NON_INTERACTIVE_FLAG=false
+MQTT_FLAG=""
 NO_UPDATER_FLAG=false
 
 REPO_URL="https://github.com/mowglinext/mowglinext.git"
@@ -160,6 +161,7 @@ while [[ $# -gt 0 ]]; do
     --gnss-device=*) GNSS_DEVICE_FLAG="${1#--gnss-device=}"; shift ;;
     --gnss-baud=*)   GNSS_BAUD_FLAG="${1#--gnss-baud=}"; shift ;;
     --non-interactive|--yes|-y) NON_INTERACTIVE_FLAG=true; shift ;;
+    --mqtt=*) MQTT_FLAG="${1#--mqtt=}"; shift ;;
     --no-updater) NO_UPDATER_FLAG=true; shift ;;
     --tfluna=*)  warn "TF-Luna rangefinders are no longer configured by the installer; ignoring $1"; shift ;;
     --branch=*)  REPO_BRANCH="${1#--branch=}"; shift ;;
@@ -182,6 +184,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --image-tag=TAG    Container image tag/channel for the installer"
       echo "  --non-interactive  Never prompt: every unset choice takes its default"
       echo "  --no-updater       Skip the host updater service (manual updates only)"
+      echo "  --mqtt=on|off      Run the mosquitto MQTT broker (Home Assistant integrations; default: off)"
       echo ""
       echo "Without flags, the full interactive installer runs. Datum, NTRIP and the"
       echo "GNSS receiver profile are configured in the GUI after the first start."
@@ -340,6 +343,9 @@ if [[ -n "$GNSS_DEVICE_FLAG" ]]; then
 fi
 if [[ -n "$GNSS_BAUD_FLAG" ]]; then
   INSTALLER_ARGS+=("--gnss-baud=$GNSS_BAUD_FLAG")
+fi
+if [[ -n "$MQTT_FLAG" ]]; then
+  INSTALLER_ARGS+=("--mqtt=$MQTT_FLAG")
 fi
 if $NO_UPDATER_FLAG; then
   INSTALLER_ARGS+=("--no-updater")

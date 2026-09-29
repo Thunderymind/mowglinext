@@ -165,6 +165,11 @@ func retainLocalServices(before, target []byte, managed map[string]managedServic
 	return json.Marshal(next)
 }
 
+// ErrComposeEdited: the generated Compose file no longer matches the baseline
+// recorded when it was written. The updater refuses to plan over it; the
+// installer offers to keep a copy and regenerate it (InstallStack).
+var ErrComposeEdited = errors.New("generated Compose was edited manually; move intentional changes into stack-overrides.yaml and regenerate before updating")
+
 func (b DockerBackend) checkStackBaseline() error {
 	data, err := os.ReadFile(filepath.Join(b.Config.Directory, "docker-compose.yaml"))
 	if err != nil {
@@ -175,7 +180,7 @@ func (b DockerBackend) checkStackBaseline() error {
 		return errors.New("run the current installer once to register hardware selections and the Compose baseline")
 	}
 	if strings.TrimSpace(string(expected)) != updates.Hash(data) {
-		return errors.New("generated Compose was edited manually; move intentional changes into stack-overrides.yaml and regenerate before updating")
+		return ErrComposeEdited
 	}
 	return nil
 }
