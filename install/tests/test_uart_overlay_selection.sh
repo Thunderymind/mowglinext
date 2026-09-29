@@ -24,8 +24,7 @@ source "$SCRIPT_DIR/../lib/uart.sh"
 # cannot leak state into each other.
 reset_hardware_env() {
   unset GNSS_SERIAL_DEVICE LIDAR_ENABLED LIDAR_UART_DEVICE \
-        TFLUNA_FRONT_ENABLED TFLUNA_FRONT_UART_DEVICE \
-        TFLUNA_EDGE_ENABLED TFLUNA_EDGE_UART_DEVICE
+
 }
 
 section "uart_overlay_for_device() maps ttyAMA1-5, and nothing else"
@@ -48,10 +47,6 @@ reset_hardware_env
 GNSS_SERIAL_DEVICE="/dev/ttyAMA4"
 LIDAR_ENABLED="true"
 LIDAR_UART_DEVICE="/dev/ttyAMA5"
-TFLUNA_FRONT_ENABLED="false"
-TFLUNA_FRONT_UART_DEVICE="/dev/ttyAMA3"   # set (range.sh's own `:=` default) but NOT enabled
-TFLUNA_EDGE_ENABLED="false"
-TFLUNA_EDGE_UART_DEVICE="/dev/ttyAMA2"    # same — must not leak into the result
 assert_eq "typical GNSS+LiDAR install needs exactly uart4+uart5" \
   "4
 5" "$(required_uart_overlays | sort -un)"
@@ -71,22 +66,6 @@ GNSS_SERIAL_DEVICE="/dev/ttyAMA4"
 LIDAR_ENABLED="false"
 LIDAR_UART_DEVICE="/dev/ttyAMA5"
 assert_eq "disabled LiDAR does not claim a uart overlay" "4" "$(required_uart_overlays)"
-
-section "TF-Luna front+edge enabled claims uart2+uart3 in addition to GNSS+LiDAR"
-
-reset_hardware_env
-GNSS_SERIAL_DEVICE="/dev/ttyAMA4"
-LIDAR_ENABLED="true"
-LIDAR_UART_DEVICE="/dev/ttyAMA5"
-TFLUNA_FRONT_ENABLED="true"
-TFLUNA_FRONT_UART_DEVICE="/dev/ttyAMA3"
-TFLUNA_EDGE_ENABLED="true"
-TFLUNA_EDGE_UART_DEVICE="/dev/ttyAMA2"
-assert_eq "all four peripherals enabled -> uart2,3,4,5, never uart1" \
-  "2
-3
-4
-5" "$(required_uart_overlays | sort -un)"
 
 section "A non-default wiring choice (e.g. LiDAR on ttyAMA2 on a Pi 5) is honoured, not assumed"
 

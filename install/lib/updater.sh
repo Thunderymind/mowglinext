@@ -2,9 +2,10 @@
 # Host updater bootstrap. Download/build selection runs as the project user;
 # only installation of host files and service management use sudo.
 
+# Managed releases cover the Mowgli mainboard stack only; MAVROS keeps the
+# legacy installer path (its containers are not part of the release bundle).
 updater_hardware_supported() {
-  [[ "${HARDWARE_BACKEND:-mowgli}" == "mowgli" ]] &&
-    ! effective_tfluna_front_enabled && ! effective_tfluna_edge_enabled && ! effective_vesc_enabled
+  [[ "${HARDWARE_BACKEND:-mowgli}" == "mowgli" ]]
 }
 
 # Called before rewriting any runtime configuration, and again at bootstrap.

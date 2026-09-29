@@ -47,28 +47,9 @@ MSG_LIDAR_CONNECTION="Connexion LiDAR :"
 MSG_LIDAR_INVALID_TYPE="Choix LiDAR invalide"
 MSG_LIDAR_INVALID_CONNECTION="Choix connexion LiDAR invalide"
 
-# ── Rangefinders (range.sh) ──
-MSG_TFLUNA_CONFIG="Configuration des capteurs TF-Luna :"
-MSG_TFLUNA_NONE="Aucun"
-MSG_TFLUNA_FRONT_ONLY="Front uniquement"
-MSG_TFLUNA_EDGE_ONLY="Edge uniquement"
-MSG_TFLUNA_FRONT_EDGE="Front + edge"
-MSG_TFLUNA_INVALID="Choix TF-Luna invalide"
 
 # ── Tools (tools.sh) ──
-MSG_TOOLS_DOCKER_CLI="Outils optionnels : gestionnaire Docker en ligne de commande"
-MSG_TOOLS_DOCKER_LAZY="Oui, installer lazydocker (recommande)"
-MSG_TOOLS_DOCKER_CTOP="Oui, installer ctop (alternatif)"
-MSG_TOOLS_NO="Non"
-MSG_TOOLS_FILE_MANAGER="Outils optionnels : gestionnaire de fichiers"
-MSG_TOOLS_FILE_MC="Oui, installer Midnight Commander (mc)"
-MSG_TOOLS_FILE_RANGER="Oui, installer ranger"
-MSG_TOOLS_DEBUG="Outils optionnels : developpement et debug"
-MSG_TOOLS_DEBUG_ALL="Tous les outils (recommande)"
-MSG_TOOLS_DEBUG_ESSENTIAL="Outils essentiels seulement"
-MSG_TOOLS_DEBUG_NONE="Aucun"
 MSG_TOOLS_HELPERS="Outils optionnels : helpers Mowgli"
-MSG_TOOLS_HELPERS_CONFIRM="Installer les commandes helper Mowgli ?"
 
 # ── MOTD (motd.sh) ──
 MSG_MOTD_NOT_CONNECTED="non connecte"
@@ -79,6 +60,7 @@ MSG_MOTD_NOT_SET="non defini"
 MSG_MOTD_RUNNING="actif(s)"
 
 MSG_UPDATER_STACK_BACKEND="Les mises à jour gérées prennent en charge le matériel Mowgli."
+MSG_UPDATE_MANUAL_UPDATER="Le service de mise a jour est installe. Cette mise a jour manuelle regenere les fichiers avec les memes outils, il pourra donc l'adopter ; jusqu'a la prochaine version geree, Reglages > Mises a jour signalera l'installation comme divergente."
 MSG_UPDATER_HARDWARE_LEGACY="Ces choix matériels nécessitent le parcours d'installation existant (MAVROS, TF-Luna ou VESC). Les conteneurs sélectionnés sont conservés ; les mises à jour coordonnées ne sont pas activées."
 MSG_UPDATER_HARDWARE_MANAGED="Cette installation utilise déjà les mises à jour gérées. Les choix MAVROS, TF-Luna et VESC nécessitent une migration explicite ; les fichiers d'exécution n'ont pas été régénérés."
 MSG_UPDATER_STACK_REVIEW="Choix matériels enregistrés. Consultez les mises à jour logicielles pour appliquer les changements de conteneurs ; la définition installée a été conservée."

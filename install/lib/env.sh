@@ -87,10 +87,18 @@ env_yaml_value() {
   printf '%s\n' "$value"
 }
 
+# The GNSS_NTRIP_* keys in docker/.env are fallback-only first-boot defaults
+# (the sidecar resolves mowgli_robot.yaml first). They mirror the runtime
+# yaml when it exists and the SPARSE SEED before the first write, so a
+# re-run never changes them: NTRIP is GUI-owned and the installer no longer
+# has an opinion of its own.
 load_gnss_ntrip_runtime_defaults() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local yaml_enabled yaml_host yaml_port yaml_user yaml_password yaml_mountpoint
 
+  if [[ ! -f "$yaml_file" ]]; then
+    yaml_file="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
+  fi
   if [[ ! -f "$yaml_file" ]]; then
     return 0
   fi
@@ -263,17 +271,6 @@ setup_env() {
     : "${LIDAR_BAUD:=230400}"
   fi
 
-  # TF-Luna
-  : "${TFLUNA_FRONT_ENABLED:=false}"
-  : "${TFLUNA_FRONT_PORT:=/dev/tfluna_front}"
-  : "${TFLUNA_FRONT_UART_DEVICE:=/dev/ttyAMA3}"
-  : "${TFLUNA_FRONT_BAUD:=115200}"
-
-  : "${TFLUNA_EDGE_ENABLED:=false}"
-  : "${TFLUNA_EDGE_PORT:=/dev/tfluna_edge}"
-  : "${TFLUNA_EDGE_UART_DEVICE:=/dev/ttyAMA2}"
-  : "${TFLUNA_EDGE_BAUD:=115200}"
-
   # Image tag — re-validate IMAGE_TAG (might have been loaded from .env
   # by load_env_defaults_file or set by --image-tag=/preset) and rebuild the
   # *_IMAGE_DEFAULT vars to match. mowglinext.sh unsets all *_IMAGE values
@@ -345,15 +342,13 @@ setup_env() {
   upsert_env_key "$env_file" "LIDAR_UART_DEVICE" "$LIDAR_UART_DEVICE"
   upsert_env_key "$env_file" "LIDAR_BAUD" "$LIDAR_BAUD"
 
-  upsert_env_key "$env_file" "TFLUNA_FRONT_ENABLED" "$TFLUNA_FRONT_ENABLED"
-  upsert_env_key "$env_file" "TFLUNA_FRONT_PORT" "$TFLUNA_FRONT_PORT"
-  upsert_env_key "$env_file" "TFLUNA_FRONT_UART_DEVICE" "$TFLUNA_FRONT_UART_DEVICE"
-  upsert_env_key "$env_file" "TFLUNA_FRONT_BAUD" "$TFLUNA_FRONT_BAUD"
-
-  upsert_env_key "$env_file" "TFLUNA_EDGE_ENABLED" "$TFLUNA_EDGE_ENABLED"
-  upsert_env_key "$env_file" "TFLUNA_EDGE_PORT" "$TFLUNA_EDGE_PORT"
-  upsert_env_key "$env_file" "TFLUNA_EDGE_UART_DEVICE" "$TFLUNA_EDGE_UART_DEVICE"
-  upsert_env_key "$env_file" "TFLUNA_EDGE_BAUD" "$TFLUNA_EDGE_BAUD"
+  # Retired hardware options (TF-Luna, VESC) are scrubbed from older .env
+  # files so a stale key can never re-select a fragment that no longer exists.
+  remove_env_keys_with_prefix "$env_file" "TFLUNA_"
+  remove_env_key "$env_file" "ENABLE_VESC"
+  remove_env_key "$env_file" "VESC_IMAGE"
+  remove_env_key "$env_file" "VESC_CAN_INTERFACE"
+  remove_env_key "$env_file" "RANGE_IMAGE"
 
   upsert_env_key "$env_file" "MOWGLI_ROS2_IMAGE" "$MOWGLI_ROS2_IMAGE"
   upsert_env_key "$env_file" "UNIVERSAL_GNSS_IMAGE" "$UNIVERSAL_GNSS_IMAGE"

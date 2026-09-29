@@ -140,7 +140,7 @@ uart_overlay_for_device() {
 # Which of the five Raspberry Pi UART overlays the hardware CONFIGURED so far
 # this run actually needs — derived from the exact port the operator picked
 # for each peripheral (`pick_uart_port`, `GNSS_SERIAL_DEVICE` /
-# `LIDAR_UART_DEVICE` / `TFLUNA_{FRONT,EDGE}_UART_DEVICE`), not a fixed
+# `LIDAR_UART_DEVICE`), not a fixed
 # per-peripheral assumption: real installs don't always land a given
 # peripheral on the same header pin (e.g. a Pi 5 install that wired the LiDAR
 # to ttyAMA2 instead of the common default ttyAMA5). Nothing here ever claims
@@ -163,13 +163,7 @@ required_uart_overlays() {
     n="$(uart_overlay_for_device "${LIDAR_UART_DEVICE:-}")" && printf '%s\n' "$n"
   fi
 
-  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" ]]; then
-    n="$(uart_overlay_for_device "${TFLUNA_FRONT_UART_DEVICE:-}")" && printf '%s\n' "$n"
-  fi
 
-  if [[ "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
-    n="$(uart_overlay_for_device "${TFLUNA_EDGE_UART_DEVICE:-}")" && printf '%s\n' "$n"
-  fi
 }
 
 enable_all_platform_uarts() {

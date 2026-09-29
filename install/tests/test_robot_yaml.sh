@@ -25,7 +25,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart
 
 if ! harness_run; then
   fail "harness_run" "non-zero exit"
@@ -43,9 +43,9 @@ assert_file_exists "yaml exists" "$YAML"
 CONTENT="$(cat "$YAML")"
 
 assert_match "datum_lat is zero placeholder" \
-  '^[[:space:]]+datum_lat:[[:space:]]+0(\.0)?[[:space:]]*$' "$CONTENT"
+  '^[[:space:]]+datum_lat:[[:space:]]+0(\.0+)?[[:space:]]*$' "$CONTENT"
 assert_match "datum_lon is zero placeholder" \
-  '^[[:space:]]+datum_lon:[[:space:]]+0(\.0)?[[:space:]]*$' "$CONTENT"
+  '^[[:space:]]+datum_lon:[[:space:]]+0(\.0+)?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_receiver_family=auto" \
   '^[[:space:]]+gnss_receiver_family:[[:space:]]+"?auto"?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_serial_device=/dev/ttyAMA4" \
@@ -58,8 +58,9 @@ assert_match "gnss_transport=serial" \
   '^[[:space:]]+gnss_transport:[[:space:]]+"?serial"?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_frame_id=gps_link" \
   '^[[:space:]]+gnss_frame_id:[[:space:]]+"?gps_link"?[[:space:]]*$' "$CONTENT"
-assert_match "ntrip_enabled=true" \
-  '^[[:space:]]+ntrip_enabled:[[:space:]]+true[[:space:]]*$' "$CONTENT"
+# NTRIP is GUI-owned: the installer leaves the seed default (false) alone.
+assert_match "ntrip_enabled keeps the seed default (GUI-owned)" \
+  '^[[:space:]]+ntrip_enabled:[[:space:]]+false[[:space:]]*$' "$CONTENT"
 assert_match "gnss_ntrip_gga_enabled=true" \
   '^[[:space:]]+gnss_ntrip_gga_enabled:[[:space:]]+true[[:space:]]*$' "$CONTENT"
 assert_match "gnss_ntrip_gga_interval_s=10" \
