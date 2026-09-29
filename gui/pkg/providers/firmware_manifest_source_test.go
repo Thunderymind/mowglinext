@@ -110,6 +110,67 @@ func TestInstallManifestForANonReleaseBuildUsesLatest(t *testing.T) {
 	assert.Equal(t, "v1.4.0", source.Release)
 }
 
+// stubActiveDeploymentSource replaces activeDeploymentSource for the duration
+// of the test, restoring the original on cleanup — same pattern as
+// serveReleases' save/restore of the URL vars above.
+func stubActiveDeploymentSource(t *testing.T, repo, releaseTag string, ok bool) {
+	t.Helper()
+	old := activeDeploymentSource
+	activeDeploymentSource = func() (string, string, bool) { return repo, releaseTag, ok }
+	t.Cleanup(func() { activeDeploymentSource = old })
+}
+
+// The whole point of this fix: a FORK's own dev/custom deployment must fetch
+// its manifest from the FORK, never from upstream — buildinfo.Version alone
+// ("deployment-<sha>-<run>-<attempt>") cannot say which repository minted it,
+// so before this fix ownReleaseManifestURL always assumed upstream, 404'd
+// against a release that only ever existed on the fork, and silently fell
+// back to upstream's stable firmware (mowglinext#XXX) — offering only "main"
+// firmware for a "dev" build, exactly the field-reported symptom.
+func TestOwnReleaseManifestURLPrefersTheActiveDeploymentSource(t *testing.T) {
+	stubActiveDeploymentSource(t, "fwelvering/mowglinext", "deployment-abc-1-1", true)
+	url, own := ownReleaseManifestURL("deployment-abc-1-1")
+	assert.True(t, own)
+	assert.Equal(t, "https://github.com/fwelvering/mowglinext/releases/download/deployment-abc-1-1/manifest.json", url)
+}
+
+// When the worker can't say (unreachable, or genuinely no active deployment
+// yet — a very early boot), fall back to the old upstream-only heuristic
+// rather than erroring out.
+func TestOwnReleaseManifestURLFallsBackWhenWorkerUnreachable(t *testing.T) {
+	stubActiveDeploymentSource(t, "", "", false)
+	url, own := ownReleaseManifestURL("deployment-abc-1-1")
+	assert.True(t, own)
+	assert.Equal(t, firmwareReleaseDownloadBase+"deployment-abc-1-1/manifest.json", url)
+}
+
+// End-to-end: a fork's dev deployment must resolve its OWN manifest (from the
+// fork), not upstream's stable one, even though the version string alone
+// looks identical to an upstream deployment build.
+func TestInstallManifestUsesTheForkOwnReleaseWhenTheWorkerReportsIt(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fwelvering/mowglinext/releases/download/deployment-fork-1-1/manifest.json", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(manifestBody("deployment-fork-1-1", 9)))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	oldGithub := githubReleaseBase
+	githubReleaseBase = server.URL + "/"
+	t.Cleanup(func() { githubReleaseBase = oldGithub })
+	stubActiveDeploymentSource(t, "fwelvering/mowglinext", "deployment-fork-1-1", true)
+
+	// Also serve the upstream fallback, so a wrong fallback to it (a
+	// regression) would still succeed but with the WRONG protocol — making
+	// the assertion below fail loudly instead of masking the bug as an error.
+	serveReleases(t, map[string]int{}, "v1.4.0")
+
+	manifest, source, err := fetchInstallFirmwareManifest("deployment-fork-1-1")
+	require.NoError(t, err)
+	assert.True(t, source.OwnRelease)
+	assert.Equal(t, "deployment-fork-1-1", source.Release)
+	assert.Equal(t, 9, manifest.ProtocolVersion)
+}
+
 func TestAvailableFirmwareForTheSavedBoard(t *testing.T) {
 	serveReleases(t, map[string]int{}, "v1.4.0")
 	db := types.NewMockDBProvider()

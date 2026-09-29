@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mowglinext/mowglinext/pkg/updater"
 	"golang.org/x/xerrors"
 )
 
@@ -23,26 +24,106 @@ const DefaultFirmwareManifestURL = "https://github.com/mowglinext/mowglinext/rel
 
 // firmwareReleaseDownloadBase is where a specific release's assets live, and
 // latestFirmwareManifestURL the latest-stable fallback. Variables only so the
-// tests can point them at a local server.
+// tests can point them at a local server. Both are the UPSTREAM repository —
+// used only by firmwareManifestURLForVersion's heuristic fallback below, when
+// activeDeploymentSource can't say which repository this installation is
+// actually running (see ownReleaseManifestURL).
 var (
 	firmwareReleaseDownloadBase = "https://github.com/mowglinext/mowglinext/releases/download/"
 	latestFirmwareManifestURL   = DefaultFirmwareManifestURL
+	// githubReleaseBase composes a manifest URL for an ARBITRARY repository
+	// (the active deployment's own, which may be a fork) — a variable, like
+	// the two above, only so tests can point it at a local server.
+	githubReleaseBase = "https://github.com/"
 )
 
 // stableReleaseTag matches a production release (vMAJOR.MINOR.PATCH).
 var stableReleaseTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 // firmwareManifestURLForVersion returns the manifest published WITH the given
-// GUI build: every deployment release (dev, custom branch) and every stable
-// vX.Y.Z release carries the firmware built from the same revision, i.e. the
-// one whose wire protocol matches the ROS2 image of that deployment. A build
-// that is not a release (local, branch image) gets the latest stable manifest;
-// the bool reports whether the URL is the build's own release.
+// GUI build, assuming it is UPSTREAM's own release: every deployment release
+// (dev, custom branch) and every stable vX.Y.Z release carries the firmware
+// built from the same revision, i.e. the one whose wire protocol matches the
+// ROS2 image of that deployment. A build that is not a release (local, branch
+// image) gets the latest stable manifest; the bool reports whether the URL is
+// the build's own release.
+//
+// This is a FALLBACK HEURISTIC only, used by ownReleaseManifestURL below when
+// the update worker can't say which repository is actually running — a
+// version string like "deployment-<sha>-<run>-<attempt>" is, by itself,
+// silent about which repository minted it, so guessing upstream is wrong for
+// any fork's own dev/custom deployment (mowglinext#XXX: it 404s every "own
+// release" fetch against a release that only exists on the fork, and
+// silently, permanently falls back to upstream's stable/main firmware
+// instead of the matching one).
 func firmwareManifestURLForVersion(version string) (string, bool) {
 	if strings.HasPrefix(version, "deployment-") || stableReleaseTag.MatchString(version) {
 		return firmwareReleaseDownloadBase + version + "/manifest.json", true
 	}
 	return latestFirmwareManifestURL, false
+}
+
+// updaterSocketPath mirrors UpdaterRoutes' (pkg/api/updater.go) own socket
+// resolution. Duplicated rather than imported to avoid pkg/providers
+// depending on pkg/api.
+func updaterSocketPath() string {
+	if s := os.Getenv("MOWGLI_UPDATER_SOCKET"); s != "" {
+		return s
+	}
+	return "/run/mowgli-updater/updater.sock"
+}
+
+// activeDeploymentSource asks the local update worker (over the same unix
+// socket UpdaterRoutes proxies to the frontend as GET /api/system/updater/
+// state) which repository and release tag this installation is ACTUALLY
+// running — the one place that information genuinely lives, since it is set
+// once at update time from the deployment that was installed
+// (updater.Deployment.Source.Repository / .ReleaseTag), not derivable from a
+// version string alone. A package var, like firmwareReleaseDownloadBase/
+// latestFirmwareManifestURL/githubReleaseBase above, so tests can stub it
+// without a real socket. ok is false when the worker is unreachable (a very
+// early boot, or an install predating the worker) or reports no active
+// deployment yet.
+var activeDeploymentSource = func() (repo, releaseTag string, ok bool) {
+	client := updater.Client(updaterSocketPath())
+	client.Timeout = 5 * time.Second
+	resp, err := client.Get("http://updater/v1/state")
+	if err != nil {
+		return "", "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", false
+	}
+	var body struct {
+		State struct {
+			Active *struct {
+				Source struct {
+					Repository string `json:"repository"`
+				} `json:"source"`
+				ReleaseTag string `json:"release_tag"`
+			} `json:"active"`
+		} `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.State.Active == nil {
+		return "", "", false
+	}
+	repo, releaseTag = body.State.Active.Source.Repository, body.State.Active.ReleaseTag
+	return repo, releaseTag, repo != "" && releaseTag != ""
+}
+
+// ownReleaseManifestURL resolves the manifest URL for THIS installation's own
+// release, preferring the repository the update worker reports it is
+// actually running (activeDeploymentSource) — the authoritative answer,
+// correct for upstream, a fork, or any other trusted source — and falling
+// back to firmwareManifestURLForVersion's upstream-only heuristic only when
+// the worker can't say (see its doc comment for why guessing upstream is
+// unsafe otherwise).
+func ownReleaseManifestURL(version string) (string, bool) {
+	if repo, releaseTag, ok := activeDeploymentSource(); ok {
+		return githubReleaseBase + repo + "/releases/download/" + releaseTag + "/manifest.json", true
+	}
+	return firmwareManifestURLForVersion(version)
 }
 
 // FirmwareManifestSource says which manifest a flash would use.
@@ -60,7 +141,7 @@ type FirmwareManifestSource struct {
 // deployment published before deployments carried firmware, or a build that
 // is not a release). The fallback is reported so the flash log can say so.
 func fetchInstallFirmwareManifest(version string) (*firmwareManifest, FirmwareManifestSource, error) {
-	url, own := firmwareManifestURLForVersion(version)
+	url, own := ownReleaseManifestURL(version)
 	manifest, err := fetchFirmwareManifest(url)
 	if err == nil {
 		return manifest, FirmwareManifestSource{URL: url, Release: manifest.Tag, OwnRelease: own}, nil
