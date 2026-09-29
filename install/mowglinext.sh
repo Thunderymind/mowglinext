@@ -289,6 +289,10 @@ run_update() {
   unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
   select_image_channel
 
+  # Manual mode: the checkout's fragments and .env image tags decide, not the
+  # release the updater installed (which is exactly what a stuck updater
+  # cannot move past). See write_compose_merged / installer-stack.
+  export MOWGLI_REGENERATE_STACK=true
   if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
     warn "$MSG_UPDATE_MANUAL_UPDATER"
   fi
@@ -317,6 +321,7 @@ run_repair() {
 
   require_installed_runtime || return 1
   NON_INTERACTIVE=true
+  export MOWGLI_REGENERATE_STACK=true
   load_install_state
   unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE
   recompute_image_defaults

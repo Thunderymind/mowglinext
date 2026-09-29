@@ -227,3 +227,51 @@ func TestInstallStackRecordedBaselineSeparatesEvolutionFromHandEdits(t *testing.
 		t.Fatalf("an unedited generated file needs no legacy backup, got %v", backups)
 	}
 }
+
+// Manual `update`/`repair` on an updater-managed robot: the installed
+// release's compose must be replaced by the checkout's definition (the
+// operator pulled a new version on purpose), the release record cleared so
+// the updater can adopt the result later, and the baseline re-recorded.
+func TestInstallStackRegenerateOverridesActiveRelease(t *testing.T) {
+	b, source, generated := installStackFixture(t)
+	legacy := filepath.Join(b.Config.Directory, "docker-compose.yaml")
+	baseline := filepath.Join(b.Config.Directory, "stack-definition.sha256")
+	older := withoutGNSSStack(t, generated)
+	if err := os.WriteFile(legacy, []byte(older), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baseline, []byte(updates.Hash([]byte(older))+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := ReadComposeBundle(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := fixture()
+	for name, value := range map[string]any{"stack-bundle.json": bundle, "stack-release.json": release, "stack-selection.json": StackSelection{Options: installChoices}} {
+		if err = AtomicJSON(filepath.Join(b.Config.Directory, name), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Without the flag an active release keeps its compose (propose only).
+	if err = b.InstallStack(context.Background(), source, installChoices, false); err != nil {
+		t.Fatalf("propose-only rerun: %v", err)
+	}
+	if data, _ := os.ReadFile(legacy); string(data) != older {
+		t.Fatal("propose-only rerun rewrote the release's compose")
+	}
+	t.Setenv(RegenerateStackEnv, "true")
+	if err = b.InstallStack(context.Background(), source, installChoices, false); err != nil {
+		t.Fatalf("manual regeneration: %v", err)
+	}
+	data, _ := os.ReadFile(legacy)
+	if !strings.Contains(string(data), "GNSS_STACK") {
+		t.Fatal("manual regeneration did not render the checkout's fragments")
+	}
+	if err = b.checkStackBaseline(); err != nil {
+		t.Fatalf("manual regeneration left no valid baseline: %v", err)
+	}
+	if rel, _ := os.ReadFile(filepath.Join(b.Config.Directory, "stack-release.json")); strings.TrimSpace(string(rel)) != "null" {
+		t.Fatalf("release record not cleared after manual regeneration: %s", rel)
+	}
+}

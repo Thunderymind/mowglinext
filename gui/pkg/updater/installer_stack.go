@@ -23,6 +23,14 @@ const AdoptLegacyEnv = "MOWGLI_ADOPT_LEGACY_COMPOSE"
 // it, unset keeps whatever the replaced file had and never adds it.
 const EnableMQTTEnv = "MOWGLI_ENABLE_MQTT"
 
+// RegenerateStackEnv makes installer-stack render docker-compose.yaml from
+// the CHECKOUT's fragments even while a published release is active (the
+// installer's manual `update`/`repair`). The release record is cleared so the
+// file is installer-owned again; the next reviewed update adopts it.
+const RegenerateStackEnv = "MOWGLI_REGENERATE_STACK"
+
+func regenerateStack() bool { return os.Getenv(RegenerateStackEnv) == "true" }
+
 func mqttWanted() bool   { return os.Getenv(EnableMQTTEnv) == "true" }
 func mqttUnwanted() bool { return os.Getenv(EnableMQTTEnv) == "false" }
 
@@ -116,6 +124,16 @@ func (b DockerBackend) InstallStack(ctx context.Context, sourceDir string, choic
 		}
 	} else if !os.IsNotExist(e) {
 		return e
+	}
+	if active != nil && regenerateStack() {
+		// Manual update: the operator wants THIS checkout's definition, not
+		// the release the updater installed. renderInstalledStack still asks
+		// for consent on a hand-edited file and keeps it.
+		bundle, err = ReadComposeBundle(sourceDir)
+		if err != nil {
+			return err
+		}
+		return b.renderInstalledStack(ctx, bundle, selection, nil, sourceDir, adoptLegacy)
 	}
 	if active != nil {
 		regenerate, err := b.reconcileInstalledCompose(adoptLegacy)

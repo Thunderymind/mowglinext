@@ -118,6 +118,31 @@ harness_run >/dev/null 2>&1 || fail "legacy mqtt run" "non-zero exit"
 assert_contains "existing broker is kept when .env has no ENABLE_MQTT" "ENABLE_MQTT=true" "$(cat "$repo/docker/.env")"
 assert_contains "existing broker stays composed" "mowgli-mqtt" "$(cat "$repo/docker/docker-compose.yaml")"
 
+section "manual update on an updater-managed robot regenerates from the checkout and drops the image pins"
+repo="$SANDBOX/repo_managed"
+sandbox_repo "$repo"
+harness_init "$repo"
+harness_set_preset gnss=auto gnss_connection=uart lidar=none
+harness_run >/dev/null 2>&1 || fail "seed run" "non-zero exit"
+touch "$repo/docker/.updater-managed"
+printf '{"services":{}}\n' > "$repo/docker/update-images.json"
+STUB="$SANDBOX/installer-stack-stub"; STUB_LOG="$SANDBOX/installer-stack.log"
+cat > "$STUB" <<EOF
+#!/usr/bin/env bash
+printf 'regen=%s mqtt=%s\n' "\${MOWGLI_REGENERATE_STACK:-unset}" "\${MOWGLI_ENABLE_MQTT:-unset}" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$STUB"
+export MOWGLI_UPDATER_STACK_BINARY="$STUB"
+MOWGLI_REGENERATE_STACK=true write_compose_merged >/dev/null 2>&1 && pass "managed regeneration returns 0" || fail "managed regeneration" "non-zero exit"
+assert_contains "installer-stack told to regenerate from the checkout" "regen=true" "$(cat "$STUB_LOG")"
+assert_file_not_exists "updater image pins set aside" "$repo/docker/update-images.json"
+if compgen -G "$repo/docker/update-images.json.old.*" >/dev/null; then pass "pins kept as a dated copy"; else fail "pins kept as a dated copy" "no update-images.json.old.*"; fi
+: > "$STUB_LOG"; printf '{"services":{}}\n' > "$repo/docker/update-images.json"
+MOWGLI_REGENERATE_STACK=false write_compose_merged >/dev/null 2>&1 || true
+assert_file_exists "install (propose-only) keeps the updater pins" "$repo/docker/update-images.json"
+unset MOWGLI_UPDATER_STACK_BINARY
+
 section "--only= still lists the current step names"
 repo="$SANDBOX/repo_only"
 sandbox_repo "$repo"
