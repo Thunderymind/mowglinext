@@ -273,6 +273,7 @@ run_updater_installer_stack() {
   # The broker is a local (non-release) service: installer-stack must know
   # whether to add or drop it when it regenerates the file.
   export MOWGLI_ENABLE_MQTT="${ENABLE_MQTT:-false}"
+  export MOWGLI_REGENERATE_STACK="${MOWGLI_REGENERATE_STACK:-false}"
 
   if [[ "${MOWGLI_ADOPT_LEGACY_COMPOSE:-}" == "true" ]]; then
     MOWGLI_ADOPT_LEGACY_COMPOSE=true "$binary" "${stack_args[@]}"
@@ -307,7 +308,15 @@ write_compose_merged() {
     fi
     if [[ "${LIDAR_ENABLED:-true}" == "true" ]]; then selected_lidar="${LIDAR_TYPE:-none}"; fi
     run_updater_installer_stack "$selected_gnss" "$selected_lidar" || return 1
-    if [[ -s "$DOCKER_DIR/stack-release.json" ]] && [[ "$(cat "$DOCKER_DIR/stack-release.json")" != "null" ]]; then
+    if [[ "${MOWGLI_REGENERATE_STACK:-false}" == "true" ]]; then
+      # The updater's digest pins would put the old images back under the
+      # new definition; images now follow the .env tags. The pins are kept
+      # as a dated copy, and the next reviewed update writes fresh ones.
+      if [[ -f "$DOCKER_DIR/update-images.json" ]]; then
+        backup_path_if_exists "$DOCKER_DIR/update-images.json"
+        info "$MSG_UPDATE_MANUAL_PINS"
+      fi
+    elif [[ -s "$DOCKER_DIR/stack-release.json" ]] && [[ "$(cat "$DOCKER_DIR/stack-release.json")" != "null" ]]; then
       info "$MSG_UPDATER_STACK_REVIEW"
     fi
     prune_backup_if_unchanged "$FINAL_COMPOSE_FILE" "${MIGRATED_COMPOSE_BACKUP:-}"
