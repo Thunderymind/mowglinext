@@ -70,21 +70,21 @@ section "--check aligns with runtime backend selection"
 repo_mowgli="$SANDBOX/repo_mowgli"
 sandbox_repo "$repo_mowgli"
 harness_init "$repo_mowgli"
-harness_set_preset backend=mowgli gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset backend=mowgli gnss=auto gnss_connection=uart lidar=ldlidar-uart
 harness_run >/dev/null 2>&1
 assert_runtime_check_case "mowgli gps" "$repo_mowgli" "gps (mowgli-gps)"
 
 repo_nmea="$SANDBOX/repo_nmea"
 sandbox_repo "$repo_nmea"
 harness_init "$repo_nmea"
-harness_set_preset backend=mowgli gnss=nmea gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset backend=mowgli gnss=nmea gnss_connection=uart lidar=ldlidar-uart
 harness_run >/dev/null 2>&1
 assert_runtime_check_case "mowgli gps+nmea" "$repo_nmea" "gps (mowgli-gps)"
 
 repo_mavros="$SANDBOX/repo_mavros"
 sandbox_repo "$repo_mavros"
 harness_init "$repo_mavros"
-harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart
 harness_run >/dev/null 2>&1
 output_mavros="$(bash "$repo_mavros/install/mowglinext.sh" --check 2>&1)"
 ec=$?

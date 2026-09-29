@@ -47,28 +47,9 @@ MSG_LIDAR_CONNECTION="LiDAR connection:"
 MSG_LIDAR_INVALID_TYPE="Invalid LiDAR choice"
 MSG_LIDAR_INVALID_CONNECTION="Invalid LiDAR connection choice"
 
-# ── Rangefinders (range.sh) ──
-MSG_TFLUNA_CONFIG="TF-Luna sensor configuration:"
-MSG_TFLUNA_NONE="None"
-MSG_TFLUNA_FRONT_ONLY="Front only"
-MSG_TFLUNA_EDGE_ONLY="Edge only"
-MSG_TFLUNA_FRONT_EDGE="Front + edge"
-MSG_TFLUNA_INVALID="Invalid TF-Luna choice"
 
 # ── Tools (tools.sh) ──
-MSG_TOOLS_DOCKER_CLI="Optional tools: Docker CLI manager"
-MSG_TOOLS_DOCKER_LAZY="Yes, install lazydocker (recommended)"
-MSG_TOOLS_DOCKER_CTOP="Yes, install ctop (alternative)"
-MSG_TOOLS_NO="No"
-MSG_TOOLS_FILE_MANAGER="Optional tools: file manager"
-MSG_TOOLS_FILE_MC="Yes, install Midnight Commander (mc)"
-MSG_TOOLS_FILE_RANGER="Yes, install ranger"
-MSG_TOOLS_DEBUG="Optional tools: development and debug"
-MSG_TOOLS_DEBUG_ALL="All tools (recommended)"
-MSG_TOOLS_DEBUG_ESSENTIAL="Essential tools only"
-MSG_TOOLS_DEBUG_NONE="None"
 MSG_TOOLS_HELPERS="Optional tools: Mowgli helpers"
-MSG_TOOLS_HELPERS_CONFIRM="Install Mowgli helper commands?"
 
 # ── MOTD (motd.sh) ──
 MSG_MOTD_NOT_CONNECTED="not connected"
@@ -79,6 +60,7 @@ MSG_MOTD_NOT_SET="not set"
 MSG_MOTD_RUNNING="running"
 
 MSG_UPDATER_STACK_BACKEND="Managed release updates support the Mowgli hardware backend."
+MSG_UPDATE_MANUAL_UPDATER="The host updater is installed. This manual update regenerates the runtime files with the same writers, so the updater can adopt the result; until the next managed release Settings > Updates will report the installation as drifted."
 MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
 MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
 MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to apply container changes; the installed release definition has been retained."

@@ -35,7 +35,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=auto gnss_connection=uart lidar=none tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=none
 
 file_digest() {
   if command -v sha256sum >/dev/null 2>&1; then

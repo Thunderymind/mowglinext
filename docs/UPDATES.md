@@ -560,6 +560,20 @@ sudo mowgli-updater recover
 sudo journalctl -u mowgli-updater.service -n 100
 ```
 
+### Manual update without the host updater
+
+`install/mowglinext.sh update` (see the wiki's Getting Started) is the
+operator escape hatch when the updater cannot or must not run: it syncs the
+checkout to the chosen branch, regenerates `docker/.env` and the merged
+Compose file from the current fragments with the SAME writers as a fresh
+install (so `docker/stack-definition.sha256` is re-recorded), pulls the images
+for the chosen tag and restarts the containers. It applies no readiness gate,
+no firmware-protocol check and no backup/rollback transaction. An installed
+updater is left running; because nothing is hand-edited it can adopt the
+result, and until the next managed release Settings > Updates reports the
+installation as drifted. Never hand-override images in a Compose override on
+an updater-managed robot instead — that poisons the rollback baseline.
+
 ### Protocol-first firmware transitions
 
 Install the GUI and host updater containing the protocol-transition readiness
