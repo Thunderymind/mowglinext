@@ -20,6 +20,7 @@ MSG_MODE_REINSTALL="Reinstall / reconfigure — go through the hardware question
 MSG_MODE_CHECK="Check — diagnostics only"
 MSG_MODE_INVALID="Invalid choice, running an update"
 MSG_MODE_SELECTED="Mode:"
+MSG_MODE_NO_TTY="already installed, no terminal to ask; pass install|repair|check to choose"
 
 # ── System update (system.sh) ──
 MSG_SYSTEM_UPDATE="Do you want to update the system?"
