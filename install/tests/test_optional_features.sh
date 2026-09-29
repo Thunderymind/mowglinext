@@ -34,7 +34,9 @@ ENABLE_VESC=true
 VESC_CAN_INTERFACE=can0
 RANGE_IMAGE=ghcr.io/...
 EOF
-load_env_defaults_file "$repo_legacy/docker/.env"
+reload_out="$(load_env_defaults_file "$repo_legacy/docker/.env" 2>&1)"
+load_env_defaults_file "$repo_legacy/docker/.env" >/dev/null 2>&1
+assert_not_contains "retired keys are dropped silently, not warned about" "Ignoring unknown installer key 'TFLUNA" "$reload_out"
 assert_eq "TFLUNA_FRONT_ENABLED dropped on reload" "" "${TFLUNA_FRONT_ENABLED:-}"
 assert_eq "ENABLE_VESC dropped on reload" "" "${ENABLE_VESC:-}"
 harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart

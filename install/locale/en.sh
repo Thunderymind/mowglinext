@@ -12,6 +12,15 @@ MSG_YES_NO="Y/n"
 MSG_YOUR_CHOICE="Your choice"
 MSG_CHOICE="Choice"
 
+# ── Mode menu (bare run on an installed robot) ──
+MSG_MODE_TITLE="This robot is already installed. What do you want to do?"
+MSG_MODE_UPDATE="Update — sync the checkout, pull the images, restart (no host updater involved)"
+MSG_MODE_REPAIR="Repair — re-apply udev rules, UARTs, .env, compose and helpers from the saved choices"
+MSG_MODE_REINSTALL="Reinstall / reconfigure — go through the hardware questions again"
+MSG_MODE_CHECK="Check — diagnostics only"
+MSG_MODE_INVALID="Invalid choice, running an update"
+MSG_MODE_SELECTED="Mode:"
+
 # ── System update (system.sh) ──
 MSG_SYSTEM_UPDATE="Do you want to update the system?"
 MSG_SYSTEM_UPDATE_SKIPPED="System update skipped"
