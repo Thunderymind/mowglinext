@@ -188,8 +188,49 @@ ROS2, GUI, GPS and the installed supported LiDAR variant participate by default.
 Additional installed first-party services opt in through Compose labels (below).
 Unmanaged services, including MQTT by default and the optional remote-access sidecar `mowgli-remote` (GUI-owned, see `docs/REMOTE_ACCESS.md`), remain outside this transaction. Firmware, host OS and Docker
 upgrades are excluded; custom/LFP firmware is not flashed. Targets requiring a
-different firmware protocol, updater API, layout or data schema are rejected.
+different updater API, layout or data schema are rejected. A target built for a
+**different mainboard firmware protocol** is rejected by default, because the
+containers cannot flash the STM32 and the bridge refuses a board speaking
+another protocol — but that refusal would otherwise strand every robot on the
+old protocol, since the matching firmware ships INSIDE the new GUI image (the
+one it refuses to install). The operator can therefore force it (below).
 Older releases without a deployment descriptor are comparison-only.
+
+### Forcing a firmware protocol change
+
+`POST /v1/plan` plans a target whose `firmware_protocol` differs from the
+protocol the board reported in its handshake (`/api/system/update-readiness`
+→ `firmware_protocol`; a board with no handshake, protocol 0, is never forced
+past) unless `allow_firmware_protocol_change: false` is sent. The plan records
+the pair as `firmware_protocol_change: {from, to}`, and `POST /v1/apply`
+installs it unless `firmware_protocol_acknowledged: false` is sent. **Both
+flags are tri-state and an ABSENT flag means allowed**: the GUI that predates
+them is precisely the one that can only obtain the matching firmware from the
+image it is installing, so it must not be locked out — after its update the
+new GUI shows the flash alert. A GUI that knows the flags always sends an
+explicit value and does its own gating: a warning with an "install anyway"
+checkbox at review, and a second acknowledgement in the review dialog (the
+consequence is read there, so it is repeated at install like the custom-image
+one). Capability `firmware-protocol-change` advertises the flags; an older
+agent rejects them as unknown fields, so the GUI never sends them to it and
+tells the operator to update the agent first.
+
+This is the **update-first** counterpart of the protocol-first transition
+described under *Recovery and updater self-updates*: same readiness contract,
+opposite order. The recorded pair travels with the job and is the ONE unready
+state the maintenance gate and verification accept: the readiness endpoint
+reporting `maintenance_ready` (fresh firmware, blade and wheel telemetry, idle,
+stationary, blade off — everything except the bridge's compatibility bit)
+**while the board still reports `from` or `to`**. Any other unready reason, a
+missing handshake (protocol 0), a third protocol, or a GUI predating the
+`maintenance_ready` contract still fails verification and rolls back. This is
+the only exception to "maintenance-only readiness cannot release the mower",
+and it exists because the operator acknowledged it twice; the bridge blocks
+mowing regardless until the firmware matches. The same tolerance covers a
+rollback started before the board was flashed, in which the previous images
+meet the same refusal from the other side. After a successful forced install
+the GUI shows a persistent "flash the mainboard firmware now" alert (Firmware
+section, ST-Link) until the board reports the new protocol.
 
 ## Installed stack, health and component versions
 
@@ -655,7 +696,7 @@ complete published ARM64 deployment remain required before field rollout.
 ### Journal compatibility
 
 The HTTP API remains version 1 with explicit feature capabilities (`release-compose`
-adds topology planning; `custom-images` adds explicit image selection; `external-images` supports release-approved upstream images). Journal schema 5 preserves external-image type and approved upstream version alongside custom-image provenance and topology recovery payloads.
+adds topology planning; `custom-images` adds explicit image selection; `external-images` supports release-approved upstream images; `firmware-protocol-change` accepts `allow_firmware_protocol_change` on plans and `firmware_protocol_acknowledged` on apply). Journal schema 5 preserves external-image type and approved upstream version alongside custom-image provenance and topology recovery payloads; a plan's optional `firmware_protocol_change` is an additive field older workers ignore.
 This worker reads schema 1/2/3/4 journals and writes schema 5 on mutation, preserving
 history. Older workers reject schema 5. Self-update probes require schema 5 and
 refuse unsafe worker downgrades. Existing workers using earlier journal schemas require an installer/bootstrap upgrade before using this extension. Deployment schemas 2 and 3 require the Compose bundle; schema 3 adds managed external images and is rejected by older workers.

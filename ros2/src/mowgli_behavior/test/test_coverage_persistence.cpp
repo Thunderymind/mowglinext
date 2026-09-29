@@ -459,6 +459,11 @@ TEST(CoveragePersistence, RoundTripsSingleAreaTarget)
   seedContext(saved, path);
   saved.current_command = 1;
   saved.single_area_target = 3u;
+  // mowglinext#637: the id it was locked in against must survive the same
+  // restart, or the very next probe after reboot would have nothing to
+  // verify the target against and silently re-lock onto whatever is at
+  // index 3 by then.
+  saved.single_area_target_id = 42u;
   ASSERT_TRUE(saveCoverageResumeState(saved));
 
   BTContext loaded;
@@ -466,6 +471,32 @@ TEST(CoveragePersistence, RoundTripsSingleAreaTarget)
   ASSERT_TRUE(loadCoverageResumeState(loaded));
   ASSERT_TRUE(loaded.single_area_target.has_value());
   EXPECT_EQ(*loaded.single_area_target, 3u);
+  ASSERT_TRUE(loaded.single_area_target_id.has_value());
+  EXPECT_EQ(*loaded.single_area_target_id, 42u);
+
+  std::remove(path.c_str());
+}
+
+// A targeted run whose very first dispatch never got a probe response before
+// a restart has a target index but no locked-in id yet — that must read back
+// as "not yet locked in" (so the next probe locks it in fresh), not as a
+// spurious mismatch against nothing.
+TEST(CoveragePersistence, SingleAreaTargetWithoutIdMeansNotYetLockedIn)
+{
+  const std::string path = tempPath("coverage_resume_single_area_no_id.txt");
+  std::remove(path.c_str());
+
+  BTContext saved;
+  seedContext(saved, path);
+  saved.current_command = 1;
+  saved.single_area_target = 2u;
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  ASSERT_TRUE(loaded.single_area_target.has_value());
+  EXPECT_FALSE(loaded.single_area_target_id.has_value());
 
   std::remove(path.c_str());
 }

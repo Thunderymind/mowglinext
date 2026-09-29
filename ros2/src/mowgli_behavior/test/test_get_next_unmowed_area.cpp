@@ -388,6 +388,44 @@ TEST_F(GetNextUnmowedAreaTest, IdMismatchDropsSwathAndCrossHatchHistoryForTheOld
   EXPECT_EQ(ctx->area_attempt_count[0u], 1u);
 }
 
+// An id mismatch must also drop the three per-index SETS that outlive the
+// area they described: incomplete_retired_areas gates run completion, and the
+// two fleet sets gate whether this robot may take the index at all.
+TEST_F(GetNextUnmowedAreaTest, IdMismatchClearsRetirementAndFleetSetsForTheOldOccupant)
+{
+  areas[0] = {"new_area", /*is_navigation_area=*/false, /*id=*/200};
+  waitForService();
+  ctx->area_ids[0] = 100;
+  ctx->incomplete_retired_areas.insert(0u);
+  ctx->fleet_yielded_areas.insert(0u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(0u), 0u)
+      << "a retirement recorded against the OLD occupant would keep "
+         "exhaustedRunIsComplete() false and end a fully-mowed run as "
+         "COVERAGE_FAILED_DOCKING instead of MOWING_COMPLETE";
+  EXPECT_EQ(ctx->fleet_yielded_areas.count(0u), 0u)
+      << "a yield recorded against the OLD occupant must not follow the index";
+}
+
+// fleet_excluded_areas is the one of the three that also feeds isSkippedArea(),
+// so a stale entry does not merely mis-report completion — it hides the new
+// area from this robot entirely.
+TEST_F(GetNextUnmowedAreaTest, IdMismatchClearsStaleFleetExclusionSoTheNewAreaIsMowed)
+{
+  areas[0] = {"new_area", /*is_navigation_area=*/false, /*id=*/200};
+  waitForService();
+  ctx->area_ids[0] = 100;
+  ctx->fleet_excluded_areas.insert(0u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+      << "a re-indexed area must not inherit the old occupant's fleet exclusion";
+  EXPECT_EQ(ctx->current_area, 0);
+  EXPECT_EQ(ctx->fleet_excluded_areas.count(0u), 0u);
+}
+
 // Control: a MATCHING id changes nothing — an already-completed area stays
 // skipped exactly as before this change.
 TEST_F(GetNextUnmowedAreaTest, MatchingIdKeepsAnAlreadyCompletedAreaSkipped)
@@ -420,6 +458,33 @@ TEST_F(GetNextUnmowedAreaTest, NoRecordedIdMeansNoReconciliationOnFirstProbe)
   EXPECT_EQ(ctx->current_area, 1) << "an unrecorded id must not itself trigger reconciliation";
   EXPECT_GT(ctx->completed_areas.count(0u), 0u);
   EXPECT_EQ(ctx->area_ids[0u], 100u) << "the probe still records the id going forward";
+}
+
+// mowglinext#637 phase 2 (generation counter): the synchronous fast-skip
+// path (onStart's pre-filter while-loop) must NOT trust a cached
+// completed/attempted flag for an index that has never been probed this
+// process — current_area_list_generation defaults to 0 and
+// area_verified_generation starts empty, so isSkipVerified() is false for
+// every index until it has actually been probed at least once. This is
+// exactly the NoRecordedIdMeansNoReconciliationOnFirstProbe scenario one
+// level up: the fast path must fall through to a real probe rather than
+// trusting completed_areas synchronously on the strength of the flag alone.
+TEST_F(GetNextUnmowedAreaTest, FastSkipNeverTrustsAnIndexNeverProbedThisProcess)
+{
+  areas[0] = {"done_lawn", /*is_navigation_area=*/false, /*id=*/100};
+  areas[1] = {"pending_lawn", /*is_navigation_area=*/false, /*id=*/101};
+  waitForService();
+  ctx->completed_areas.insert(0u);
+  // Simulate a generation the BT has heard about from a PRIOR probe cycle,
+  // to make sure a nonzero-but-unverified-for-idx-0 generation is still
+  // correctly treated as unverified for idx 0 specifically.
+  ctx->current_area_list_generation = 7;
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 1);
+  EXPECT_EQ(ctx->area_ids[0u], 100u) << "index 0 WAS probed (just not skipped without one)";
+  EXPECT_EQ(ctx->area_verified_generation[0u], 7u);
 }
 
 // ---------------------------------------------------------------------------
@@ -729,6 +794,92 @@ TEST_F(GetNextUnmowedAreaTest, TargetedRunDoesNotRollOverToTheNextArea)
   // MOWING_COMPLETE + dock (CoverageCompleteDock), not COVERAGE_FAILED_DOCKING.
   EXPECT_TRUE(ctx->coverage_all_complete)
       << "a finished targeted run must dock via MOWING_COMPLETE, not report a coverage failure";
+}
+
+// ---------------------------------------------------------------------------
+// mowglinext#637 — single_area_target is stored as an INDEX, which the
+// per-index id-reconciliation above does not protect: it only stops a
+// DIFFERENT index from inheriting stale progress, not this index from being
+// dispatched when it no longer holds the area the operator actually
+// selected. Field-confirmed 2026-09-19: targeting area 0 (id 6), reordering
+// the area list while paused so id 7 ended up at index 0, then Resume —
+// the per-index reconciliation correctly discarded id 6's stale state, and
+// this dispatch, with nothing left to check the id against, silently
+// started mowing id 7 instead.
+// ---------------------------------------------------------------------------
+
+// The FIRST successful dispatch of a fresh target locks in its id, so later
+// dispatches have something to verify against.
+TEST_F(GetNextUnmowedAreaTest, TargetedRunLocksInAreaIdOnFirstDispatch)
+{
+  areas[0] = {"front_lawn", /*is_navigation_area=*/false, /*id=*/100};
+  waitForService();
+
+  ctx->target_area_index = 0;
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  ASSERT_TRUE(ctx->single_area_target_id.has_value());
+  EXPECT_EQ(*ctx->single_area_target_id, 100u);
+}
+
+// The regression itself: once locked in, a later dispatch of the SAME index
+// must not proceed if the area list changed underneath it — it must end the
+// run instead of mowing whatever now sits there.
+TEST_F(GetNextUnmowedAreaTest, TargetedRunEndsCleanlyWhenTargetMovedToADifferentIndex)
+{
+  areas[0] = {"new_occupant", /*is_navigation_area=*/false, /*id=*/200};
+  waitForService();
+  // Simulate a resumed session: index 0 was targeted and locked in against
+  // id 100 (the area the operator actually selected), but the area list was
+  // edited since — index 0 now holds a different area (id 200).
+  ctx->single_area_target = 0u;
+  ctx->single_area_target_id = 100u;
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE)
+      << "must not silently mow the area that replaced the targeted one";
+  EXPECT_FALSE(ctx->coverage_all_complete)
+      << "this is a genuine failure to carry out the request, not a clean finish — "
+         "must route to the failure/dock path, not be read as MOWING_COMPLETE";
+  EXPECT_FALSE(ctx->single_area_target.has_value())
+      << "the broken target must be cleared, not retried forever against the wrong area";
+  EXPECT_FALSE(ctx->single_area_target_id.has_value());
+}
+
+// Control: a matching id changes nothing — the targeted run proceeds exactly
+// as it always has.
+TEST_F(GetNextUnmowedAreaTest, TargetedRunContinuesNormallyWhenTargetIdStillMatches)
+{
+  areas[0] = {"front_lawn", /*is_navigation_area=*/false, /*id=*/100};
+  waitForService();
+  ctx->single_area_target = 0u;
+  ctx->single_area_target_id = 100u;  // same id the fake server still reports
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 0);
+}
+
+// A FRESH ~/start_in_area request (a new target_area_index) must reset any
+// id left over from a PRIOR target — otherwise selecting a new area that
+// happens to land on an index a previous (different) target used to occupy
+// would immediately "detect" a bogus mismatch against the OLD target's id
+// and refuse to mow the newly-selected area at all.
+TEST_F(GetNextUnmowedAreaTest, FreshTargetRequestDoesNotCompareAgainstAPriorTargetsId)
+{
+  areas[0] = {"second_selection", /*is_navigation_area=*/false, /*id=*/300};
+  waitForService();
+  // Leftover from an earlier, unrelated targeted run on a different area
+  // that used to sit at index 0.
+  ctx->single_area_target_id = 999u;
+
+  ctx->target_area_index = 0;
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+      << "a fresh selection must not be compared against a stale prior target's id";
+  EXPECT_EQ(ctx->current_area, 0);
+  ASSERT_TRUE(ctx->single_area_target_id.has_value());
+  EXPECT_EQ(*ctx->single_area_target_id, 300u) << "re-locked against the NEW selection";
 }
 
 // An explicitly targeted area is re-mown even when it is already marked
@@ -1359,6 +1510,55 @@ TEST_F(GetNextUnmowedAreaTest, FleetPreferredStartRotatesTheScanAndWraps)
     EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE);
     EXPECT_TRUE(ctx->coverage_all_complete) << "everything done after the wrap";
   }
+}
+
+// The fleet wrap into [0, preferred) must apply the SAME isSkipVerified()
+// gate as the other two skip loops. An area re-indexed into the lower range
+// carries no verified probe for its new index, so trusting the previous
+// occupant's completed flag there would skip a genuinely unmowed area with
+// no probe left to reconcile it.
+TEST_F(GetNextUnmowedAreaTest, FleetWrapDoesNotTrustAnUnverifiedSkipFlag)
+{
+  areas[0] = {"re_indexed_lawn", /*is_navigation_area=*/false, /*id=*/200};
+  areas[1] = {"b", /*is_navigation_area=*/false, /*id=*/201};
+  areas[2] = {"c", /*is_navigation_area=*/false, /*id=*/202};
+  waitForService();
+  ctx->fleet_preferred_start = 2u;
+
+  // Index 0 is flagged complete, but from the PREVIOUS occupant (id 100) and
+  // never re-verified at the current generation — exactly what a GUI map edit
+  // leaves behind.
+  ctx->area_ids[0] = 100;
+  ctx->completed_areas.insert(0u);
+  ctx->completed_areas.insert(2u);  // force the wrap past the preferred start
+
+  auto tree = makeTree(/*max_areas=*/5);
+  ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+      << "the wrap must probe index 0 rather than skip it on an unverified flag";
+  EXPECT_EQ(ctx->current_area, 0);
+  EXPECT_EQ(ctx->completed_areas.count(0u), 0u)
+      << "the probe reconciles the id and drops the old occupant's completed flag";
+  EXPECT_EQ(ctx->area_ids[0], 200u);
+}
+
+// Control: once an index IS verified at the current generation, the wrap must
+// still skip it — the gate must not disable the fast-skip altogether.
+TEST_F(GetNextUnmowedAreaTest, FleetWrapStillSkipsAVerifiedCompletedArea)
+{
+  areas[0] = {"done", /*is_navigation_area=*/false, /*id=*/100};
+  areas[1] = {"pending", /*is_navigation_area=*/false, /*id=*/101};
+  areas[2] = {"c", /*is_navigation_area=*/false, /*id=*/102};
+  waitForService();
+  ctx->fleet_preferred_start = 2u;
+
+  ctx->area_ids[0] = 100;
+  ctx->area_verified_generation[0] = ctx->current_area_list_generation;
+  ctx->completed_areas.insert(0u);
+  ctx->completed_areas.insert(2u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 1) << "a verified completed index is still skipped";
 }
 
 TEST_F(GetNextUnmowedAreaTest, FleetPreferredStartBeyondTheLastAreaWrapsToZero)

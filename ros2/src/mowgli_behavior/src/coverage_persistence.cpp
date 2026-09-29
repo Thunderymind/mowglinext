@@ -160,6 +160,14 @@ bool saveCoverageResumeState(const BTContext& ctx)
   {
     out << "single_area_target " << *ctx.single_area_target << '\n';
   }
+  // The id single_area_target's index was locked in against (mowglinext#637)
+  // — persisted for the same restart-safety reason as single_area_target
+  // itself. Absent line = not yet locked in (e.g. the very first dispatch of
+  // a fresh targeted request never got its probe response before this save).
+  if (ctx.single_area_target_id.has_value())
+  {
+    out << "single_area_target_id " << *ctx.single_area_target_id << '\n';
+  }
   out << "current_area " << ctx.current_area << '\n';
   out << "completed_areas";
   for (uint32_t idx : ctx.completed_areas)
@@ -288,6 +296,16 @@ bool loadCoverageResumeState(BTContext& ctx)
       uint32_t v;
       if (ls >> v)
         ctx.single_area_target = v;
+    }
+    else if (tag == "single_area_target_id")
+    {
+      // mowglinext#637. Absent in files written before this field existed,
+      // or when the target was set but never successfully probed before the
+      // save — single_area_target_id stays empty, so the next probe locks
+      // it in fresh rather than comparing against nothing.
+      uint32_t v;
+      if (ls >> v)
+        ctx.single_area_target_id = v;
     }
     else if (tag == "current_area")
     {
