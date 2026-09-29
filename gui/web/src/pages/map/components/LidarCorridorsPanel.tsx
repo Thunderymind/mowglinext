@@ -14,9 +14,9 @@ interface LidarCorridorsPanelProps {
     /// False outside the map edit mode: the list is then read-only, and the
     /// draw button is hidden entirely (there is nothing to draw into).
     editable: boolean;
-    /// True while the operator is clicking points onto the map.
+    /// True while gl-draw's draw_line_string mode is active for a corridor
+    /// (MapPage.tsx). Points live in gl-draw's own store now, not a prop here.
     drawing: boolean;
-    drawPointCount: number;
     /// Drawing is started from the map editor toolbar's "+ Add" menu now
     /// (works on mobile too), not from a button in this panel — there is no
     /// onStartDraw prop here any more.
@@ -40,7 +40,7 @@ interface LidarCorridorsPanelProps {
 /// so the robot follows the recorded boundary next to e.g. a hedge instead of
 /// being pushed off it. Everywhere else the LiDAR keeps working normally.
 export const LidarCorridorsPanel = ({
-    corridors, busy, editable, drawing, drawPointCount, onFinishDraw, onCancelDraw,
+    corridors, busy, editable, drawing, onFinishDraw, onCancelDraw,
     onSelect, selectedIndex, onSmooth, onSimplify,
 }: LidarCorridorsPanelProps) => {
     const {colors} = useThemeMode();
@@ -107,16 +107,16 @@ export const LidarCorridorsPanel = ({
             <div style={{padding: '6px 12px 10px', display: 'flex', gap: 6, flexWrap: 'wrap'}}>
                 {drawing ? (
                     <>
-                        <div style={{width: '100%', fontSize: 11, color: colors.muted}}>
-                            {t('mapLidarCorridors.drawing', {count: drawPointCount})}
-                        </div>
                         <Button size="small" type="primary" icon={<CheckOutlined aria-hidden="true"/>}
-                            disabled={drawPointCount < 2 || busy} onClick={onFinishDraw}>
+                            disabled={busy} onClick={onFinishDraw}>
                             {t('mapLidarCorridors.finish')}
                         </Button>
                         <Button size="small" icon={<CloseOutlined aria-hidden="true"/>} onClick={onCancelDraw}>
                             {t('mapLidarCorridors.cancel')}
                         </Button>
+                        <div style={{width: '100%', fontSize: 11, color: colors.muted}}>
+                            {t('mapLidarCorridors.drawing')}
+                        </div>
                     </>
                 ) : (
                     <>

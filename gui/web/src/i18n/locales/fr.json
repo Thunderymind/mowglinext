@@ -1756,7 +1756,7 @@
     "widthLabel": "Distance d'ignorance en centimètres",
     "widthTooltip": "Distance à laquelle la tondeuse peut s'approcher de la ligne, côté zone, 5-100 cm — l'autre côté de la ligne n'a aucune limite de distance",
     "delete": "Supprimer cette ligne",
-    "drawing": "Cliquez des points sur la carte le long de la ligne ({{count}} placés).",
+    "drawing": "Touchez des points sur la carte, puis validez.",
     "finish": "Terminer la ligne",
     "cancel": "Annuler",
     "draw": "Tracer une ligne d'ignorance",

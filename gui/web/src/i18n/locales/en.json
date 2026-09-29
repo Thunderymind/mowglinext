@@ -1760,7 +1760,7 @@
     "widthLabel": "Ignore distance in centimetres",
     "widthTooltip": "How close the mower can get to the line on the area side, 5-100 cm — the far side of the line has no distance limit at all",
     "delete": "Delete this line",
-    "drawing": "Click points on the map along the line ({{count}} placed).",
+    "drawing": "Tap points on the map, then confirm.",
     "finish": "Finish line",
     "cancel": "Cancel",
     "draw": "Draw ignore line",
