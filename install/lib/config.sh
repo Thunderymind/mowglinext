@@ -316,6 +316,9 @@ CHECK_ONLY=false
 ONLY_STEP=""
 # Mode: install (default) | update | repair | check | only (--only=<step>).
 INSTALL_MODE="install"
+# Set when the mode came from the command line; a bare run on an installed
+# robot with a terminal asks instead of silently reinstalling.
+MODE_EXPLICIT=false
 # --non-interactive: every prompt takes its default. Also switched on
 # automatically when no controlling terminal is available (parse_args).
 NON_INTERACTIVE=false
@@ -765,13 +768,16 @@ parse_args() {
     case "$1" in
       install|update|repair|check)
         INSTALL_MODE="$1"
+        MODE_EXPLICIT=true
         ;;
       --check)
         INSTALL_MODE="check"
+        MODE_EXPLICIT=true
         ;;
       --only=*)
         ONLY_STEP="${1#*=}"
         INSTALL_MODE="only"
+        MODE_EXPLICIT=true
         ;;
       --non-interactive|--yes|-y)
         NON_INTERACTIVE=true
@@ -996,6 +1002,31 @@ parse_args() {
   fi
 }
 
+# A bare `mowglinext.sh` on a robot that is already installed: ask what the
+# operator wants instead of walking them through a full reinstall. Only with
+# a terminal — a composer command or a cron job keeps the documented default.
+select_mode() {
+  [[ "$MODE_EXPLICIT" != "true" && "${NON_INTERACTIVE:-false}" != "true" ]] || return 0
+  [ -f "$FINAL_ENV_FILE" ] || return 0
+
+  echo ""
+  echo -e "${CYAN:-}${BOLD:-}$MSG_MODE_TITLE${NC:-}"
+  echo "  1) $MSG_MODE_UPDATE"
+  echo "  2) $MSG_MODE_REPAIR"
+  echo "  3) $MSG_MODE_REINSTALL"
+  echo "  4) $MSG_MODE_CHECK"
+  echo ""
+  prompt "$MSG_CHOICE" "1"
+  case "$REPLY" in
+    1|update)  INSTALL_MODE="update" ;;
+    2|repair)  INSTALL_MODE="repair" ;;
+    3|install|reinstall) INSTALL_MODE="install" ;;
+    4|check)   INSTALL_MODE="check" ;;
+    *) warn "$MSG_MODE_INVALID"; INSTALL_MODE="update" ;;
+  esac
+  info "$MSG_MODE_SELECTED $INSTALL_MODE"
+}
+
 print_usage() {
   cat <<'EOF'
 Usage: mowglinext.sh [install|update|repair|check] [options]
@@ -1058,12 +1089,22 @@ load_existing_config() {
 # indentation, comments, and every other key. If the key is missing
 # (only happens when the seeded template is older than the installer)
 # we append it under the ros__parameters block.
+# Run an in-place python edit of a yaml the installer OWNS (the seed it just
+# created, the derived MAVROS copy). Never let a failed edit pass as success.
+_yaml_python() {
+  local file="${1:?_yaml_python: missing file}"
+  if ! python3 - "$@"; then
+    error "Could not update $file"
+    return 1
+  fi
+}
+
 _yaml_patch_key() {
   local file="$1" key="$2" value="$3"
   if grep -qE "^[[:space:]]+${key}:" "$file"; then
     # Replace value, preserving leading whitespace and any trailing
     # comment on the same line.
-    python3 - "$file" "$key" "$value" <<'PY'
+    _yaml_python "$file" "$key" "$value" <<'PY'
 import re, sys
 path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
 pat = re.compile(r'^(\s+' + re.escape(key) + r':\s*)([^#\n]*)(\s*#.*)?$')
@@ -1080,7 +1121,7 @@ with open(path, 'w') as f:
 PY
   else
     # Append under the first ros__parameters: line in the mowgli block.
-    python3 - "$file" "$key" "$value" <<'PY'
+    _yaml_python "$file" "$key" "$value" <<'PY'
 import sys
 path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path) as f:
@@ -1106,7 +1147,7 @@ write_mavros_runtime_config() {
   mkdir -p "$(dirname "$target")"
   cp "$source" "$target"
   # Universal GNSS is the sole NTRIP owner.
-  _yaml_patch_key "$target" ntrip_enabled false
+  _yaml_patch_key "$target" ntrip_enabled false || return 1
 }
 
 runtime_gnss_config_value() {
@@ -1134,146 +1175,71 @@ write_config() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local template="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
   local resolved_receiver_family resolved_transport resolved_serial_device
-  local resolved_serial_baud resolved_config_baud resolved_frame_id
-  local resolved_ntrip_gga_enabled resolved_ntrip_gga_interval_s
+  local resolved_serial_baud resolved_frame_id
+
+  # mowgli_robot.yaml is the OPERATOR's file: the GUI edits every key in it
+  # (GNSS link and profile, LiDAR, datum, NTRIP, ...) and the ROS containers
+  # write calibration results into it as root (Invariant 6). The installer
+  # therefore writes it exactly once — when it does not exist yet — seeding
+  # the sparse template with the hardware wiring just chosen. An existing
+  # file is never patched: update/repair leave it alone, and a reinstall that
+  # changes the wiring says so instead of overriding the GUI.
+  if [ -f "$yaml_file" ]; then
+    info "$yaml_file exists — left untouched (GNSS link, LiDAR presence and everything else are edited in the GUI)"
+    write_mavros_runtime_config || return 1
+    return 0
+  fi
 
   : "${GNSS_RECEIVER_FAMILY:=auto}"
   : "${GNSS_TRANSPORT:=serial}"
   : "${GNSS_SERIAL_DEVICE:=/dev/ttyAMA4}"
   : "${GNSS_SERIAL_BAUD:=921600}"
   : "${GNSS_FRAME_ID:=gps_link}"
-  : "${GNSS_NTRIP_GGA_ENABLED:=true}"
-  : "${GNSS_NTRIP_GGA_INTERVAL_S:=10}"
 
-  load_existing_config
-
-  # Seed from the comprehensive template if the runtime yaml doesn't
-  # exist yet. We never overwrite an existing file — that would wipe
-  # GUI-managed values like chassis dims, IMU calibration, fusion
-  # graph flags, etc.
-  if [ ! -f "$yaml_file" ]; then
-    if [ -f "$template" ]; then
-      cp "$template" "$yaml_file"
-      info "Seeded $yaml_file from install template"
-    else
-      warn "Install template missing at $template — writing minimal yaml"
-      cat > "$yaml_file" <<EOF
+  if [ -f "$template" ]; then
+    cp "$template" "$yaml_file"
+    info "Seeded $yaml_file from install template"
+  else
+    warn "Install template missing at $template — writing minimal yaml"
+    cat > "$yaml_file" <<EOF
 mowgli:
   ros__parameters:
     ntrip_enabled: false
 EOF
-    fi
-  else
-    info "Patching existing $yaml_file in place"
   fi
 
-  resolved_receiver_family="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_RECEIVER_FAMILY; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_RECEIVER_FAMILY}" "${PREV_GNSS_RECEIVER_FAMILY:-}" "auto")"
-  resolved_transport="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_TRANSPORT; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_TRANSPORT}" "${PREV_GNSS_TRANSPORT:-}" "serial")"
-  resolved_serial_device="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_SERIAL_DEVICE; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_SERIAL_DEVICE}" "${PREV_GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4")"
-  resolved_serial_baud="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_SERIAL_BAUD; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_SERIAL_BAUD}" "${PREV_GNSS_SERIAL_BAUD:-}" "921600")"
-  resolved_config_baud="${PREV_GNSS_CONFIG_BAUD:-$resolved_serial_baud}"
-  resolved_frame_id="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_FRAME_ID; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_FRAME_ID}" "${PREV_GNSS_FRAME_ID:-}" "gps_link")"
-  resolved_ntrip_gga_enabled="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_NTRIP_GGA_ENABLED; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_NTRIP_GGA_ENABLED}" "${PREV_GNSS_NTRIP_GGA_ENABLED:-}" "true")"
-  resolved_ntrip_gga_interval_s="$(preserved_gnss_value \
-    "$(if gnss_installer_key_is_explicit GNSS_NTRIP_GGA_INTERVAL_S; then printf 'true'; else printf 'false'; fi)" \
-    "${GNSS_NTRIP_GGA_INTERVAL_S}" "${PREV_GNSS_NTRIP_GGA_INTERVAL_S:-}" "10")"
+  resolved_receiver_family="$(normalize_gnss_receiver_family "${GNSS_RECEIVER_FAMILY}")"
+  resolved_transport="${GNSS_TRANSPORT}"
+  resolved_serial_device="${GNSS_SERIAL_DEVICE}"
+  resolved_serial_baud="${GNSS_SERIAL_BAUD}"
+  resolved_frame_id="${GNSS_FRAME_ID}"
 
-  # Patch in only the keys the installer is responsible for: the hardware
-  # wiring. Datum, NTRIP and the receiver profile are GUI-owned (onboarding
-  # wizard / Settings) and are never touched here — a seeded file carries the
-  # template placeholders, an existing file keeps the operator's values.
-  _yaml_patch_key "$yaml_file" gnss_receiver_family "\"$resolved_receiver_family\""
-  _yaml_patch_key "$yaml_file" gnss_transport "\"$resolved_transport\""
-  _yaml_patch_key "$yaml_file" gnss_serial_device "\"$resolved_serial_device\""
-  _yaml_patch_key "$yaml_file" gnss_serial_baud "$resolved_serial_baud"
-  _yaml_patch_key "$yaml_file" gnss_config_baud "$resolved_config_baud"
-  _yaml_patch_key "$yaml_file" gnss_frame_id "\"$resolved_frame_id\""
+  # Only the hardware wiring the installer just asked for. Datum, NTRIP,
+  # the receiver profile, LiDAR pose and dock pose stay at the template
+  # placeholders for the GUI onboarding wizard.
+  _yaml_patch_key "$yaml_file" gnss_receiver_family "\"$resolved_receiver_family\"" || return 1
+  _yaml_patch_key "$yaml_file" gnss_transport "\"$resolved_transport\"" || return 1
+  _yaml_patch_key "$yaml_file" gnss_serial_device "\"$resolved_serial_device\"" || return 1
+  _yaml_patch_key "$yaml_file" gnss_serial_baud "$resolved_serial_baud" || return 1
+  _yaml_patch_key "$yaml_file" gnss_config_baud "$resolved_serial_baud" || return 1
+  _yaml_patch_key "$yaml_file" gnss_frame_id "\"$resolved_frame_id\"" || return 1
   # The ROS2 launch reads the stack from the robot config only (no env
   # fallback), so the install-time choice has to land in the yaml.
-  _yaml_patch_key "$yaml_file" gnss_stack "\"${GNSS_STACK:-universal}\""
-  _yaml_patch_key "$yaml_file" gnss_ntrip_gga_enabled "$resolved_ntrip_gga_enabled"
-  _yaml_patch_key "$yaml_file" gnss_ntrip_gga_interval_s "$resolved_ntrip_gga_interval_s"
-
-  # The Universal GNSS sidecar reads mowgli_robot.yaml itself (see
-  # install/compose/docker-compose.gps.yml): no derived parameter file.
-  write_mavros_runtime_config
+  _yaml_patch_key "$yaml_file" gnss_stack "\"${GNSS_STACK:-universal}\"" || return 1
 
   # LiDAR hardware availability gates obstacle detection and scan-to-map localization.
   local lidar_on="false"
-  if [[ "${LIDAR_ENABLED:-false}" == "true" ]]; then
-    lidar_on="true"
-  fi
-  _yaml_patch_key "$yaml_file" lidar_enabled     "$lidar_on"
+  [[ "${LIDAR_ENABLED:-false}" == "true" ]] && lidar_on="true"
+  _yaml_patch_key "$yaml_file" lidar_enabled "$lidar_on" || return 1
 
-  # Remove retired localization overrides from upgraded installations.
-  python3 - "$yaml_file" <<'PY_RETIRED'
-import re
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-retired = {
-    'use_scan_matching',
-    'use_loop_closure',
-    'icp_max_iter',
-    'icp_max_corresp_dist',
-    'icp_source_subsample',
-    'scan_min_inliers',
-    'icp_sigma_xy_base',
-    'icp_sigma_theta_base',
-    'icp_max_rmse_m',
-    'icp_max_delta_xy_m',
-    'icp_max_delta_theta_rad',
-    'icp_max_divergence_xy_m',
-    'icp_max_divergence_theta_rad',
-    'scan_yield_to_rtk',
-    'scan_yield_timeout_s',
-    'scan_yield_sigma_xy',
-    'scan_yield_sigma_theta',
-    'scan_yaw_sigma_floor_rad',
-    'lc_max_dist_m',
-    'lc_min_age_s',
-    'lc_max_candidates',
-    'lc_min_delta_m',
-    'lc_min_delta_theta',
-    'lc_max_rmse',
-    'lc_sigma_xy',
-    'lc_sigma_theta',
-    'lc_skip_when_rtk_fixed',
-    'lc_min_travel_m',
-    'lc_min_interval_s',
-    'lc_gps_sigma_ratio',
-    'scan_retention_nodes',
-    'lidar_map_half_extent_m',
-}
-lines = path.read_text().splitlines(keepends=True)
-def keep(line):
-    match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*):", line)
-    return not match or match.group(1) not in retired
-path.write_text("".join(line for line in lines if keep(line)))
-PY_RETIRED
-
-  # LiDAR mounting and the dock pose are NOT touched: the pose is GUI-owned
-  # and dock_pose_* is a calibration OUTPUT written by map_server (root
-  # CLAUDE.md Invariant 6). The former unconditional 0.0 stamp reset a
-  # calibrated dock on every installer rerun.
+  # The Universal GNSS sidecar reads mowgli_robot.yaml itself (see
+  # install/compose/docker-compose.gps.yml): no derived parameter file.
+  write_mavros_runtime_config || return 1
 
   info "Wrote $yaml_file"
 }
 
 run_mower_configuration_step() {
-  ensure_default_configs
-  write_config
+  ensure_default_configs && write_config
 }
 

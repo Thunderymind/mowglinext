@@ -19,7 +19,7 @@ Coordinated updates: `install/deployment.json` owns the publication build list a
 | "Which env var starts which container?" | `install/lib/compose.sh` `build_compose_stack` L52–138 — see the env→service table below |
 | Change how the merged compose is produced | `install/lib/compose.sh` `write_compose_merged` L208–244 (`docker compose config --no-interpolate`), pure-Bash fallback L169–206 |
 | Add a CLI flag / web-composer preset key | `install/lib/config.sh` `parse_args` L842–1078; preset loader `install/lib/state.sh` `load_preset_file` L133; the web bootstrap `docs/install.sh` forwards choices as CLI flags (it does not write `.preset`) |
-| Change what the installer writes into `mowgli_robot.yaml` | `install/lib/config.sh` `write_config` L1327–1443 (line-splice via `_yaml_patch_key` L1286) — it patches ONLY the ~25 keys listed there |
+| Change what the installer writes into `mowgli_robot.yaml` | `install/lib/config.sh` `write_config` — seeds the file ONLY when absent (template + GNSS link + `lidar_enabled`); an existing file is never written (GUI-owned, root-owned by the containers) |
 | Change the SPARSE seed shipped to new robots | `install/config/mowgli/mowgli_robot.yaml` (CLAUDE.md Invariant 15 — defaults belong in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`) |
 | GNSS backend/stack resolution logic | `install/lib/config.sh` L462–840 (`normalize_*`, `effective_gnss_backend` L609, `effective_gnss_stack` L625, `compose_gnss_service_name` L814) |
 | LiDAR selection (type/connection/baud) | `install/lib/lidar.sh` `configure_lidar` L3–116 |

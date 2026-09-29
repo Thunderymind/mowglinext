@@ -12,6 +12,15 @@ MSG_YES_NO="O/n"
 MSG_YOUR_CHOICE="Ton choix"
 MSG_CHOICE="Choix"
 
+# ── Menu de mode (lancement sans argument sur un robot installe) ──
+MSG_MODE_TITLE="Ce robot est deja installe. Que voulez-vous faire ?"
+MSG_MODE_UPDATE="Mettre a jour — synchroniser le depot, telecharger les images, redemarrer (sans le service de mise a jour)"
+MSG_MODE_REPAIR="Reparer — reappliquer regles udev, UART, .env, compose et helpers depuis les choix enregistres"
+MSG_MODE_REINSTALL="Reinstaller / reconfigurer — repasser par les questions materiel"
+MSG_MODE_CHECK="Verifier — diagnostic uniquement"
+MSG_MODE_INVALID="Choix invalide, mise a jour lancee"
+MSG_MODE_SELECTED="Mode :"
+
 # ── System update (system.sh) ──
 MSG_SYSTEM_UPDATE="Voulez-vous mettre a jour le systeme ?"
 MSG_SYSTEM_UPDATE_SKIPPED="Mise a jour systeme ignoree"

@@ -8,6 +8,13 @@ STATE_PARSED_VALUES=()
 STATE_ACTIVE_PRESET_FILE=""
 STATE_ACTIVE_PRESET_COUNT=0
 
+is_retired_installer_key() {
+  case "${1:-}" in
+    TFLUNA_*|ENABLE_VESC|VESC_IMAGE|VESC_CAN_INTERFACE|RANGE_IMAGE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_allowed_installer_key() {
   local key="${1:-}"
 
@@ -88,6 +95,11 @@ parse_kv_file_strict() {
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
 
+    # Keys of retired hardware options linger in older .env files until the
+    # next write scrubs them; they are expected, not a mistake worth a warning.
+    if is_retired_installer_key "$key"; then
+      continue
+    fi
     if ! is_allowed_installer_key "$key"; then
       warn "Ignoring unknown installer key '${key}' in ${file}:${lineno}"
       continue

@@ -375,6 +375,7 @@ main() {
   if [[ "$NON_INTERACTIVE" == "true" ]]; then
     info "Non-interactive mode: unset choices take their defaults."
   fi
+  select_mode
 
   if [[ "$INSTALL_MODE" != "check" ]]; then
     if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
