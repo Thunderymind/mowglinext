@@ -21,7 +21,7 @@
 | `ros2/src/mowgli_bringup/config/hardware_bridge.yaml` (158 L) | serial port/baud/rates, final merged-command slew `cmd_vel_*_{accel,decel}_limit`, IMU cal count, **dig detector** `dig_*` + repeat-dig escalation `dig_escalate_*` (Invariant 16) | `mowgli.launch.py:185` | maintainer |
 | `ros2/src/mowgli_bringup/config/twist_mux.yaml` (53 L) | 5 cmd_vel lanes + priorities; deliberately **no `locks:`** | `mowgli.launch.py:271` | maintainer |
 | `ros2/src/mowgli_bringup/config/foxglove_bridge.yaml` (11 L) | Foxglove params + GNSS-internal topic whitelist — **not referenced by any launch file** | nothing | maintainer |
-| `ros2/src/fusion_graph/config/fusion_graph.yaml` (480 L) | 76 of the localizer's 133 declared params | `fusion_graph/launch/fusion_graph.launch.py:137` | maintainer |
+| `ros2/src/fusion_graph/config/fusion_graph.yaml` (450 L) | 100 of the localizer's 136 declared params | `fusion_graph/launch/fusion_graph.launch.py:137` | maintainer |
 | `ros2/src/mowgli_map/config/map_server.yaml` (176 L) | grid resolution/size, keepout margins, mow-progress gating, dig proposal | `full_system.launch.py:173` | maintainer (operator keys are injected over it) |
 | `ros2/src/mowgli_map/config/obstacle_tracker.yaml` (18 L) | LiDAR cluster→obstacle promotion thresholds | `full_system.launch.py` obstacle_tracker node | maintainer |
 | `ros2/src/mowgli_behavior/config/behavior_tree.yaml` (11 L) | `tree_file`, `tick_rate`, legacy `battery_*_pct` **aliases that no longer match the node's param names** | `full_system.launch.py:172` | maintainer |
@@ -272,9 +272,9 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 
 | Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
-| `rain_mode` (L508) | 2 (0=ignore, 1=dock, 2=dock_until_dry, 3=pause_auto) | `behavior_tree_node.cpp:884` `declare_parameter` — **not injected by any launch file** | Rain | INERT |
-| `rain_delay_minutes` (L509) | 30.0 | `behavior_tree_node.cpp:877` (node default 30.0, same) | Rain | INERT |
-| `rain_debounce_sec` (L510) | 10.0 | `behavior_tree_node.cpp:891` — **node default is 0.0**, so the running robot has no debounce | Rain | INERT (and divergent) |
+| `rain_mode` (L508) | 2 (0=ignore, 1=dock, 2=dock_until_dry, 3=pause_auto) | `behavior_tree_node.cpp:884` `declare_parameter`; injected from the merged robot config by `full_system.launch.py:335` (commit `e77ed83f`, 2026-09-24, "#758") | Rain | live |
+| `rain_delay_minutes` (L509) | 30.0 | `behavior_tree_node.cpp:877` (node default 30.0, same); injected by `full_system.launch.py:336` | Rain | live |
+| `rain_debounce_sec` (L510) | 10.0 | `behavior_tree_node.cpp:891` (node default 0.0); injected from the template's 10.0 by `full_system.launch.py:337`, so the running robot now gets the template value, not the node's compiled default | Rain | live |
 
 ### Start-pose escape (SAFETY-CRITICAL bounded nudge, `full_system.launch.py:313–341`)
 
@@ -476,7 +476,7 @@ parameters remain directly under `FollowPath`.
 
 ## fusion_graph params
 
-`fusion_graph.yaml` carries **76** keys; the node declares **133** (`fusion_graph_node_setup_params.cpp` and siblings) — the other 57 run on their in-code defaults and have no yaml line. Groups (line = `ros2/src/fusion_graph/config/fusion_graph.yaml`):
+`fusion_graph.yaml` carries **100** keys; the node declares **136** (`fusion_graph_node_setup_params.cpp` and siblings) — the other 36 run on their in-code defaults and have no yaml line. (The LiDAR map anchor / Beluga PF feature, commit `96cc8cde` 2026-09-09, and the GPS stuck-value gate, commits `5bad72f1`/`edec883c` 2026-09-21, together added ~24 yaml keys and ~50 declared params on top of the pre-2026-09-07 counts.) Groups (line = `ros2/src/fusion_graph/config/fusion_graph.yaml`):
 
 | Concern | Lines | Representative keys |
 |---|---|---|
@@ -487,6 +487,7 @@ parameters remain directly under `FollowPath`.
 | Pivot downweight | 99–117 | `pivot_gate_dtheta_rad` 0.012, `pivot_wheel_sigma_x` 0.5 |
 | Stationary gate | 118–126 (its `stationary_thresh_xy_m` / `stationary_thresh_theta` / `stationary_sigma_theta` sit at L79–97, inside the gyro block) | `stationary_gyro_thresh_rad_per_s` |
 | **Slip veto** (rotational only — see Invariant 16) | 127–161 | `slip_residual_thresh_rad`, `slip_gyro_max_rad`, `slip_wheel_min_rad`, `slip_window_s` 0.5 (issue #516; `0` = old per-node gate) |
+| **GPS stuck-value gate** (mowglinext#694, `gps_stuck_gate.hpp`) | 225–237 | `gps_stuck_min_wheel_dist_m` 1.0 (unbounded distance accumulator, resets only on value-change), `gps_stuck_max_yaw_rad` 1.047 (bounded rotation accumulator, resets every GPS message — CLAUDE.md "What NOT to Do" on the deliberately different reset semantics) |
 | Graph size | 162–184 | `max_graph_nodes` 6000 |
 | Gyro bias | 236–257 | `gyro_bias_estimation_enabled`, `gyro_bias_ema_tau_s` 30, `use_imu_preint` false |
 | Adaptive process noise | 258–269 | `adaptive_noise_enabled_gain` 10.0 |
@@ -496,6 +497,7 @@ parameters remain directly under `FollowPath`.
 | Frames | 329–333 | `map_frame` / `odom_frame` / `base_frame` (Invariant 2) |
 | TF publish | 334–373 | `fast_pose_publish_rate_hz`, `tf_publish_lead_s` 0.05 (launch-overridden), `tf_broadcast_rate_hz` 20 |
 | Docking | 374–415 | `docking_active_timeout_s`, `gate_cog_during_docking`, `dock_reanchor_sigma_xy_m` 0.03, `dock_prior_max_gps_disagreement_m` 0.50, `dock_prior_max_gps_sigma_m` 0.05 (issue #512) |
+| **LiDAR map anchor (Beluga PF)** — `use_lidar_map_anchor`, ANDed with `use_lidar` (commit `96cc8cde`, 2026-09-09, replaced ICP scan-between/loop-closure) | 365–450 | `use_lidar_map_anchor` false, `lidar_map_resolution_m` 0.10, `lidar_map_tile_size_m` 10.0, `lidar_map_radius_tiles` 2 (5×5 tiles), `lidar_anchor_max_rate_hz` 5.0, `lidar_anchor_calibration_period_s` 60.0/`_burst_s` 10.0, `lidar_anchor_warmup_s` 5.0, `lidar_anchor_apply_age_s` 20.0, `lidar_anchor_engage_age_s` 1.0, `lidar_anchor_min/max_particles` 300/1500, `lidar_anchor_shadow_mode` false (bounded-rate calibration under Fixed), `lidar_anchor_adaptive_floor`/`_floor_quantile` 0.9 (field 2026-09-08) |
 
 Declared **without** a yaml line (code defaults only, tune via `ros2 param set` or add a line): `anchor_*`, `auto_save_enabled`, `autoload_graph`, `cog_*`, `cov_update_every_n`, `dr_slip_*`, `gps_max_sigma_reject_m`, `graph_save_prefix`, `isam2_*`, `periodic_save_period_s`, `rtk_autoload_override_threshold_m`, `scan_topic`, `stationary_motion_thresh_*`, and `stationary_node_period_s`. Launch-only parameters include `primary_mode`, `use_magnetometer`, `dock_pose_x`/`_y`/`_yaw`, and `dock_pose_yaw_sigma_rad`; the two LiDAR switches are launch-injected and also present in the template.
 
@@ -505,15 +507,13 @@ Declared **without** a yaml line (code defaults only, tune via `ros2 param set` 
 
 | `.env` key(s) | Selects | Container | Reaches the process as |
 |---|---|---|---|
-| `MOWGLI_ROS2_IMAGE`, `GPS_IMAGE`, `LIDAR_IMAGE`, `MAVROS_IMAGE`, `GUI_IMAGE`, `IMAGE_TAG` | image refs (`env.sh` `recompute_image_defaults`) | all | `image:` |
+| `MOWGLI_ROS2_IMAGE`, `UNIVERSAL_GNSS_IMAGE`, `LIDAR_{LDLIDAR,RPLIDAR,STL27L}_IMAGE`, `MAVROS_IMAGE`, `GUI_IMAGE`, `IMAGE_TAG` | image refs (`config.sh` `recompute_image_defaults`) | all | `image:`. `GPS_IMAGE` was removed (commit `bfd44f1a`, 2026-09-19); `UNIVERSAL_GNSS_IMAGE` is pinned by digest on a third-party registry, independent of `IMAGE_TAG` |
 | `ROS_DOMAIN_ID` | `x-ros2-env` anchor (`docker-compose.base.yml:7`) | every ROS service | container env (with `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `CYCLONEDDS_URI`) |
 | `ENABLE_FOXGLOVE` | `docker-compose.base.yml:18,44` | `mowgli-ros2` | `full_system.launch.py enable_foxglove:=…` — **the only launch arg the compose stack passes** |
-| `ENABLE_MQTT`, `ENABLE_WATCHTOWER` | `docker/stack.sh` / `compose.sh` fragment selection | `mowgli-mqtt`, `watchtower` | container presence |
+| `ENABLE_MQTT` | `docker/stack.sh` / `compose.sh` fragment selection | `mowgli-mqtt` | container presence. **Watchtower (and `ENABLE_WATCHTOWER`) was removed entirely on 2026-09-29** — the host updater now handles managed releases |
 | `LIDAR_ENABLED`, `LIDAR_TYPE`, `LIDAR_MODEL`, `LIDAR_CONNECTION`, `LIDAR_PORT`, `LIDAR_UART_DEVICE`, `LIDAR_BAUD` | `compose.sh` L102–117 → one `docker-compose.lidar-*.yml` | `mowgli-lidar` | driver args. **`LIDAR_ENABLED` controls the container only** — the ROS stack's LiDAR mode is `mowgli_robot.yaml:lidar_enabled` (`docker-compose.base.yml:13–17`) |
-| `GNSS_STACK`, `GNSS_BACKEND`, `GNSS_RECEIVER_FAMILY`, `GNSS_TRANSPORT`, `GNSS_SERIAL_DEVICE`, `GNSS_SERIAL_BAUD`, `GNSS_FRAME_ID` | `docker-compose.gps.yml:37–49` (deliberately no compose defaults) | `mowgli-gps` | `start_gps.sh` resolvers (YAML first, env second, built-in last) → `receiver_node --ros-args -p …` |
-| `GNSS_NTRIP_{ENABLED,HOST,PORT,MOUNTPOINT,USERNAME,PASSWORD,GGA_ENABLED,GGA_INTERVAL_S}` | `docker-compose.gps.yml:50–57` | `mowgli-gps` | `ntrip_node -p caster_host/…` |
-| `HARDWARE_BACKEND`, `MAVROS_*` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros`, `mowgli-ntrip` | MAVLink wiring; `mavros` forces `GNSS_BACKEND=disabled` (`env.sh` L303–305) |
-| `TFLUNA_{FRONT,EDGE}_*` | `docker-compose.tfluna-*.yml` | range sidecars | driver args |
+| `GNSS_STACK`, `GNSS_BACKEND` | `compose.sh` (`compose_gnss_service_name` → service `gps`) | `mowgli-gps` | which sidecar (if any) runs. **The receiver/serial/NTRIP `GNSS_*` env vars below `GNSS_STACK`/`GNSS_BACKEND` were removed entirely** (commit `bfd44f1a`, 2026-09-19, "#625"): the `gps` service now runs the external `UNIVERSAL_GNSS_IMAGE` via an inline launcher that reads `mowgli_robot.yaml` directly — there is no compose env passthrough left, and `sensors/gps/start_gps.sh`'s resolvers are ORPHANED code |
+| `HARDWARE_BACKEND`, `MAVROS_*` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros` | MAVLink wiring; `mavros` forces `GNSS_BACKEND=disabled` (`env.sh` L303–305). The standalone `mowgli-ntrip` service was removed (commit `bfd44f1a`, 2026-09-19, "#625") — there is no separate NTRIP container on this backend any more |
 | `COMPOSE_PROJECT_NAME` | named-volume prefix (`install_mowgli_maps`) | all | **keep stable** — renaming orphans persisted maps |
 | `MOWER_IP`, `DISABLE_BLUETOOTH`, `GPS_PROTOCOL` | host/ser2net helpers | — | `GPS_PROTOCOL` and `GNSS_BACKEND`/`HARDWARE_BACKEND` are passed into `mowgli-ros2` but **nothing there reads them** |
 
