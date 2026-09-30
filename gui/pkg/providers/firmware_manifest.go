@@ -82,8 +82,21 @@ func updaterSocketPath() string {
 // version string alone. A package var, like firmwareReleaseDownloadBase/
 // latestFirmwareManifestURL/githubReleaseBase above, so tests can stub it
 // without a real socket. ok is false when the worker is unreachable (a very
-// early boot, or an install predating the worker) or reports no active
-// deployment yet.
+// early boot, or an install predating the worker), reports no active
+// deployment yet, or — PR #811 review — reports runtime.identity == "drifted":
+// a manual update/repair (root CLAUDE.md's install codemap; #815) can
+// regenerate the stack straight from the checkout and clear state.Active
+// without the worker's own record of "what's installed" being refreshed to
+// match, so state.Active can name a repository/release that is no longer
+// what is actually running. runtime.identity is the worker's own live
+// reconciliation of state.Active.InstalledImages against the real running
+// containers (updater/runtime.go reconcile()) — "drifted" means they no
+// longer agree, so state.Active is exactly the kind of stale record this
+// function must not trust. Any other identity (including "unknown", the
+// value before the first reconcile pass or while a job is in flight) is NOT
+// treated as drift: it is "not yet confirmed", not "confirmed wrong", and
+// erring toward it would make this fall back to the upstream-only heuristic
+// on every fresh boot, defeating the fix this function exists for.
 var activeDeploymentSource = func() (repo, releaseTag string, ok bool) {
 	client := updater.Client(updaterSocketPath())
 	client.Timeout = 5 * time.Second
@@ -104,8 +117,14 @@ var activeDeploymentSource = func() (repo, releaseTag string, ok bool) {
 				ReleaseTag string `json:"release_tag"`
 			} `json:"active"`
 		} `json:"state"`
+		Runtime struct {
+			Identity string `json:"identity"`
+		} `json:"runtime"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.State.Active == nil {
+		return "", "", false
+	}
+	if body.Runtime.Identity == "drifted" {
 		return "", "", false
 	}
 	repo, releaseTag = body.State.Active.Source.Repository, body.State.Active.ReleaseTag
