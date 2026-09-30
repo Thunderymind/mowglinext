@@ -661,6 +661,35 @@ TEST(CoveragePlanning, SubPathOrderHandlesManySubPathsWithoutCrashing)
   EXPECT_EQ(total_points, many.size() * 2);
 }
 
+// mowglinext#819 review (liltaket): trying every sub-path as seed must never
+// reverse sub-path 0's ORIGINAL winding, even when a DIFFERENT sub-path wins
+// as seed and pulls sub-path 0 in as an ordinary candidate. sub-path 0 is the
+// one most likely to carry headland-ring material (buildContinuousSubPaths
+// appends rings before swaths), and reversing a ring's point order reverses
+// its driven winding — silently inverting the operator's ring_direction
+// (#335) for a shorter transit link.
+//
+// Constructed so seed=2 ("Z") is the clear global optimum IF sub-path 0
+// ("R") may be reversed (Z->R-reversed->Y totals 0.002 m), strictly beating
+// every other seed (seed=0 totals 10.001 m, seed=1 totals ~64 m) — so an
+// unprotected search would pick it and reverse R. With R protected, seed=2's
+// own total rises to 20.0 m (R must be entered forward, at 9.999 m instead
+// of 0.001 m), making seed=0 (10.001 m, R AS the seed — always forward
+// regardless) the new global optimum: R survives untouched either way, but
+// only the protection guarantees it.
+TEST(CoveragePlanning, SubPathOrderNeverReversesSubPathZero)
+{
+  const std::vector<std::pair<double, double>> r{{0.0, 10.0}, {0.0, 0.0}};
+  const std::vector<std::pair<double, double>> y{{0.0, 10.001}, {50.0, 50.0}};
+  const std::vector<std::pair<double, double>> z{{0.0, -0.001}, {0.0, 0.001}};
+
+  const auto ordered = orderSubPathsForMinimalTransit({r, y, z});
+  ASSERT_EQ(ordered.size(), 3u);
+
+  const auto it = std::find(ordered.begin(), ordered.end(), r);
+  ASSERT_NE(it, ordered.end()) << "sub-path 0 (R) must survive as an exact, unreversed match";
+}
+
 // #335: ring_direction controls the perimeter/headland travel winding (blade
 // side). 1 = clockwise (negative shoelace area), 2 = counter-clockwise
 // (positive). The two produce the same ring geometry driven the opposite way.

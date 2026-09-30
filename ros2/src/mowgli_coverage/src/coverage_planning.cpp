@@ -1737,7 +1737,12 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
   // vertex is a valid start) so it begins at the vertex nearest the previous
   // ring's end: concentric rings are locally parallel there, so the junction
   // becomes a gentle ~op_width sideways shift the connector joins tangentially.
-  // The first ring keeps F2C's start (TransitToStrip already targets it).
+  // The first ring keeps F2C's own start vertex — this is a ring-GENERATION
+  // decision, made before any sub-path splitting, and is unaffected by which
+  // sub-path ends up first after orderSubPathsForMinimalTransit reorders the
+  // FINISHED sub-paths below (mowglinext#819: transit order can now change,
+  // so this is no longer necessarily what TransitToStrip drives to first —
+  // it just means one ring somewhere keeps F2C's own un-rotated start).
   // Ring DRIVE-ORDER grouping. F2C's generateHeadlandSwaths emits ring loops PER
   // PASS as [outer, hole, outer, hole, …], so consecutive concentric OUTER rings
   // are interleaved with the field-centre hole rings. Driven in that raw order the
@@ -2204,6 +2209,17 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
   //     covers the reverse-the-other-one case the single-seed version had,
   //     plus every case where the BEST link is to the seed's normally-unused
   //     front end via a different sub-path arriving there first.
+  //   * Sub-path 0's ORIGINAL winding is NEVER reversed, whether or not it
+  //     wins as seed (mowglinext#819 review): buildContinuousSubPaths appends
+  //     rings before swaths, so sub-path 0 is the one most likely to carry
+  //     headland-ring material, and reversing a ring's point order reverses
+  //     its DRIVEN winding — silently inverting the operator's configured
+  //     ring_direction (blade-side clockwise/counter-clockwise, issue #335)
+  //     for a shorter transit link. "The seed is never reversed" alone does
+  //     not protect sub-path 0 when a DIFFERENT sub-path wins as seed and
+  //     pulls sub-path 0 in as an ordinary candidate — this is the one
+  //     exception the seed search may not touch, regardless of which seed is
+  //     best. See RingDirection*Preserved in test_coverage_planning.cpp.
   //   * Bounded to kMaxSeedSearchSize sub-paths (O(n^3) — every seed reruns the
   //     O(n^2) chain): a pathological multi-hole field with more lobes than that
   //     falls back to the single-seed=0 search instead, which is still a
@@ -2252,13 +2268,21 @@ std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTrans
           continue;
         }
         const double ds = gap(cur, sub_paths[j].front());  // enter forward
-        const double de = gap(cur, sub_paths[j].back());  // enter reversed
         if (ds < best_d)
         {
           best_d = ds;
           best = j;
           best_rev = false;
         }
+        // Sub-path 0 (ORIGINAL index, not the winning seed) is never entered
+        // reversed — see the doc comment above: it is the one sub-path this
+        // function does not own the winding of, so no seed choice may flip
+        // it, no matter how much shorter that link would be.
+        if (j == 0)
+        {
+          continue;
+        }
+        const double de = gap(cur, sub_paths[j].back());  // enter reversed
         if (de < best_d)
         {
           best_d = de;
