@@ -54,7 +54,15 @@ private:
   // the live obstacle_margin, exactly as buildCellFromGoal does for a real
   // plan (bufferRingOutward). Backs the GUI's "obstacle clearance preview"
   // map overlay — never consumed by planning itself.
+  //
+  // nav2::LifecycleNode::create_service demands the 3-argument service
+  // callback signature (request_header, request, response) — the 2-argument
+  // form a plain rclcpp::Node::create_service accepts does not convert to
+  // its CallbackType (CI-caught, mowglinext#802 PR build failure). The
+  // header is unused here; every request is served the same way regardless
+  // of who's asking.
   void previewObstacleClearance(
+      const std::shared_ptr<rmw_request_id_s> request_header,
       const std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Request> request,
       std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Response> response);
 
@@ -62,8 +70,10 @@ private:
   // half-width (erodeRingInward) so RecordArea (mowgli_behavior) can save
   // what the operator actually traced, not base_footprint's own trajectory
   // offset by however close they drove to the object. Physical correction
-  // only — no obstacle_margin or footprint safety margin involved.
+  // only — no obstacle_margin or footprint safety margin involved. See
+  // previewObstacleClearance's doc comment for why request_header exists.
   void correctRecordedObstacle(
+      const std::shared_ptr<rmw_request_id_s> request_header,
       const std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Request> request,
       std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Response> response);
 

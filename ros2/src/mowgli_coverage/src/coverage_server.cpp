@@ -139,14 +139,16 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
           std::bind(&CoverageServer::previewObstacleClearance,
                     this,
                     std::placeholders::_1,
-                    std::placeholders::_2));
+                    std::placeholders::_2,
+                    std::placeholders::_3));
   correct_recorded_obstacle_service_ =
       create_service<mowgli_interfaces::srv::CorrectRecordedObstacle>(
           "~/correct_recorded_obstacle",
           std::bind(&CoverageServer::correctRecordedObstacle,
                     this,
                     std::placeholders::_1,
-                    std::placeholders::_2));
+                    std::placeholders::_2,
+                    std::placeholders::_3));
 
   RCLCPP_INFO(get_logger(),
               "F2C v3 boustrophedon backend ready. robot_width=%.2fm "
@@ -945,6 +947,7 @@ void CoverageServer::planCoverage()
 }
 
 void CoverageServer::previewObstacleClearance(
+    const std::shared_ptr<rmw_request_id_s> /*request_header*/,
     const std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Request> request,
     std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Response> response)
 {
@@ -982,6 +985,7 @@ void CoverageServer::previewObstacleClearance(
 }
 
 void CoverageServer::correctRecordedObstacle(
+    const std::shared_ptr<rmw_request_id_s> /*request_header*/,
     const std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Request> request,
     std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Response> response)
 {
