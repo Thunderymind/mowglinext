@@ -358,6 +358,12 @@ export interface TypesFirmwareConfig {
    * flashes the tested prebuilt binary.
    */
   firmwareSource?: string;
+  /**
+   * FirmwareTarget is an exact PlatformIO/release-manifest environment for
+   * boards with multiple firmware variants. Empty preserves legacy routing.
+   */
+  firmwareTarget?: string;
+  firmwareTargetOrigin?: string;
   imuOnboardInclinationThreshold?: number;
   limitVoltage150MA?: number;
   masterJ18?: boolean;

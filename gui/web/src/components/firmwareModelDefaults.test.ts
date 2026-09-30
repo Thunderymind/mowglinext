@@ -19,6 +19,16 @@ describe("firmware model defaults", () => {
         });
     });
 
+    it("maps Biltema RM1000 to the F401 board, 900 ECO panel, and native target", () => {
+        expect(firmwareDefaultsForModel("BiltemaRM1000")).toEqual({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+            firmwareTarget: "BiltemaRM1000",
+        });
+        expect(firmwareDefaultsForModel("BiltemaRM1000")?.firmwareTarget)
+            .not.toBe("Yardforce500B");
+    });
+
     it.each(["CUSTOM", "LUV1000RI", "unknown", undefined])(
         "does not guess for unsupported model %s",
         (model) => {
@@ -26,7 +36,7 @@ describe("firmware model defaults", () => {
             expect(applyFirmwareModelDefaults(model, {
                 boardType: "BOARD_YARDFORCE500",
                 panelType: "PANEL_TYPE_YARDFORCE_500_CLASSIC",
-            })).toEqual({boardType: "", panelType: ""});
+            })).toEqual({boardType: "", panelType: "", firmwareTarget: ""});
         },
     );
 
@@ -38,7 +48,38 @@ describe("firmware model defaults", () => {
         expect(applyFirmwareModelDefaults("YardForce500B", manual, {
             boardType: true,
             panelType: true,
+        })).toEqual({...manual, firmwareTarget: ""});
+    });
+
+    it("preserves manual board, panel, and target overrides", () => {
+        const manual = {
+            boardType: "BOARD_LUV1000RI",
+            panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+            firmwareTarget: "LUV1000RI",
+        };
+        expect(applyFirmwareModelDefaults("BiltemaRM1000", manual, {
+            boardType: true,
+            panelType: true,
+            firmwareTarget: true,
         })).toEqual(manual);
+    });
+
+    it("updates auto-managed fields when changing to and away from RM1000", () => {
+        const rm1000 = applyFirmwareModelDefaults("BiltemaRM1000", {
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+            firmwareTarget: "",
+        });
+        expect(rm1000).toEqual({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+            firmwareTarget: "BiltemaRM1000",
+        });
+        expect(applyFirmwareModelDefaults("YardForce500B", rm1000)).toEqual({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+            firmwareTarget: "",
+        });
     });
 
     it("updates the model-following field when only the other field is overridden", () => {
@@ -48,6 +89,7 @@ describe("firmware model defaults", () => {
         }, {boardType: true})).toEqual({
             boardType: "BOARD_LUV1000RI",
             panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+            firmwareTarget: "",
         });
     });
 
@@ -62,6 +104,7 @@ describe("firmware model defaults", () => {
             ...current,
             boardType: "BOARD_YARDFORCE500B",
             panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+            firmwareTarget: "",
         });
     });
 
@@ -69,7 +112,7 @@ describe("firmware model defaults", () => {
         expect(manualOverridesFromProvenance({
             boardType: "BOARD_YARDFORCE500",
             panelType: "PANEL_TYPE_YARDFORCE_500_CLASSIC",
-        })).toEqual({boardType: true, panelType: true});
+        })).toEqual({boardType: true, panelType: true, firmwareTarget: false});
     });
 
     it("keeps only explicitly automatic fields following model changes", () => {
@@ -79,6 +122,38 @@ describe("firmware model defaults", () => {
             boardTypeOrigin: "manual",
             panelTypeOrigin: "auto",
             firmwareSelectionModel: "YardForce500",
-        })).toEqual({boardType: true, panelType: false});
+        })).toEqual({boardType: true, panelType: false, firmwareTarget: false});
+    });
+
+    it("recognizes an auto-managed target independently from board and panel", () => {
+        expect(manualOverridesFromProvenance({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+            firmwareTarget: "BiltemaRM1000",
+            boardTypeOrigin: "auto",
+            panelTypeOrigin: "auto",
+            firmwareTargetOrigin: "auto",
+        })).toEqual({boardType: false, panelType: false, firmwareTarget: false});
+    });
+
+    it("migrates targetless legacy fields to RM1000 defaults while retaining modern manual overrides", () => {
+        const legacy = {
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+        };
+        const legacyOverrides = manualOverridesFromProvenance(legacy, "BiltemaRM1000");
+        expect(legacyOverrides).toEqual({boardType: false, panelType: false, firmwareTarget: false});
+        expect(applyFirmwareModelDefaults("BiltemaRM1000", legacy, legacyOverrides)).toEqual({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
+            firmwareTarget: "BiltemaRM1000",
+        });
+
+        expect(manualOverridesFromProvenance({
+            boardType: "BOARD_LUV1000RI",
+            panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+            boardTypeOrigin: "manual",
+            panelTypeOrigin: "auto",
+        }, "BiltemaRM1000")).toEqual({boardType: true, panelType: false, firmwareTarget: false});
     });
 });

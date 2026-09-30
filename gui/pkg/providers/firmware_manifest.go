@@ -126,15 +126,26 @@ func fetchFirmwareManifest(url string) (*firmwareManifest, error) {
 // resolveManifestEntry picks the prebuilt permutation for a hardware selection.
 // It matches on BoardType (the irreducible compile-time axis — MCU family), and
 // when a panel is given and more than one entry shares the board, disambiguates
-// on PanelType. Returns an error naming the board when nothing matches, so the
-// caller can steer the user to the expert build path instead of flashing a
-// wrong or absent binary.
-func resolveManifestEntry(m *firmwareManifest, board, panel string) (firmwareManifestEntry, error) {
+// on PanelType. When target is set it additionally requires an exact manifest
+// environment match and verifies the panel, so related board profiles never
+// silently select each other's binaries. Returns an error when nothing matches
+// so the caller can steer the user to the expert build path instead of flashing
+// a wrong or absent binary.
+func resolveManifestEntry(m *firmwareManifest, board, panel, target string) (firmwareManifestEntry, error) {
 	var matches []firmwareManifestEntry
 	for _, entry := range m.Permutations {
 		if entry.Board == board {
 			matches = append(matches, entry)
 		}
+	}
+	if target != "" {
+		for _, entry := range matches {
+			if entry.Env == target && (panel == "" || entry.Panel == panel) {
+				return entry, nil
+			}
+		}
+		return firmwareManifestEntry{}, xerrors.Errorf(
+			"no prebuilt firmware published for board %q and target %q", board, target)
 	}
 	switch len(matches) {
 	case 0:
