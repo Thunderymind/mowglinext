@@ -2454,6 +2454,69 @@ f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, doubl
   return dedupClosedRing(out);
 }
 
+f2c::types::LinearRing erodeRingInward(const f2c::types::LinearRing& in, double distance)
+{
+  if (distance <= 0.0 || in.size() < 3)
+  {
+    return dedupClosedRing(in);
+  }
+  // Same GDAL/OGR Buffer() call as bufferRingOutward, with a NEGATED distance
+  // — OGR erodes a polygon for a negative buffer distance. Rounded joins (8
+  // quadrant segments) match the growth side so a round-tripped ring (grow
+  // then shrink by the same amount) returns close to the original shape.
+  OGRLinearRing ogr_ring;
+  for (std::size_t i = 0; i < in.size(); ++i)
+  {
+    const auto p = in.getGeometry(i);
+    ogr_ring.addPoint(p.getX(), p.getY());
+  }
+  ogr_ring.closeRings();
+  OGRPolygon poly;
+  poly.addRing(&ogr_ring);
+  std::unique_ptr<OGRGeometry> shrunk(poly.Buffer(-distance, 8));
+  // Erosion legitimately collapses a small/thin/degenerate polygon to
+  // nothing — that MUST surface as failure (an empty ring), never as a
+  // silent fall-back to the uncorrected input: the whole point of this
+  // function is that the caller never keeps the extra margin.
+  if (!shrunk)
+  {
+    return f2c::types::LinearRing();
+  }
+  const OGRPolygon* shrunk_poly = nullptr;
+  const auto flat_type = wkbFlatten(shrunk->getGeometryType());
+  if (flat_type == wkbPolygon)
+  {
+    shrunk_poly = shrunk->toPolygon();
+  }
+  else if (flat_type == wkbMultiPolygon)
+  {
+    // A concave ring can erode into several disjoint parts; keep the
+    // largest, matching bufferRingOutward's growth-side tie-break.
+    double best_area = -1.0;
+    for (const auto* part : *shrunk->toMultiPolygon())
+    {
+      const double a = part->get_Area();
+      if (a > best_area)
+      {
+        best_area = a;
+        shrunk_poly = part;
+      }
+    }
+  }
+  if (!shrunk_poly || !shrunk_poly->getExteriorRing() ||
+      shrunk_poly->getExteriorRing()->getNumPoints() < 4)
+  {
+    return f2c::types::LinearRing();
+  }
+  const OGRLinearRing* ext = shrunk_poly->getExteriorRing();
+  f2c::types::LinearRing out;
+  for (int i = 0; i < ext->getNumPoints(); ++i)
+  {
+    out.addPoint(f2c::types::Point(ext->getX(i), ext->getY(i)));
+  }
+  return dedupClosedRing(out);
+}
+
 namespace
 {
 

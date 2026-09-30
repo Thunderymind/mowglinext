@@ -54,6 +54,8 @@ set(srv_files
   "srv/CoverageOrientation.srv"
   "srv/SetFleetAssignment.srv"
   "srv/PromoteObstacle.srv"
+  "srv/PreviewObstacleClearance.srv"
+  "srv/CorrectRecordedObstacle.srv"
 )
 
 # Declare action files

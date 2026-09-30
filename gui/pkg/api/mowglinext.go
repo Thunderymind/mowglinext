@@ -628,6 +628,34 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": promoteRes.Message})
 				return
 			}
+		case "preview_obstacle_clearance":
+			// Read-only: buffers each obstacle polygon outward by the LIVE
+			// obstacle_margin coverage_server is actually planning with
+			// (bufferRingOutward, reused server-side — never reimplemented
+			// here), for the Map page's toggleable clearance-preview overlay.
+			var previewReq struct {
+				Obstacles []geometry.Polygon `json:"obstacles"`
+			}
+			if err = c.BindJSON(&previewReq); err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			if previewReq.Obstacles == nil {
+				previewReq.Obstacles = []geometry.Polygon{}
+			}
+			var previewRes mowgli.PreviewObstacleClearanceRes
+			err = provider.CallService(ctx,
+				"/coverage_server/preview_obstacle_clearance",
+				&mowgli.PreviewObstacleClearanceReq{Obstacles: previewReq.Obstacles},
+				&previewRes,
+				"mowgli_interfaces/srv/PreviewObstacleClearance")
+			if err == nil {
+				if previewRes.Buffered == nil {
+					previewRes.Buffered = []geometry.Polygon{}
+				}
+				c.JSON(200, previewRes)
+				return
+			}
 		case "ignore_obstacle", "discard_obstacle":
 			// Reject a PENDING obstacle proposal (currently: wheel-slip dig
 			// keepouts) by its MapObstacleInfo.id. Nothing was persisted, so
