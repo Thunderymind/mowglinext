@@ -78,9 +78,13 @@ private:
       std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Response> response);
 
   std::unique_ptr<ActionServer> action_server_;
-  rclcpp::Service<mowgli_interfaces::srv::PreviewObstacleClearance>::SharedPtr
+  // nav2::LifecycleNode::create_service returns a nav2::ServiceServer<T>
+  // handle, NOT a plain rclcpp::Service<T> (CI-caught, mowglinext#802 PR
+  // build failure, second error uncovered once the callback signature
+  // itself was fixed).
+  nav2::ServiceServer<mowgli_interfaces::srv::PreviewObstacleClearance>::SharedPtr
       preview_obstacle_clearance_service_;
-  rclcpp::Service<mowgli_interfaces::srv::CorrectRecordedObstacle>::SharedPtr
+  nav2::ServiceServer<mowgli_interfaces::srv::CorrectRecordedObstacle>::SharedPtr
       correct_recorded_obstacle_service_;
 
   // Static parameters (snapshot at on_configure). Geometry knobs that are
