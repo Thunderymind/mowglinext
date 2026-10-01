@@ -44,6 +44,9 @@ jobs:
       - name: Test runtime parameters and their flash persistence
         run: python3 firmware/scripts/test_fw_params.py
 
+      - name: Validate published firmware permutations and release builds
+        run: python3 firmware/scripts/test_package_release.py
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -51,6 +54,8 @@ jobs:
         environment:
           - Yardforce500
           - Yardforce500B
+          - BiltemaRM1000
+          - BiltemaRM1000_MPU6050_Yaw180
           - Yardforce500_COASTDOWN_VALIDATION
     steps:
       - uses: actions/checkout@v6
@@ -87,7 +92,7 @@ jobs:
         run: pip install platformio
 
       - name: Run native firmware unit tests
-        run: pio test -e native
+        run: pio test -e native -e native_rm1000_yaw180
         working-directory: firmware/stm32/ros_usbnode
 
   # ─── Publish prebuilt binaries on a version tag ────────────────────────────
@@ -134,6 +139,7 @@ jobs:
         run: |
           pio run -e Yardforce500
           pio run -e Yardforce500B
+          pio run -e BiltemaRM1000
 
       - name: Package binaries + manifest
         env:

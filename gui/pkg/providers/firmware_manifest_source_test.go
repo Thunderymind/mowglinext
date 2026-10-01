@@ -58,6 +58,30 @@ func TestFirmwareManifestURLForVersion(t *testing.T) {
 	}
 }
 
+func TestResolveManifestEntryRequiresExactExplicitTarget(t *testing.T) {
+	manifest := &firmwareManifest{Permutations: map[string]firmwareManifestEntry{
+		"yardforce500b": {
+			Env: "Yardforce500B", Board: "BOARD_YARDFORCE500B",
+			Panel: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+		},
+		"biltema-rm1000": {
+			Env: "BiltemaRM1000", Board: "BOARD_YARDFORCE500B",
+			Panel: "PANEL_TYPE_YARDFORCE_900_ECO",
+		},
+	}}
+
+	entry, err := resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "BiltemaRM1000")
+	require.NoError(t, err)
+	assert.Equal(t, "BiltemaRM1000", entry.Env)
+
+	_, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "")
+	assert.NoError(t, err) // Legacy board/panel configs retain their old selection behavior.
+	_, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "MissingRM1000")
+	assert.ErrorContains(t, err, `target "MissingRM1000"`)
+	_, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500_CLASSIC", "BiltemaRM1000")
+	assert.ErrorContains(t, err, `target "BiltemaRM1000"`)
+}
+
 // A dev deployment must flash the firmware built with it (its protocol matches
 // the ROS2 image), never the latest stable one from main.
 func TestInstallManifestUsesTheDeploymentRelease(t *testing.T) {
@@ -112,4 +136,16 @@ func TestAvailableFirmwareForTheSavedBoard(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.Available)
 	assert.Equal(t, "BOARD_LUV1000RI", result.Board)
+
+	// An RM1000 selection must not be reported available from the ordinary
+	// Yardforce500B binary when the release has no RM1000 permutation.
+	require.NoError(t, db.Set("gui.firmware.config", []byte(`{"boardType":"BOARD_YARDFORCE500B","panelType":"PANEL_TYPE_YARDFORCE_900_ECO","firmwareTarget":"BiltemaRM1000"}`)))
+	result, err = fp.AvailableFirmware()
+	require.NoError(t, err)
+	assert.False(t, result.Available)
+
+	require.NoError(t, db.Set("gui.firmware.config", []byte(`{"boardType":"BOARD_YARDFORCE500B","panelType":"PANEL_TYPE_YARDFORCE_500B_CLASSIC","firmwareSelectionModel":"BiltemaRM1000"}`)))
+	result, err = fp.AvailableFirmware()
+	require.NoError(t, err)
+	assert.False(t, result.Available)
 }

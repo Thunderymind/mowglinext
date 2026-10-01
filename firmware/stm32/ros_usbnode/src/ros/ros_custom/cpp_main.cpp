@@ -23,11 +23,13 @@
 #include "main.h"
 
 #include "blademotor.h"
+#include "actuator_authorization.h"
 #include "charger.h"
 #include "drivemotor.h"
 #include "emergency.h"
 #include "blade_emergency_policy.hpp"
 #include "heartbeat_emergency_policy.hpp"
+#include "motor_output_safety.hpp"
 #include "nbt.h"
 #include "panel.h"
 #include "pid.hpp"
@@ -251,7 +253,13 @@ static volatile float g_yaw_gyro_bias = 0.0f;
  * Blade motor control state
  * ---------------------------------------------------------------------------*/
 static volatile uint8_t target_blade_on_off = 0;
-static volatile uint32_t target_blade_emergency_generation = 0;
+static volatile uint32_t target_blade_authorization_epoch = 0;
+static volatile uint32_t cmd_vel_authorization_epoch = 0;
+static volatile uint32_t host_zero_phase_sequence = 0u;
+static volatile uint8_t host_zero_motion_intent = 0u;
+static volatile uint8_t host_yaw_inhibit = 1u;
+static mowgli_motor_safety::LinkRearmState motor_link_rearm_state{};
+static volatile uint8_t motor_link_rearm_required = 1u;
 static uint8_t blade_on_off = 0;
 static uint8_t blade_direction = 0;
 
@@ -259,6 +267,7 @@ static uint8_t blade_direction = 0;
  * cmd_vel timeout tracking (replaces ros::Time)
  * ---------------------------------------------------------------------------*/
 static volatile uint32_t last_cmd_vel_tick = 0;
+static volatile uint8_t valid_cmd_vel_seen = 0u;
 
 /* ---------------------------------------------------------------------------
  * High-level state received from host
@@ -270,6 +279,8 @@ static uint8_t hl_gps_quality = 0;
  * Heartbeat watchdog
  * ---------------------------------------------------------------------------*/
 static volatile uint32_t last_heartbeat_tick = 0;
+static volatile uint8_t heartbeat_seen = 0u;
+#define CMD_VEL_TIMEOUT_MS 200u
 #define HEARTBEAT_TIMEOUT_MS 2000u
 
 /* True when the CURRENTLY latched emergency was raised SOLELY by the heartbeat
@@ -361,6 +372,7 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
   const pkt_heartbeat_t *pkt = reinterpret_cast<const pkt_heartbeat_t *>(data);
 
   last_heartbeat_tick = HAL_GetTick();
+  heartbeat_seen = 1u;
 
   const bool emergency_requested = pkt->emergency_requested != 0u;
   const bool emergency_release_requested =
@@ -418,19 +430,69 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
    * malformed packet deterministically stops the next motor cycle. */
   mowgli_cmd_vel::SafetyState safety_state{
       cmd_wz, left_target_mps, right_target_mps, last_cmd_vel_tick};
-  if (!mowgli_cmd_vel::apply_safety(vx, wz, HAL_GetTick(), safety_state)) {
+  if (!mowgli_cmd_vel::apply_safety_for_mode(
+          vx, wz, HAL_GetTick(),
+          main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, safety_state)) {
     cmd_wz = safety_state.cmd_wz;
     left_target_mps = safety_state.left_target_mps;
     right_target_mps = safety_state.right_target_mps;
+    host_zero_motion_intent = safety_state.zero_motion_intent ? 1u : 0u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
     return;
   }
 
-  /* Only a validated command is a new cmd_vel heartbeat. */
+  const bool zero_motion = safety_state.zero_motion_intent;
+  const bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+  uint32_t accepted_authorization_epoch = 0u;
+  const uint32_t authorization_primask = __get_PRIMASK();
+  __disable_irq();
+  const bool safety_boundary_active =
+      mowgli_cmd_vel::authorization_boundary_active(
+          idle, zero_motion, Emergency_State() != 0u);
+  const bool drive_command_accepted =
+      ActuatorAuthorization_AcceptDriveCommand(
+          zero_motion, safety_boundary_active,
+          &accepted_authorization_epoch);
+  __set_PRIMASK(authorization_primask);
+  if (!drive_command_accepted) {
+    cmd_wz = 0.0f;
+    left_target_mps = 0.0f;
+    right_target_mps = 0.0f;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    return;
+  }
+
+  if (idle) {
+    /* A zero observed in IDLE satisfies only the fresh-zero re-arm phase.
+     * The IDLE/emergency gates still hold the physical output at zero, and
+     * this path must not make blade commands look fresh or extend motion TTL. */
+    cmd_vel_authorization_epoch = accepted_authorization_epoch;
+    cmd_wz = 0.0f;
+    left_target_mps = 0.0f;
+    right_target_mps = 0.0f;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
+    valid_cmd_vel_seen = 0u;
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    if (target_blade_on_off == 0u) {
+      ++host_zero_phase_sequence;
+    }
+    return;
+  }
+
+  /* Only a validated, currently authorized command is a new cmd_vel
+   * heartbeat. The epoch is captured atomically with the zero re-arm. */
+  cmd_vel_authorization_epoch = accepted_authorization_epoch;
   last_cmd_vel_tick = safety_state.last_valid_tick;
-
-  if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
-    return;
-  }
+  valid_cmd_vel_seen = 1u;
+  host_zero_motion_intent = zero_motion ? 1u : 0u;
+  host_yaw_inhibit = safety_state.yaw_inhibited ? 1u : 0u;
+  DRIVEMOTOR_SetHostZeroMotionIntent(zero_motion ? 1u : 0u);
 
   /* Commanded yaw rate for the firmware yaw-rate loop (Option C), read in the
    * motor timebase by motors_handler. Stored raw (pre-IK) so the loop tracks
@@ -461,6 +523,9 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
    * deadband on sub-deadband commands. */
   left_target_mps = left_mps;
   right_target_mps = right_mps;
+  if (zero_motion && target_blade_on_off == 0u) {
+    ++host_zero_phase_sequence;
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -586,6 +651,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
   }
 
   const pkt_hl_state_t *pkt = reinterpret_cast<const pkt_hl_state_t *>(data);
+  const bool was_idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
 
   hl_current_mode = pkt->current_mode;
   hl_gps_quality = pkt->gps_quality;
@@ -624,11 +690,21 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     PANEL_Set_LED(PANEL_LED_4H, PANEL_LED_OFF);
     PANEL_Set_LED(PANEL_LED_6H, PANEL_LED_OFF);
     PANEL_Set_LED(PANEL_LED_8H, PANEL_LED_OFF);
+    if (!was_idle) {
+      ActuatorAuthorization_Invalidate();
+    }
     main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
     left_target_mps = right_target_mps = 0.0f;
+    /* IDLE invalidates the controller's already prepared UART speeds too. A
+     * rapid later mode change still needs a fresh post-IDLE cmd_vel. */
+    DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+    DRIVEMOTOR_SetSpeedSigned(0, 0, ActuatorAuthorization_Epoch());
     cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
-    target_blade_emergency_generation = Emergency_Generation();
+    target_blade_authorization_epoch = ActuatorAuthorization_Epoch();
+    valid_cmd_vel_seen = 0u;
+    host_zero_motion_intent = 1u;
+    host_yaw_inhibit = 1u;
     break;
   }
 
@@ -645,16 +721,30 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
    * Commands received during an emergency are rejected by the shared policy. */
   const uint32_t primask = __get_PRIMASK();
   __disable_irq();
-  const uint32_t emergency_generation = Emergency_Generation();
+  const uint32_t emergency_generation = ActuatorAuthorization_Epoch();
   const bool emergency_active = Emergency_State() != 0u;
+  const bool blade_command_fresh = blade_on_command_is_fresh(
+      HAL_GetTick(), last_cmd_vel_tick, valid_cmd_vel_seen != 0u,
+      CMD_VEL_TIMEOUT_MS, last_heartbeat_tick, heartbeat_seen != 0u,
+      HEARTBEAT_TIMEOUT_MS) &&
+      ActuatorAuthorization_DriveRequestIsCurrent(
+          cmd_vel_authorization_epoch);
+  const std::uint8_t accepted_blade_request =
+      pkt->blade_on != 0u && !blade_command_fresh ? 0u : pkt->blade_on;
   const BladeIntentDecision decision = decide_blade_intent(
-      target_blade_on_off, target_blade_emergency_generation, true,
-      pkt->blade_on, emergency_generation,
+      target_blade_on_off, target_blade_authorization_epoch, true,
+      accepted_blade_request, emergency_generation,
       main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE, emergency_active,
+      motor_link_rearm_required != 0u,
       emergency_generation);
   target_blade_on_off = decision.retained_request;
-  target_blade_emergency_generation = decision.request_generation;
+  target_blade_authorization_epoch = decision.request_generation;
   blade_direction = pkt->blade_dir;
+  if (pkt->blade_on == 0u && host_zero_motion_intent != 0u &&
+      left_target_mps == 0.0f && right_target_mps == 0.0f &&
+      main_eOpenmowerStatus != OPENMOWER_STATUS_IDLE) {
+    ++host_zero_phase_sequence;
+  }
   __set_PRIMASK(primask);
 }
 
@@ -811,13 +901,59 @@ extern "C" void motors_handler() {
     float snap_right_target = right_target_mps;
     float snap_cmd_wz = cmd_wz;
     uint8_t snap_target_blade = target_blade_on_off;
-    uint32_t snap_blade_generation = target_blade_emergency_generation;
+    uint32_t snap_blade_generation = target_blade_authorization_epoch;
     uint32_t snap_cmd_vel = last_cmd_vel_tick;
+    uint32_t snap_cmd_vel_authorization_epoch = cmd_vel_authorization_epoch;
+    uint32_t snap_zero_phase = host_zero_phase_sequence;
+    bool snap_zero_intent = host_zero_motion_intent != 0u;
+    bool snap_yaw_inhibit = host_yaw_inhibit != 0u;
     float snap_ticks_per_meter = DRIVEMOTOR_GetTicksPerMeter();
-    uint32_t snap_emergency_generation = Emergency_Generation();
+    uint32_t snap_emergency_generation = ActuatorAuthorization_Epoch();
     bool emergency_active = Emergency_State() != 0u;
     bool idle = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
+    bool links_healthy = DRIVEMOTOR_FeedbackHealthy() &&
+                         BLADEMOTOR_FeedbackHealthy();
+    uint32_t drive_fault_sequence = DRIVEMOTOR_FaultSequence();
+    uint32_t blade_fault_sequence = BLADEMOTOR_FaultSequence();
+    bool link_inhibited = MOTORLINK_OutputInhibited() != 0u;
     __enable_irq();
+
+    const bool cmd_vel_authorization_current =
+        ActuatorAuthorization_DriveRequestIsCurrent(
+            snap_cmd_vel_authorization_epoch);
+
+    motor_link_rearm_required = mowgli_motor_safety::update_link_rearm(
+        motor_link_rearm_state, links_healthy, snap_zero_phase,
+        snap_zero_intent, snap_target_blade == 0u, drive_fault_sequence,
+        blade_fault_sequence, link_inhibited);
+    if (motor_link_rearm_required != 0u) {
+      MOTORLINK_ForceInhibit();
+    } else {
+      /* Close the race with a UART fault or a host update between the snapshot
+       * and inhibit clear. The source links must still be healthy and no newer
+       * zero/off intent may have arrived. */
+      const uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      const bool still_healthy = DRIVEMOTOR_FeedbackHealthy() &&
+                                 BLADEMOTOR_FeedbackHealthy() &&
+          DRIVEMOTOR_FaultSequence() == drive_fault_sequence &&
+          BLADEMOTOR_FaultSequence() == blade_fault_sequence &&
+          host_zero_phase_sequence == snap_zero_phase &&
+          host_zero_motion_intent != 0u && target_blade_on_off == 0u &&
+          left_target_mps == 0.0f && right_target_mps == 0.0f &&
+          Emergency_State() == 0u &&
+          ActuatorAuthorization_DriveRequestIsCurrent(
+              cmd_vel_authorization_epoch);
+      if (still_healthy) {
+        MOTORLINK_ClearInhibit();
+      } else {
+        motor_link_rearm_required = 1u;
+        motor_link_rearm_state.required = true;
+        motor_link_rearm_state.zero_phase_baseline = host_zero_phase_sequence;
+        MOTORLINK_ForceInhibit();
+      }
+      __set_PRIMASK(primask);
+    }
 
     /* Emergency and IDLE gates discard retained blade intent as well as
      * forcing the output OFF, so clearing a gate cannot revive an older
@@ -825,20 +961,21 @@ extern "C" void motors_handler() {
     const BladeIntentDecision blade_decision = decide_blade_intent(
         snap_target_blade, snap_blade_generation, false, 0u,
         snap_emergency_generation, idle, emergency_active,
-        snap_emergency_generation);
+        motor_link_rearm_required != 0u, snap_emergency_generation);
     blade_on_off = blade_decision.effective_output;
     if (blade_decision.retained_request != snap_target_blade ||
         blade_decision.request_generation != snap_blade_generation) {
       const uint32_t primask = __get_PRIMASK();
       __disable_irq();
-      const uint32_t current_generation = Emergency_Generation();
+      const uint32_t current_generation = ActuatorAuthorization_Epoch();
       const bool emergency_active_now = Emergency_State() != 0u;
       const bool idle_now = main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE;
       if (target_blade_on_off != 0u &&
           (emergency_active_now || idle_now ||
-           target_blade_emergency_generation != current_generation)) {
+           motor_link_rearm_required != 0u ||
+           target_blade_authorization_epoch != current_generation)) {
         target_blade_on_off = 0;
-        target_blade_emergency_generation = current_generation;
+        target_blade_authorization_epoch = current_generation;
       }
       __set_PRIMASK(primask);
     }
@@ -846,7 +983,26 @@ extern "C" void motors_handler() {
     /* --- decide effective drive target ---
      * Emergency or cmd_vel watchdog timeout overrides the drive output. */
     bool hard_stop = false;
-    if (emergency_active) {
+    if (!cmd_vel_authorization_current) {
+      hard_stop = true;
+      const uint32_t auth_primask = __get_PRIMASK();
+      __disable_irq();
+      if (cmd_vel_authorization_epoch ==
+          snap_cmd_vel_authorization_epoch) {
+        left_target_mps = 0.0f;
+        right_target_mps = 0.0f;
+        cmd_wz = 0.0f;
+        valid_cmd_vel_seen = 0u;
+        host_zero_motion_intent = 1u;
+        host_yaw_inhibit = 1u;
+        DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+      }
+      __set_PRIMASK(auth_primask);
+    }
+    if (motor_link_rearm_required != 0u) {
+      hard_stop = true;
+      blade_on_off = 0;
+    } else if (emergency_active) {
       hard_stop = true;
     } else if (idle) {
       /* Re-assert the IDLE gate HERE — in the one place that actually
@@ -861,13 +1017,32 @@ extern "C" void motors_handler() {
       blade_on_off = 0;
     } else {
       const uint32_t cmd_vel_age_ms = HAL_GetTick() - snap_cmd_vel;
-      if (cmd_vel_age_ms > 200u) {
+      if (cmd_vel_age_ms > CMD_VEL_TIMEOUT_MS) {
         /* Command-vel watchdog: zero motors if the host hasn't
          * sent a twist in 200 ms (Pi hang, USB glitch, etc). */
         hard_stop = true;
+        const uint32_t watchdog_primask = __get_PRIMASK();
+        __disable_irq();
+        if ((uint32_t)(HAL_GetTick() - last_cmd_vel_tick) >
+            CMD_VEL_TIMEOUT_MS) {
+          DRIVEMOTOR_SetHostZeroMotionIntent(1u);
+        }
+        __set_PRIMASK(watchdog_primask);
       }
       if (cmd_vel_age_ms > 25000u) {
-        blade_on_off = 0;
+        /* This timeout is a blade authorization boundary. Recheck freshness
+         * under the same lock used by packet handlers so a concurrent fresh
+         * command is not erased, and never retain an old ON for later replay. */
+        const uint32_t timeout_primask = __get_PRIMASK();
+        __disable_irq();
+        if ((uint32_t)(HAL_GetTick() - last_cmd_vel_tick) > 25000u) {
+          const BladeIntentDecision stopped =
+              stop_blade_intent(ActuatorAuthorization_Epoch());
+          target_blade_on_off = stopped.retained_request;
+          target_blade_authorization_epoch = stopped.request_generation;
+          blade_on_off = stopped.effective_output;
+        }
+        __set_PRIMASK(timeout_primask);
       }
     }
 
@@ -878,7 +1053,11 @@ extern "C" void motors_handler() {
      * setpoint. See the block comment at the yaw-loop globals for rationale and
      * the bounded-failure argument. */
     float yaw_trim_mps = 0.0f;
-    const bool yaw_loop_active = (g_yaw_loop_enabled != 0u) && !hard_stop;
+    const bool zero_host_motion = snap_yaw_inhibit &&
+                                  snap_left_target == 0.0f &&
+                                  snap_right_target == 0.0f;
+    const bool yaw_loop_active = mowgli_motor_safety::yaw_loop_active(
+        g_yaw_loop_enabled != 0u, hard_stop, zero_host_motion);
     /* Reset the yaw integrator on stop / yaw-direction reversal (mirrors the
      * per-wheel resets) AND at turn-exit — a sharp drop in |commanded wz| from
      * turning to straight (task #37). Dumping the wind-up here is what kills the
@@ -983,12 +1162,12 @@ extern "C" void motors_handler() {
     /* Apply the symmetric differential trim to the per-wheel setpoints
      * (+right / −left increases yaw rate, matching the IK in on_cmd_vel), then
      * re-clamp to the physical wheel-speed limit. hard_stop forces 0. */
-    float l_target = snap_left_target - yaw_trim_mps;
-    float r_target = snap_right_target + yaw_trim_mps;
-    if (hard_stop) {
-      l_target = 0.0f;
-      r_target = 0.0f;
-    }
+    const mowgli_motor_safety::WheelTargets adjusted_targets =
+        mowgli_motor_safety::apply_yaw_trim(
+            snap_left_target, snap_right_target, yaw_trim_mps,
+            zero_host_motion, hard_stop);
+    float l_target = adjusted_targets.left_mps;
+    float r_target = adjusted_targets.right_mps;
     const float max_mps = DRIVEMOTOR_GetMaxMps();
     if (l_target > max_mps)
       l_target = max_mps;
@@ -1085,12 +1264,10 @@ extern "C" void motors_handler() {
     /* When the target is exactly zero AND we're not braking from a
      * larger speed, force PWM to zero outright — avoids the residual
      * "hum" from a non-zero integral applied to a stopped wheel. */
-    left_pwm_signed = (l_target == 0.0f && fabsf(l_actual_mps) < 0.02f)
-                          ? 0
-                          : (int16_t)l_pwm_f;
-    right_pwm_signed = (r_target == 0.0f && fabsf(r_actual_mps) < 0.02f)
-                           ? 0
-                           : (int16_t)r_pwm_f;
+    left_pwm_signed = mowgli_motor_safety::suppress_stationary_zero_output(
+        l_target, l_actual_mps, (int16_t)l_pwm_f);
+    right_pwm_signed = mowgli_motor_safety::suppress_stationary_zero_output(
+        r_target, r_actual_mps, (int16_t)r_pwm_f);
 
     /* Anti-dig cutout (always active, all modes). The step compares actual
      * travel to the travel the commanded speed implies, using the live
@@ -1116,12 +1293,6 @@ extern "C" void motors_handler() {
     right_pwm_signed = (int16_t)(r_target * g_pwm_per_mps);
 #endif
 
-    if (hard_stop) {
-      DRIVEMOTOR_SetSpeedSigned(0, 0);
-    } else {
-      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed);
-    }
-
     // Heartbeat watchdog: if no heartbeat for HEARTBEAT_TIMEOUT_MS, emergency
     // stop. Tag a PURE comms-loss latch (no physical sensor asserted) so it can
     // be auto-cleared when heartbeats resume (on_heartbeat), instead of
@@ -1130,8 +1301,8 @@ extern "C" void motors_handler() {
     const uint32_t heartbeat_primask = __get_PRIMASK();
     __disable_irq();
     const uint32_t current_heartbeat = last_heartbeat_tick;
-    if (current_heartbeat != 0u &&
-        (HAL_GetTick() - current_heartbeat) > HEARTBEAT_TIMEOUT_MS) {
+    if (heartbeat_timed_out(HAL_GetTick(), current_heartbeat,
+                             HEARTBEAT_TIMEOUT_MS)) {
       if (any_physical_emergency()) {
         heartbeat_only_latch = false;
       } else if (!Emergency_State()) {
@@ -1139,7 +1310,7 @@ extern "C" void motors_handler() {
       }
       Emergency_SetState(1);
       target_blade_on_off = 0;
-      target_blade_emergency_generation = Emergency_Generation();
+      target_blade_authorization_epoch = ActuatorAuthorization_Epoch();
       blade_on_off = 0;
     }
     __set_PRIMASK(heartbeat_primask);
@@ -1149,14 +1320,44 @@ extern "C" void motors_handler() {
      * or explicit OFF command must still force this cycle's output OFF. */
     const uint32_t output_primask = __get_PRIMASK();
     __disable_irq();
-    const uint32_t output_generation = Emergency_Generation();
+    const uint32_t output_generation = ActuatorAuthorization_Epoch();
+    const bool output_links_healthy =
+        DRIVEMOTOR_FeedbackHealthy() && BLADEMOTOR_FeedbackHealthy() &&
+        DRIVEMOTOR_FaultSequence() == drive_fault_sequence &&
+        BLADEMOTOR_FaultSequence() == blade_fault_sequence &&
+        MOTORLINK_OutputInhibited() == 0u;
+    if (!output_links_healthy) {
+      MOTORLINK_ForceInhibit();
+      motor_link_rearm_required = 1u;
+      motor_link_rearm_state.required = true;
+      motor_link_rearm_state.zero_phase_baseline = host_zero_phase_sequence;
+      target_blade_on_off = 0u;
+      target_blade_authorization_epoch = output_generation;
+      blade_on_off = 0u;
+      hard_stop = true;
+    }
     if (Emergency_State() != 0u ||
         main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ||
+        motor_link_rearm_required != 0u ||
         target_blade_on_off == 0u ||
-        target_blade_emergency_generation != output_generation) {
+        target_blade_authorization_epoch != output_generation) {
       blade_on_off = 0;
     }
-    BLADEMOTOR_Set(blade_on_off, blade_direction);
+    const bool final_drive_stop = hard_stop ||
+                                  !cmd_vel_authorization_current ||
+                                  !output_links_healthy ||
+                                  Emergency_State() != 0u ||
+                                  main_eOpenmowerStatus ==
+                                      OPENMOWER_STATUS_IDLE;
+    if (final_drive_stop) {
+      DRIVEMOTOR_SetSpeedSigned(0, 0,
+                                snap_cmd_vel_authorization_epoch);
+    } else {
+      DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed,
+                                snap_cmd_vel_authorization_epoch);
+    }
+    BLADEMOTOR_Set(blade_on_off, blade_direction,
+                   snap_blade_generation);
     __set_PRIMASK(output_primask);
   }
 }
@@ -1505,8 +1706,13 @@ extern "C" void init_ROS() {
   apply_param_groups(fw_params_take_dirty_groups());
 
   last_odom_tick = HAL_GetTick();
-  last_heartbeat_tick = 0;
+  /* Start the heartbeat watchdog at initialization, not at the first packet:
+   * a host that sends actuator commands but omits HEARTBEAT must time out. */
+  last_heartbeat_tick = HAL_GetTick();
   last_cmd_vel_tick = 0;
+  valid_cmd_vel_seen = 0u;
+  heartbeat_seen = 0u;
+  DRIVEMOTOR_SetHostZeroMotionIntent(1u);
 }
 
 float clamp(float d, float min, float max) {

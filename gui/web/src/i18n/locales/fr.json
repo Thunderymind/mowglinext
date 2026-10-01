@@ -339,7 +339,10 @@
     "stateCoverageFailed": "Échec couverture"
   },
   "flashBoard": {
+    "boardBiltemaRM1000": "Mowgli - Biltema RM1000",
     "firmwareSourceTitle": "Source du firmware",
+    "firmwareTargetTitle": "Cible du firmware",
+    "firmwareTargetTooltip": "Avancé : choisir une cible de compilation précise. Le mode automatique utilise celle déduite du modèle de tondeuse.",
     "firmwareSourcePrebuilt": "Image précompilée (recommandé)",
     "firmwareSourceCustom": "Personnalisé — compiler depuis les sources (expert)",
     "firmwareSourceTooltip": "« Image précompilée » flashe le binaire testé et vérifié par somme de contrôle pour votre carte. « Personnalisé » compile le firmware depuis le dépôt/la branche ci-dessous avec les paramètres de la section experte et flashe ce build.",
@@ -2188,6 +2191,10 @@
     "YardForce500B": {
       "label": "YardForce 500B",
       "description": "Variante 500 B avec un UART de moteur de lame et une disposition de panneau différents."
+    },
+    "BiltemaRM1000": {
+      "label": "Biltema RM1000",
+      "description": "Robot tondeuse Biltema RM1000."
     },
     "YardForceSA650": {
       "label": "YardForce SA650",
