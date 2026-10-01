@@ -18,11 +18,13 @@ the header stamp.
 import asyncio
 import json
 import threading
+import time
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import TwistStamped
+from mowgli_interfaces.msg import HighLevelStatus
 import websockets
 import websockets.exceptions
 
@@ -31,6 +33,8 @@ _RELAY_PORT = 8766
 # malformed or hostile frame can't command extreme motor speeds.
 _MAX_LINEAR_MPS = 2.0
 _MAX_ANGULAR_RAD_S = 5.0
+_MANUAL_IDLE_PERIOD_S = 0.1
+_JOYSTICK_ACTIVE_S = 0.15
 
 
 class CmdVelRelayNode(Node):
@@ -42,7 +46,40 @@ class CmdVelRelayNode(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
         self._pub = self.create_publisher(TwistStamped, "/cmd_vel_teleop", qos)
+        self._manual_mowing = False
+        self._last_joystick_command = 0.0
+        self._mode_sub = self.create_subscription(
+            HighLevelStatus,
+            "/behavior_tree_node/high_level_status",
+            self._on_high_level_status,
+            10,
+        )
+        self._manual_idle_timer = self.create_timer(
+            _MANUAL_IDLE_PERIOD_S, self._publish_manual_idle
+        )
         self.get_logger().info("cmd_vel_ws_relay: publisher ready on /cmd_vel_teleop")
+
+    def _zero_twist(self) -> TwistStamped:
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "base_footprint"
+        return msg
+
+    def _on_high_level_status(self, msg: HighLevelStatus) -> None:
+        self._manual_mowing = msg.state == HighLevelStatus.HIGH_LEVEL_STATE_MANUAL_MOWING
+
+    def _publish_manual_idle(self) -> None:
+        if not self._manual_mowing:
+            return
+        if time.monotonic() - self._last_joystick_command <= _JOYSTICK_ACTIVE_S:
+            return
+
+        # The STM32 deliberately requires a fresh velocity authorization before
+        # accepting a blade request. Keep that authorization alive with a true
+        # zero while manual mowing is selected and the joystick is at rest.
+        # This timer lives in the host process, so a host/link failure still
+        # stops the stream and lets the firmware timeout fail safe.
+        self._pub.publish(self._zero_twist())
 
     def publish_json(self, raw: str) -> None:
         d = json.loads(raw)
@@ -60,6 +97,7 @@ class CmdVelRelayNode(Node):
         msg.twist.angular.x = clamp(float(ang.get("x", 0.0)), _MAX_ANGULAR_RAD_S)
         msg.twist.angular.y = clamp(float(ang.get("y", 0.0)), _MAX_ANGULAR_RAD_S)
         msg.twist.angular.z = clamp(float(ang.get("z", 0.0)), _MAX_ANGULAR_RAD_S)
+        self._last_joystick_command = time.monotonic()
         self._pub.publish(msg)
 
 

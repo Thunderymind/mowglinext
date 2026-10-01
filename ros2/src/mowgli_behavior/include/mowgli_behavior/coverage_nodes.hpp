@@ -387,6 +387,11 @@ private:
   // Blade spinup delay — wait before sending the FIRST segment goal
   static constexpr double kBladeSpinupDelaySec = 1.5;
   std::chrono::steady_clock::time_point blade_start_time_;
+  // Host-side blade intent. The installed safety firmware rejects (and clears)
+  // an ON request unless a drive authorization is currently fresh. Keep an
+  // already accepted initial spin-up request from being sent a second time
+  // after the stationary spin-up wait.
+  bool blade_enable_requested_{false};
   bool goal_sent_ = false;
 
   // A FollowCoveragePath goal that ABORTS at or beyond this fraction of the

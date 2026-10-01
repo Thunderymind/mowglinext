@@ -416,6 +416,7 @@ BT::NodeStatus FollowStrip::onStart()
     return BT::NodeStatus::FAILURE;
   }
 
+  blade_enable_requested_ = false;
   setBladeEnabled(true);
   blade_start_time_ = std::chrono::steady_clock::now();
   goal_sent_ = false;
@@ -573,8 +574,14 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     return false;
   }
   // Mowing resumes on this segment — make sure the blade is on (it may have
-  // been switched off for a preceding inter-segment transit).
-  setBladeEnabled(true);
+  // been switched off for a preceding inter-segment transit). Do not resend an
+  // already accepted ON after the stationary spin-up delay: the installed
+  // firmware correctly rejects a stale drive authorization, and a rejected ON
+  // also clears the prior blade request.
+  if (!blade_enable_requested_)
+  {
+    setBladeEnabled(true);
+  }
 
   Nav2FollowPath::Goal goal;
   goal.path = swaths_[swath_idx_];
@@ -1128,6 +1135,7 @@ void FollowStrip::setBladeEnabled(bool enabled)
   auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
   req->mow_enabled = enabled ? 1u : 0u;
   blade_client_->async_send_request(req);
+  blade_enable_requested_ = enabled;
 }
 
 bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
