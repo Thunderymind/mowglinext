@@ -58,7 +58,7 @@
 | `firmware/stm32/ros_usbnode/README.md` | 218 | Legacy rosserial/ROS-noetic how-to (stale — see findings) |
 | `firmware/stm32/ros_usbnode/.gitignore` | 13 | ignores `.pio`, `raspi_remote_upload.py`, `*.bin`… and (already-tracked) `platformio.ini` |
 | **`ros_usbnode/include/` — protocol & control** | | |
-| `include/mowgli_protocol.h` | 780 | `MOWGLI_PROTOCOL_VERSION 6u`; `PKT_ID_*`; `STATUS_BIT_*`, `EMERGENCY_BIT_*`, `RESET_CAUSE_*`, `WATCHDOG_STAGE_*`, `HL_MODE_*`, `CONFIG_FLAG_FIRMWARE_DEBUG`; packed `pkt_*_t` + `_Static_assert` layout pins |
+| `include/mowgli_protocol.h` | 739 | `MOWGLI_PROTOCOL_VERSION 7u`; `PKT_ID_*`; `STATUS_BIT_*`, `EMERGENCY_BIT_*`, `RESET_CAUSE_*`, `WATCHDOG_STAGE_*`, `HL_MODE_*`, `CONFIG_FLAG_FIRMWARE_DEBUG`; packed `pkt_*_t` + `_Static_assert` layout pins |
 | `include/mowgli_comms.h` | 243 | RX frame assembly / CRC / dispatch API; `MOWGLI_COMMS_RX_BUF_SIZE` 512, `MOWGLI_COMMS_MAX_HANDLERS` 16; extern `usb_cdc_transmit()` |
 | `include/cobs.h`, `include/crc16.h` | 80, 41 | COBS encode/decode; CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) |
 | `include/pid.hpp` | 140 | Vendored PX4 PID (header-only, BSD-3): `setGains/setIntegralLimit/setOutputLimit/update(feedback, dt, update_integral)/setIntegral` |

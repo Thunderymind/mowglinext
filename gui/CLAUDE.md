@@ -22,6 +22,7 @@ It must NOT own robot behaviour: no autonomy, no localizer, no TF, no *default* 
 | [`../wiki/GUI.md`](../wiki/GUI.md) | You need the operator-facing description of a screen |
 | [`../wiki/Configuration.md`](../wiki/Configuration.md) | Operator-facing meaning of a settings field |
 | [`../docs/REMOTE_ACCESS.md`](../docs/REMOTE_ACCESS.md) | Touching the Tailscale sidecar (`pkg/providers/remote_access*.go`, `pkg/api/remote_access.go`, `web/src/components/settings/RemoteAccess*`) |
+| [`../docs/MULTI_ROBOT.md`](../docs/MULTI_ROBOT.md) | Touching the Fleet page (`web/src/pages/FleetPage.tsx`) or its backend (`pkg/providers/fleet*.go`, `pkg/api/fleet.go`) |
 | [`../docs/UNIVERSAL_GNSS_SIDECAR_MIGRATION.md`](../docs/UNIVERSAL_GNSS_SIDECAR_MIGRATION.md) | Touching `GNSS_*` env derivation or the `mowgli-gps` sidecar routes |
 
 ## Build · test · run
