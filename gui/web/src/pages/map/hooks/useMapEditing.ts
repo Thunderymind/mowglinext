@@ -289,6 +289,12 @@ export function useMapEditing({
     const [splitTargetId, setSplitTargetId] = useState<string | null>(null);
 
     const splitInProgressRef = useRef(false);
+    // Outlines shrunk by the recorded-obstacle correction, by feature id: the
+    // outline before and after. Converting that obstacle back into an area
+    // restores the original (so area → obstacle → area → obstacle shrinks once,
+    // not every round trip) — but only while the obstacle is still exactly the
+    // shrunk outline; a vertex the operator moved since wins over the memory.
+    const shrunkOutlineRef = useRef<Record<string, {original: Polygon; shrunk: Polygon}>>({});
 
     // -----------------------------------------------------------------------
     // Labels
@@ -1061,9 +1067,20 @@ export function useMapEditing({
             curMowingAreaFeature.orig_feature_type;
 
         if (typeChanged) {
-            const geometry = oldFeature.geometry;
+            let geometry = oldFeature.geometry;
             let replacement: MowingFeatureBase;
             const newId = curMowingAreaFeature.id;
+
+            const remembered = shrunkOutlineRef.current[newId];
+            if (remembered) {
+                delete shrunkOutlineRef.current[newId];
+                if (
+                    curMowingAreaFeature.feature_type !== "obstacle" &&
+                    JSON.stringify(geometry.coordinates) === JSON.stringify(remembered.shrunk.coordinates)
+                ) {
+                    geometry = remembered.original;
+                }
+            }
 
             switch (curMowingAreaFeature.feature_type) {
                 case "navigation":
@@ -1078,9 +1095,12 @@ export function useMapEditing({
                     if (!parentArea) return;
                     replacement = new ObstacleFeature(newId, parentArea);
                     // Already shrunk by the caller (recorded outline → obstacle).
-                    replacement.setGeometry(
-                        correctedGeometry?.type === "Polygon" ? correctedGeometry : geometry
-                    );
+                    if (correctedGeometry?.type === "Polygon") {
+                        shrunkOutlineRef.current[newId] = {original: geometry, shrunk: correctedGeometry};
+                        replacement.setGeometry(correctedGeometry);
+                    } else {
+                        replacement.setGeometry(geometry);
+                    }
                     break;
                 }
                 default: // workarea
