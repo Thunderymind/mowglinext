@@ -339,7 +339,10 @@
     "stateCoverageFailed": "Coverage failed"
   },
   "flashBoard": {
+    "boardBiltemaRM1000": "Mowgli - Biltema RM1000",
     "firmwareSourceTitle": "Firmware source",
+    "firmwareTargetTitle": "Firmware target",
+    "firmwareTargetTooltip": "Advanced: choose an exact firmware build target. Automatic keeps the target inferred from the mower model.",
     "firmwareSourcePrebuilt": "Prebuilt image (recommended)",
     "firmwareSourceCustom": "Custom — compile from source (expert)",
     "firmwareSourceTooltip": "'Prebuilt image' flashes the tested, checksum-verified binary for your board. 'Custom' compiles the firmware from the repository/branch below with the parameters in the expert section and flashes that instead.",
@@ -2192,6 +2195,10 @@
     "YardForce500B": {
       "label": "YardForce 500B",
       "description": "500 B variant with different blade motor UART and panel layout."
+    },
+    "BiltemaRM1000": {
+      "label": "Biltema RM1000",
+      "description": "Biltema RM1000 robotic mower."
     },
     "YardForceSA650": {
       "label": "YardForce SA650",

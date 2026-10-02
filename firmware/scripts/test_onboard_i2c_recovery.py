@@ -18,6 +18,7 @@ SHIM = r'''
 #include "i2c_lis3dh.h"
 #include "i2c.h"
 #include "emergency.h"
+#include "actuator_authorization.h"
 #define debug_printf(...) ((void)0)
 #define GPIO_PIN_6 64
 #define GPIO_PIN_7 128
@@ -110,7 +111,11 @@ static uint8_t test_physical_inputs_clear = 1;
 static uint8_t emergency_physical_inputs_are_clear(void) {
     return test_physical_inputs_clear && !I2C_TestZLowINT();
 }
-static volatile uint32_t emergency_generation;
+static ActuatorAuthorizationState authorization = {1, 0};
+uint32_t ActuatorAuthorization_Epoch(void) { return authorization.epoch; }
+void ActuatorAuthorization_Invalidate(void) {
+    actuator_authorization_invalidate(&authorization);
+}
 '''
 
 TEST = r'''
@@ -125,7 +130,8 @@ static void reset(void) {
     memset(registers, 0, sizeof(registers)); registers[LIS3DH_WHO_AM_I] = LIS3DH_ID;
     tick=ipsr=primask=0; mode=GPIO_MODE_AF_OD; outputs=GPIO_PIN_6|GPIO_PIN_7;
     pulses=stops=stuck_sda=stuck_scl=release_after=busy=fail_io=bad_write=io_calls=hal_init_fail=0;
-    emergency_state=0; test_physical_inputs_clear=1; emergency_generation=0;
+    emergency_state=0; test_physical_inputs_clear=1;
+    authorization=(ActuatorAuthorizationState){1,0};
     memset((void *)&onboard_i2c_diag,0,sizeof(onboard_i2c_diag));
     I2C_Init();
 }
@@ -138,10 +144,10 @@ static void ready(void) {
 }
 int main(void) {
     ready();
-    assert(Emergency_Generation() == 0);
-    Emergency_SetState(1); assert(Emergency_Generation() == 1);
-    Emergency_SetState(0); assert(Emergency_Generation() == 1);
-    Emergency_SetState(1); assert(Emergency_Generation() == 2);
+    uint32_t epoch = ActuatorAuthorization_Epoch();
+    Emergency_SetState(1); assert(ActuatorAuthorization_Epoch() == epoch + 1);
+    Emergency_SetState(0); assert(ActuatorAuthorization_Epoch() == epoch + 1);
+    Emergency_SetState(1); assert(ActuatorAuthorization_Epoch() == epoch + 2);
     Emergency_SetState(0); assert(!Emergency_State());
     Emergency_SetState(1);
     test_physical_inputs_clear=0;
@@ -220,6 +226,7 @@ HEARTBEAT_SHIM = r'''
 #include "heartbeat_emergency_policy.hpp"
 static bool heartbeat_only_latch;
 static uint32_t last_heartbeat_tick;
+static uint8_t heartbeat_seen;
 typedef struct { uint8_t type, emergency_requested, emergency_release_requested; uint16_t crc; } pkt_heartbeat_t;
 static bool any_physical_emergency(void) { return I2C_TestZLowINT(); }
 '''
@@ -267,11 +274,10 @@ def main():
     emergency = (FW / 'src/emergency.c').read_text()
     functions = ''.join(extract(emergency, signature) for signature in [
         'uint8_t Emergency_State(void)', 'void  Emergency_SetState(uint8_t',
-        'uint32_t Emergency_Generation(void)',
         'static void emergency_set_bits(uint8_t', 'void Emergency_OnboardSensorFault(void)'])
     with tempfile.TemporaryDirectory(prefix='onboard-i2c-') as directory:
         out = Path(directory)
-        for name in ['board.h', 'board_defaults.h', 'i2c_lis3dh.h', 'i2c.h', 'emergency.h']:
+        for name in ['board.h', 'board_defaults.h', 'i2c_lis3dh.h', 'i2c.h', 'emergency.h', 'actuator_authorization.h']:
             (out / name).write_text((FW / 'include' / name).read_text())
         (out / 'test.c').write_text(SHIM + functions + source + TEST)
         for variant in ['BOARD_YARDFORCE500_VARIANT_ORIG', 'BOARD_YARDFORCE500_VARIANT_B']:

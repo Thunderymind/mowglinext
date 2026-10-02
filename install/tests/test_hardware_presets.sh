@@ -39,7 +39,7 @@ section "HARDWARE_BACKEND=mowgli (Mowgli STM32 board)"
 mowgli_repo="$SANDBOX/repo_mowgli"
 sandbox_repo "$mowgli_repo"
 harness_init "$mowgli_repo"
-harness_set_preset backend=mowgli gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset backend=mowgli gnss=auto gnss_connection=uart lidar=ldlidar-uart
 if harness_run; then
   pass "mowgli backend: harness_run succeeds"
 else
@@ -73,7 +73,7 @@ section "HARDWARE_BACKEND=mavros (Pixhawk via MAVROS)"
 mavros_repo="$SANDBOX/repo_mavros"
 sandbox_repo "$mavros_repo"
 harness_init "$mavros_repo"
-harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart
 if harness_run; then
   pass "mavros backend: harness_run succeeds"
 else
@@ -102,7 +102,7 @@ section "HARDWARE_BACKEND=mavros + GNSS_STACK=disabled"
 mavros_no_gnss_repo="$SANDBOX/repo_mavros_no_gnss"
 sandbox_repo "$mavros_no_gnss_repo"
 harness_init "$mavros_no_gnss_repo"
-harness_set_preset backend=mavros gnss=disabled lidar=none tfluna=none
+harness_set_preset backend=mavros gnss=disabled lidar=none
 if harness_run; then
   pass "mavros + disabled GNSS: harness_run succeeds"
 else

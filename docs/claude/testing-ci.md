@@ -46,7 +46,7 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 
 ## CI workflows
 
-16 workflow files in `.github/workflows/`. Most PR-facing gates target `main` and/or `dev` — `firmware-ci.yml` has no base-branch filter at all, and `gui-docker.yml` also lists the `feat/**`-style prefixes.
+18 workflow files in `.github/workflows/`. Most PR-facing gates target `main` and/or `dev` — `firmware-ci.yml` has no base-branch filter at all, and `gui-docker.yml` also lists the `feat/**`-style prefixes.
 
 | Workflow | Trigger | Jobs | Builds / tests / lints | Required check | Notes |
 |---|---|---|---|---|---|
@@ -58,9 +58,11 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 | `ros2-docker.yml` | push (same branch set) + tags `v*.*.*`, paths `ros2/**`, `tools/motor/**`, self; `workflow_dispatch` (`no-cache`) | `build` (amd64 + arm64 native runners), `merge`, `notify-failure` | Builds `ghcr.io/<repo>/mowgli-ros2` `runtime` target, then a **smoke test inside the image**: `ros2 pkg prefix mowgli_bringup` / `mowgli_tools`, `tune_drive_pid --help` contains "Controlled drive PID tuning", and `full_system.launch.py --show-args` does **not** expose `use_universal_gnss` | — | `sbom: false` — syft's SPDX doc exceeds buildkit's hardcoded 40 MiB attestation cap; `provenance` stays on. `notify-failure` opens a `ci-failure` issue only on `main`. |
 | `gui-docker.yml` | push + PR (same branch set incl. `feat/**` etc.), paths `gui/**`, self; `workflow_dispatch` (`no-cache`) | `build` (amd64 + arm64), `merge` | Builds/pushes `ghcr.io/<repo>/mowglinext-gui`; on PRs `outputs: type=cacheonly` (no push) | — | The image build runs `yarn build` (`tsc && vite build`), so it typechecks — it does not run the tests. |
 | `_sensor-docker.yml` | `workflow_call` only | `build`, `merge` | Reusable multi-arch sensor image builder; optional `smoke-test` script run inside the built image | — | Sensor images keep `sbom: true`. One thin caller per sensor. |
-| `sensors-gps.yml` | push (same branch set), paths `sensors/gps/**`, `sensors/README.md`, `ros2/src/mowgli_interfaces/**`, `ros2/src/external/universal-gnss/**`, self, `_sensor-docker.yml` | via `_sensor-docker.yml` | Builds the `gps` image; the only sensor caller with a real smoke test (L37–66): asserts `mowgli_interfaces`, `universal_gnss_ros2` (`receiver_node`, `ntrip_node`) and `mowgli_gnss_bridge` are importable, and that `GnssStatus.CAP_RTK_MODE`, `RtcmFrame.data`, `rtcm_msgs/Message.message` exist | — | — |
+| `sensors-gps.yml` | push (same branch set), paths `sensors/gps/**`, `sensors/README.md`, `ros2/src/mowgli_interfaces/**`, `ros2/src/external/universal-gnss/**`, self | `test` | **No image build any more** (removed 2026-09-19, `bfd44f1a`, "#625" — GNSS ships via the external `UNIVERSAL_GNSS_IMAGE` now, not a local build). Just compiles + `colcon test`s `mowgli_gnss_bridge`'s gtests, which live outside the `ros2/` colcon workspace and would otherwise run nowhere | — | The one sensor workflow WITHOUT a `build:` job / `_sensor-docker.yml` call — unlike its three LiDAR siblings. |
 | `sensors-lidar-ldlidar.yml` / `-rplidar.yml` / `-stl27l.yml` | push (same branch set), that sensor's dir + self + `_sensor-docker.yml` | via `_sensor-docker.yml` | Build only, no smoke test | — | `ldlidar` and `stl27l` build `target: runtime`; `rplidar` has no target. |
 | `pages.yml` | push `main`, paths `docs/**`; `workflow_dispatch` | `build`, `deploy` | Publishes `docs/` to GitHub Pages (mowgli.garden) | — | `concurrency: pages`, `cancel-in-progress: false`. Does **not** run `docs/test_install.sh` or `docs/test_web_composer.sh`. |
+| `updater.yml` | push (any branch) + PR `[main, dev]`, paths `gui/**`, `install/**`, `ros2/**`, `docker/**`, self, `deployment-release.yml`, `publish-stable-deployment.sh` | `test-build`, `publish` | Tests the host updater + installer, then cross-builds static host updater binaries | — | Added by commit `81ee625d` ("feat: install host updater and publish complete multi-platform deployments"), 2026-09-?? |
+| `deployment-release.yml` | push `[main, dev]` + tags `v*.*.*`, paths `gui/**`, `ros2/**`, `sensors/**`, `install/**`, `firmware/**`, self, `publish-stable-deployment.sh` | `quality-ros2`, `quality-gui`, `identity`, `firmware`, `build`, `publish` | Publishes a complete multi-platform deployment (every prebuilt image permutation + firmware binaries) as a GitHub Release | — | Added alongside `updater.yml`, heavily developed afterward (commits `58f63b24`, `6713e6ad`, `b40c3bff`, `f5a5e332`, `fbd850d6`). |
 | `wiki-sync.yml` | push `main`, paths `wiki/**`; `workflow_dispatch` | `sync` | Copies `wiki/*.md` into the `<repo>.wiki` repo and commits | — | Needs `contents: write`. |
 | `auto-label.yml` | `pull_request_target` (opened, synchronize) | `label` | `actions/labeler@v6` with `.github/labeler.yml` | — | — |
 | `welcome.yml` | `pull_request_target` (opened), `issues` (opened) | `welcome` | First-interaction greeting | — | — |
@@ -149,11 +151,11 @@ Two rclpy harnesses, both driven from `ros2/Makefile`, both **ungated by CI** �
 cd ros2
 make sim                 # sim-stop, then sim_full_system.launch.py headless:=true use_rviz:=false
 make sim-stop            # scripts/sim-stop.sh — kills ROS2/Webots and clears DDS shm; MUST run before a new sim
-make e2e-test            # self-contained: sim-stop -> build -> launch sim -> sleep 90 -> python3 src/e2e_test.py -> sim-stop
+make e2e-test            # self-contained: sim-stop -> build -> launch sim -> wait for Nav2 active -> python3 src/e2e_test.py -> sim-stop
 make e2e-test-no-lidar   # same, with use_lidar:=false simulate_gps_degradation:=false -> src/e2e_test_no_lidar.py
 ```
 
-Both `e2e-test` targets depend on `sim-stop build`, launch the sim themselves, and wait a fixed **90 s** for Nav2 to activate before running the script — you do **not** need a sim already running.
+Both `e2e-test` targets depend on `sim-stop build`, launch the sim themselves, and (since commit `09cbad2b`, "test(sim): cover Nav2 readiness gating") poll `ros2/scripts/wait_for_nav2_active.sh` for a Nav2 lifecycle-active event — rather than a fixed sleep — before running the script; the script kills the sim and exits 1 on timeout instead of proceeding blind. You do **not** need a sim already running.
 
 **`ros2/src/e2e_test.py`** (LiDAR path) sends `COMMAND_START` and spins for up to **1200 s**, scoring 13 criteria: undock→plan→mow→dock cycle, path tracking (median < 50 cm), SLAM map growth, no collisions, stayed within boundary, obstacle avoidance (against three obstacles pre-placed in the world), mowing efficiency ≥ 0.85, area coverage ≥ 80 %, idle ratio < 20 %, path overlap < 30 %, manual mowing mode, area recording mode, and emergency auto-reset on dock. It prints `OVERALL: PASS / NEEDS ATTENTION`.
 

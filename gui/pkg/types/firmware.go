@@ -25,24 +25,28 @@ type FirmwareAvailability struct {
 }
 
 type FirmwareConfig struct {
-	File                           string  `json:"file"`
-	Repository                     string  `json:"repository"`
-	Branch                         string  `json:"branch"`
-	Directory                      string  `json:"directory"`
-	Version                        string  `json:"version"`
-	BoardType                      string  `json:"boardType"`
-	PanelType                      string  `json:"panelType"`
+	File       string `json:"file"`
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+	Directory  string `json:"directory"`
+	Version    string `json:"version"`
+	BoardType  string `json:"boardType"`
+	PanelType  string `json:"panelType"`
+	// FirmwareTarget is an exact PlatformIO/release-manifest environment for
+	// boards with multiple firmware variants. Empty preserves legacy routing.
+	FirmwareTarget string `json:"firmwareTarget,omitempty"`
 	// Firmware selection provenance is written alongside the saved config so
 	// later mower-model changes can update only fields that still follow model
 	// defaults. Empty/unknown values are legacy and are handled conservatively
 	// by the GUI.
-	BoardTypeOrigin                string  `json:"boardTypeOrigin,omitempty"`
-	PanelTypeOrigin                string  `json:"panelTypeOrigin,omitempty"`
-	FirmwareSelectionModel         string  `json:"firmwareSelectionModel,omitempty"`
+	BoardTypeOrigin        string `json:"boardTypeOrigin,omitempty"`
+	PanelTypeOrigin        string `json:"panelTypeOrigin,omitempty"`
+	FirmwareTargetOrigin   string `json:"firmwareTargetOrigin,omitempty"`
+	FirmwareSelectionModel string `json:"firmwareSelectionModel,omitempty"`
 	// FirmwareSource is the GUI dropdown selector: "custom" compiles from
 	// source (the expert path), "prebuilt" (or empty, for older payloads)
 	// flashes the tested prebuilt binary.
-	FirmwareSource                 string  `json:"firmwareSource"`
+	FirmwareSource string `json:"firmwareSource"`
 	// ExpertBuild routes the flash to the compile-from-source path
 	// (flashMowgli); the default (false) flashes a prebuilt binary. Kept for
 	// backward compatibility — FirmwareSource == "custom" implies it.

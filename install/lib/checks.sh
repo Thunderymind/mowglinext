@@ -11,9 +11,6 @@ container_name_for_service() {
     mosquitto)    printf 'mowgli-mqtt\n' ;;
     mavros)       printf 'mowgli-mavros\n' ;;
     ntrip)        printf 'mowgli-ntrip\n' ;;
-    vesc)         printf 'mowgli-vesc\n' ;;
-    tfluna_front) printf 'mowgli-tfluna-front\n' ;;
-    tfluna_edge)  printf 'mowgli-tfluna-edge\n' ;;
     *)            return 1 ;;
   esac
 }
@@ -30,7 +27,8 @@ expected_runtime_services() {
   : "${LIDAR_TYPE:=unknown}"
   : "${GNSS_BACKEND:=universal}"
 
-  local services=(mowgli gui mosquitto)
+  local services=(mowgli gui)
+  [[ "${ENABLE_MQTT:-false}" == "true" ]] && services+=(mosquitto)
   local gnss_backend
   local gnss_stack
   local gnss_service
@@ -55,17 +53,8 @@ expected_runtime_services() {
     services+=(lidar)
   fi
 
-  if effective_tfluna_front_enabled; then
-    services+=(tfluna_front)
-  fi
 
-  if effective_tfluna_edge_enabled; then
-    services+=(tfluna_edge)
-  fi
 
-  if effective_vesc_enabled; then
-    services+=(vesc)
-  fi
 
   printf '%s\n' "${services[@]}"
 }
@@ -506,37 +495,6 @@ check_lidar() {
 # fusion_graph GTSAM localizer (sole and default; it owns both map->odom and
 # odom->base_footprint). The old robot_localization dual EKF was also removed.
 # See CLAUDE.md "Architecture Invariants" for details.
-
-check_rangefinders() {
-  step "Check: Rangefinders"
-
-  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" || "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
-    if ! feature_is_available tfluna; then
-      warn_unavailable_feature_once \
-        tfluna \
-        "TF-Luna rangefinder services are not available on this branch yet; skipping TF-Luna device checks."
-      return
-    fi
-  fi
-
-  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" ]]; then
-    if [ -e "${TFLUNA_FRONT_PORT:-/dev/tfluna_front}" ]; then
-      info "TF-Luna front detected (${TFLUNA_FRONT_PORT})"
-    else
-      fail "TF-Luna front not detected (${TFLUNA_FRONT_PORT})"
-      add_issue "TF-Luna front not detected. Check selected UART and TFLUNA_FRONT_PORT in docker/.env."
-    fi
-  fi
-
-  if [[ "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
-    if [ -e "${TFLUNA_EDGE_PORT:-/dev/tfluna_edge}" ]; then
-      info "TF-Luna edge detected (${TFLUNA_EDGE_PORT})"
-    else
-      fail "TF-Luna edge not detected (${TFLUNA_EDGE_PORT})"
-      add_issue "TF-Luna edge not detected. Check selected UART and TFLUNA_EDGE_PORT in docker/.env."
-    fi
-  fi
-}
 
 check_gui() {
   step "Check: GUI & connectivity"

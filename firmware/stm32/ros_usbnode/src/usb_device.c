@@ -64,7 +64,6 @@ USBD_HandleTypeDef hUsbDeviceFS;
 void MX_USB_DEVICE_Init(void)
 {
   /* USER CODE BEGIN USB_DEVICE_Init_PreTreatment */
-#if !(BOARD_YARDFORCE500_VARIANT_B)
   /* Rendering hardware reset harmless (no need to replug USB cable): */
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
@@ -81,6 +80,12 @@ void MX_USB_DEVICE_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /* The F401 OTG device can retain its pull-up across a debugger-driven
+   * system reset.  Keep D+ low long enough for the host to observe a real
+   * disconnect before HAL_PCD_MspInit() restores the alternate function. */
+#if BOARD_YARDFORCE500_VARIANT_B
+  HAL_Delay(20);
+#else
   HAL_Delay(5);
 #endif
   /* Hardware reset rendered harmless! */
@@ -116,4 +121,3 @@ void MX_USB_DEVICE_Init(void)
 /**
   * @}
   */
-

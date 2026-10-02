@@ -25,6 +25,13 @@ configure_lidar() {
       pick_uart_port "${LIDAR_UART_DEVICE:-/dev/ttyAMA5}"
       LIDAR_UART_DEVICE="$REPLY"
     fi
+  elif [[ "${NON_INTERACTIVE:-false}" == "true" && -z "${LIDAR_TYPE:-}" ]]; then
+    # Nothing chosen and nobody to ask: a LiDAR container for a scanner that
+    # is not there keeps the stack unhealthy (scan watchdog), so default off.
+    LIDAR_ENABLED="false"; LIDAR_TYPE="none"; LIDAR_MODEL=""
+    LIDAR_CONNECTION=""; LIDAR_UART_DEVICE=""; LIDAR_UART_RULE=""
+    : "${LIDAR_PORT:=/dev/lidar}"
+    info "LiDAR: none (non-interactive default; pass --lidar= to enable)"
   else
     # Defaults based on PCB / GUI-ready
     : "${LIDAR_ENABLED:=true}"
