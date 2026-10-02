@@ -1413,6 +1413,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 onCancel={cancelAreaModal}
             />
             <EditLidarCorridorModal
+                key={corridorWidthModalIndex ?? 'none'}
                 corridor={corridorWidthModalIndex !== null ? lidarCorridors.corridors[corridorWidthModalIndex] ?? null : null}
                 busy={lidarCorridors.busy}
                 onSave={(name, widthM) => {

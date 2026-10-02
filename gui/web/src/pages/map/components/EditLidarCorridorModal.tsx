@@ -17,11 +17,18 @@ interface EditLidarCorridorModalProps {
 /// exist on mobile at all. Position/points are still edited by dragging on
 /// the map (same DrawControl session as desktop) — only name + width need a
 /// control that isn't a drag gesture.
-export const EditLidarCorridorModal = ({corridor, busy, onSave, onCancel}: EditLidarCorridorModalProps) => {
+export const EditLidarCorridorModal = ({corridor, ...rest}: EditLidarCorridorModalProps) => {
+    if (!corridor) return null;
+    // The form instance lives in the inner component: antd applies
+    // `initialValues` only once per instance, so a form that outlived the
+    // modal kept showing the first line's name/width for every later line —
+    // and Save then wrote those stale values onto the line being edited.
+    return <EditLidarCorridorForm key={corridor.id ?? corridor.name ?? ''} corridor={corridor} {...rest}/>;
+};
+
+const EditLidarCorridorForm = ({corridor, busy, onSave, onCancel}: EditLidarCorridorModalProps & {corridor: LidarIgnoreCorridor}) => {
     const {t} = useTranslation();
     const [form] = Form.useForm<{name: string; widthCm: number}>();
-
-    if (!corridor) return null;
 
     return (
         <Modal
