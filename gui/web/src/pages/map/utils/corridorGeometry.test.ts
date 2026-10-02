@@ -2,6 +2,7 @@ import {describe, expect, it} from "vitest";
 import {
     buildCorridorBandPolygon,
     buildCorridorSideRuns,
+    dropLiveVertex,
     insertMidpoint,
     polylineLengthM,
     removeVertex,
@@ -142,5 +143,16 @@ describe("corridorGeometry", () => {
             return allow[i];
         });
         expect(strips).toEqual([]);
+    });
+});
+
+describe("dropLiveVertex", () => {
+    it("removes only the trailing cursor vertex", () => {
+        expect(dropLiveVertex([[0, 0], [1, 1], [2, 2]])).toEqual([[0, 0], [1, 1]]);
+    });
+
+    it("leaves a line with only the live vertex empty, so Finish saves nothing", () => {
+        expect(dropLiveVertex([[5, 5]])).toEqual([]);
+        expect(dropLiveVertex([])).toEqual([]);
     });
 });

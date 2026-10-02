@@ -44,9 +44,9 @@ The line only helps **where it is**. The mower does not need the line at the spo
 
 ### 2. Make the distance wider rather than narrower
 
-The default is 20 cm, and — since a September 2026 change — that is the *full* distance on the area side, not a 20 cm band split in half. Even so, the foliage of a hedge or grass clump often reaches further than that: in our garden the avoidance offsets were 0.5-0.6 m. A 40 cm line helped along a straight stretch but not at a corner.
+The default is 40 cm, and — since a September 2026 change — that is the *full* distance on the area side, not a band split in half. Even so, the foliage of a hedge or grass clump often reaches further than that: in our garden the avoidance offsets were 0.5-0.6 m. A 40 cm line (now the default) helped along a straight stretch but not at a corner.
 
-- Start at **80-100 cm** (the maximum is 100 cm). If the mower still avoids the plant edge, the line is either too narrow or does not cover that spot.
+- Start at **80-100 cm** (the maximum is 120 cm). If the mower still avoids the plant edge, the line is either too narrow or does not cover that spot.
 - A wider distance only affects the area side; it does not blind the LiDAR elsewhere. The far side is already unconditional regardless of this setting — widening it never changes far-side behaviour.
 
 ### 3. The line does not clean up what was already seen
@@ -76,6 +76,6 @@ corridor filter: robot (1.12, -13.26) is 0.42 m from the nearest line, 11 beam(s
 ## Technical notes
 
 - Implemented in `costmap_scan_filter_node` (`mowgli_localization`) as a third filter stage after the dock blank and before the collision-scan publish. It projects every beam into the map frame with the fused pose (`/odometry/filtered_map`) and the LiDAR mount offset, then applies ONE of two rules depending ONLY on the true recorded-area polygon (`/mowgli/recorded_area_polygons`, republished by `map_server_node` on every area-list change) — never on which side of the drawn LINE the point falls on, so a sloppily-drawn line can never blind a beam that's genuinely still inside a recorded area: **inside** a recorded (working or navigation) area, within `width_m` of the line (honoured in full, not halved); **outside** every recorded area, alongside the line's own span at ANY distance (no width limit — nothing out there is ever reachable by the mower, so a limit would protect nothing).
-- Lines are `mowgli_interfaces/LidarIgnoreCorridor` (polyline + `width_m`), managed by `map_server_node` (`~/add_lidar_ignore_corridor`, `~/get_lidar_ignore_corridors`, `~/clear_lidar_ignore_corridors`) and published transient_local on `/mowgli/lidar_ignore_corridors`. `width_m` is clamped server-side to 0.05-1.0 m.
+- Lines are `mowgli_interfaces/LidarIgnoreCorridor` (polyline + `width_m`), managed by `map_server_node` (`~/add_lidar_ignore_corridor`, `~/get_lidar_ignore_corridors`, `~/clear_lidar_ignore_corridors`) and published transient_local on `/mowgli/lidar_ignore_corridors`. `width_m` is clamped server-side to 0.05-1.2 m.
 - With no lines drawn, or no recorded area yet, the filter is a no-op.
 - The map's Map page also draws the actual ignored band as a translucent fill next to the thin line (in both view and edit mode), so it's visible at a glance how far a line's distance reaches — compare it against the satellite imagery to see whether it actually covers the plant edge.

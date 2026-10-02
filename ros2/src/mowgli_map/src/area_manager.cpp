@@ -2065,7 +2065,7 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     LidarIgnoreCorridorEntry entry;
     entry.name = get_str(prefix + "_name");
     entry.polyline = std::move(polyline);
-    entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.20),
+    entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.40),
                                kMinLidarIgnoreCorridorWidthM,
                                kMaxLidarIgnoreCorridorWidthM);
     entry.id = static_cast<uint32_t>(get_int(prefix + "_id", 0));

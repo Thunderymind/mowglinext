@@ -4,7 +4,9 @@ import type {LidarIgnoreCorridor} from "../../../types/ros.ts";
 
 /// Default ignore width (metres, total — half on each side of the line) given
 /// to a freshly drawn corridor. map_server clamps to [0.05, 1.0] m regardless.
-export const DEFAULT_CORRIDOR_WIDTH_M = 0.2;
+export const DEFAULT_CORRIDOR_WIDTH_M = 0.4;
+export const MAX_CORRIDOR_WIDTH_CM = 120;
+export const MIN_CORRIDOR_WIDTH_CM = 5;
 
 const errorMessage = (error: unknown): string =>
     (error as {error?: {error?: string}} | null)?.error?.error

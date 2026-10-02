@@ -244,3 +244,13 @@ export const buildCorridorSideRuns = (
     flush(points.length);
     return strips;
 };
+
+/// gl-draw's `draw_line_string` keeps one extra, LIVE vertex at the end of the
+/// feature: the position the cursor was last at (it follows every mouse-move and
+/// is only committed by a click). Reading the feature back for the Finish
+/// button therefore returns the placed points PLUS the spot the pointer left the
+/// map on its way to the button — a stray point right under "Finish" that the
+/// operator then had to delete by hand. gl-draw's own finish gestures drop it
+/// (`removeCoordinate(currentVertexPosition)`); a button that reads the feature
+/// itself must do the same.
+export const dropLiveVertex = <T>(coords: T[]): T[] => coords.slice(0, -1);

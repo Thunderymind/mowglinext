@@ -38,7 +38,7 @@ import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.ts
 import {CORRIDOR_COLOR, LidarCorridorsPanel} from "./map/components/LidarCorridorsPanel.tsx";
 import {EditLidarCorridorModal} from "./map/components/EditLidarCorridorModal.tsx";
 import {DEFAULT_CORRIDOR_WIDTH_M, useLidarCorridors} from "./map/hooks/useLidarCorridors.ts";
-import {buildCorridorSideRuns, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
+import {buildCorridorSideRuns, dropLiveVertex, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
 import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
 import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapImageMarker} from "./map/components/MapImageMarker.tsx";
@@ -798,6 +798,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         dockDirty,
         setDockDirty,
         buildFeaturesFromMap,
+        corridors: lidarCorridors.corridors,
+        restoreCorridors: lidarCorridors.save,
     });
 
 
@@ -893,7 +895,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // real one once the save round-trips), and leave draw_line_string mode.
     const handleFinishDrawingCorridor = useCallback(() => {
         const f = getInProgressCorridorFeature();
-        const coords = f?.geometry.coordinates as [number, number][] | undefined;
+        const raw = f?.geometry.coordinates as [number, number][] | undefined;
+        // Still in draw_line_string, the last coordinate is gl-draw's live
+        // cursor vertex, not a point the operator placed (dropLiveVertex).
+        const coords = raw && drawRef.current?.getMode() === 'draw_line_string'
+            ? dropLiveVertex(raw)
+            : raw;
         if (f && drawRef.current) drawRef.current.delete(String(f.id));
         drawRef.current?.changeMode('simple_select');
         setCorridorDrawing(false);

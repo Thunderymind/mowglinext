@@ -414,7 +414,7 @@ private:
     geometry_msgs::msg::Polygon polyline;
     /// Clamped to [kMinLidarIgnoreCorridorWidthM, kMaxLidarIgnoreCorridorWidthM]
     /// on add — see on_add_lidar_ignore_corridor.
-    double width_m{0.20};
+    double width_m{0.40};
     /// Same stable-id contract as AreaEntry::id, tracked by
     /// next_lidar_corridor_id_.
     uint32_t id{0};
@@ -427,7 +427,7 @@ private:
   /// Independent of, and does not weaken, the operator's own choice to let a
   /// corridor affect collision_monitor at all.
   static constexpr double kMinLidarIgnoreCorridorWidthM = 0.05;
-  static constexpr double kMaxLidarIgnoreCorridorWidthM = 1.0;
+  static constexpr double kMaxLidarIgnoreCorridorWidthM = 1.2;
 
   // ── ROS callbacks ────────────────────────────────────────────────────────
 

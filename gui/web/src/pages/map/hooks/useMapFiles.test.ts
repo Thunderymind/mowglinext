@@ -62,6 +62,8 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
             dockDirty: false,
             setDockDirty: vi.fn(),
             buildFeaturesFromMap: vi.fn(),
+            corridors: [],
+            restoreCorridors: vi.fn(),
         }));
 
         await act(async () => {
@@ -79,5 +81,45 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
         expect(byName['Area 2'].id).toBeUndefined();
         expect(navAreas).toHaveLength(1);
         expect(navAreas[0].area.id).toBe(777);
+    });
+});
+
+// The LiDAR-ignore lines are map_server state, not part of the Map message, so
+// a backup that only stringified `map` silently lost them.
+describe('useMapFiles backup carries the ignore lines', () => {
+    it('writes them into map.json', async () => {
+        const line = {name: 'Hedge', polyline: {points: [{x: 0, y: 0, z: 0}, {x: 2, y: 0, z: 0}]}, width_m: 0.4, id: 9};
+        let blob: Blob | undefined;
+        const createObjectURL = vi.fn((b: Blob) => { blob = b; return 'blob:x'; });
+        Object.assign(window.URL, {createObjectURL, revokeObjectURL: vi.fn()});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        const hook = renderHook(() => useMapFiles({
+            features: {},
+            setFeatures: vi.fn(),
+            map: {working_area: [], navigation_areas: []},
+            setMap: vi.fn(),
+            editMap: false,
+            setEditMap: vi.fn(),
+            setHasUnsavedChanges: vi.fn(),
+            offsetX: 0,
+            offsetY: 0,
+            datum: [0, 0, 0],
+            notification: {success: vi.fn(), warning: vi.fn(), error: vi.fn()} as any,
+            guiApi: {} as unknown as Api<unknown>,
+            dockDirty: false,
+            setDockDirty: vi.fn(),
+            buildFeaturesFromMap: vi.fn(),
+            corridors: [line],
+            restoreCorridors: vi.fn(),
+        }));
+
+        hook.result.current.handleBackupMap();
+
+        const saved = JSON.parse(await blob!.text());
+        expect(saved.lidar_ignore_corridors).toEqual([
+            {name: 'Hedge', polyline: line.polyline, width_m: 0.4},
+        ]);
+        expect(saved.working_area).toEqual([]);
     });
 });

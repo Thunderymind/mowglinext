@@ -50,3 +50,33 @@ describe("parseMapBackup", () => {
         expect(parseMapBackup(text).ok).toBe(false);
     });
 });
+
+describe("parseMapBackup ignore lines", () => {
+    const line = {name: "Hedge", polyline: {points: [{x: 0, y: 0, z: 0}, {x: 2, y: 0, z: 0}]}, width_m: 0.4, id: 7};
+
+    it("reads the ignore lines, with fresh ids, and keeps them out of the map", () => {
+        const result = parseMapBackup(JSON.stringify(validMap({lidar_ignore_corridors: [line]})));
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.corridors).toEqual([{name: "Hedge", polyline: line.polyline, width_m: 0.4, id: 0}]);
+        expect(result.map).not.toHaveProperty("lidar_ignore_corridors");
+    });
+
+    it("distinguishes 'no field' (leave current lines) from an empty list (clear them)", () => {
+        const absent = parseMapBackup(JSON.stringify(validMap()));
+        const empty = parseMapBackup(JSON.stringify(validMap({lidar_ignore_corridors: []})));
+
+        expect(absent.ok && absent.corridors).toBeNull();
+        expect(empty.ok && empty.corridors).toEqual([]);
+    });
+
+    it.each([
+        ["not a list", {lidar_ignore_corridors: {}}],
+        ["no polyline", {lidar_ignore_corridors: [{name: "x", width_m: 0.4}]}],
+        ["a single point", {lidar_ignore_corridors: [{...line, polyline: {points: [{x: 0, y: 0}]}}]}],
+        ["a non-numeric width", {lidar_ignore_corridors: [{...line, width_m: "0.4"}]}],
+    ])("refuses a backup whose ignore lines are broken (%s)", (_label, extra) => {
+        expect(parseMapBackup(JSON.stringify(validMap(extra))).ok).toBe(false);
+    });
+});

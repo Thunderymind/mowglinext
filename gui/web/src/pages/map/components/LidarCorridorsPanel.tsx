@@ -3,6 +3,7 @@ import {Button, Tooltip} from "antd";
 import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 import type {LidarIgnoreCorridor} from "../../../types/ros.ts";
+import {DEFAULT_CORRIDOR_WIDTH_M} from "../hooks/useLidarCorridors.ts";
 
 /// Line colour on the map and the accent of each row (kept in sync with the
 /// map layer in MapPage).
@@ -99,7 +100,7 @@ export const LidarCorridorsPanel = ({
                             properties" in the toolbar opens EditLidarCorridorModal. That
                             also works on mobile, where this list doesn't exist at all. */}
                         <div style={{fontSize: 11, color: colors.muted, flexShrink: 0}}>
-                            {Math.round((corridor.width_m ?? 0.2) * 100)} cm
+                            {Math.round((corridor.width_m ?? DEFAULT_CORRIDOR_WIDTH_M) * 100)} cm
                         </div>
                     </div>
                 ))}
