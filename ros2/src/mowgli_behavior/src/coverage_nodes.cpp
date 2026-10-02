@@ -2876,6 +2876,19 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     return advanceAndProbe();
   }
 
+  // Skip an area that already burned its attempt budget this session
+  // (BTContext::kMaxAreaAttempts dispatches of PlanCoverageArea + FollowStrip,
+  // or a nav-only classification above). Decided here, per-probe, rather than
+  // by a synchronous pre-filter — see the mowglinext#637 phase 2 note above.
+  // attempted_areas is cleared by EndSession at session end.
+  if (ctx->attempted_areas.count(current_area_idx_) > 0)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "GetNextUnmowedArea: area %u already attempted this session, skipping",
+                current_area_idx_);
+    return advanceAndProbe();
+  }
+
   // Completion is now the swath-completion model: an area is done when
   // FollowStrip has mowed every swath F2C produced for it (recorded in
   // ctx->completed_areas), its attempt budget is exhausted (attempted_areas),
