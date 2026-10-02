@@ -66,6 +66,12 @@ constexpr double kAutoAngleMaxAreaM2 = 400.0;  // ~20 × 20 m
 // argmin is deterministic across re-plans, which the resume cursor relies on.
 constexpr double kAutoAngleStepRad = 5.0 * M_PI / 180.0;
 
+// Largest far-side remainder strip (m) left by BruteForce's fixed lane stepping
+// that is still accepted as is. Above it the lanes are re-spread evenly over the
+// cell (generateEvenSwaths). ~ the default swath_overlap: a strip this thin is
+// already inside the overlap between the blade and the neighbouring lane.
+constexpr double kSwathRemainderTolM = 0.02;
+
 // On-edge tolerance for allInside(). The outermost DRIVEN geometry can lie
 // EXACTLY on the ring it is validated against: with the headland ring stage
 // DISABLED (num_headland_passes < 0 → n_rings == 0, issue #429) the swath ENDS
@@ -1063,6 +1069,54 @@ std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths)
   return angle;
 }
 
+// Swaths at `angle` with the lane spacing spread EVENLY over the cell's extent
+// across the swath direction.
+//
+// BruteForce places the first lane op_width/2 inside one bbox edge and then steps
+// by a fixed op_width, so whatever is left over (up to op_width/2 plus the
+// stepping granularity) piles up as ONE unplanned strip on the far side — a strip
+// too narrow for a whole extra lane, which the robot then never mows. When that
+// remainder is more than kSwathRemainderTolM, use n = ceil(extent / op_width)
+// lanes at extent / n spacing instead: both edges get a lane op_width/2 (or less)
+// from the edge, neighbouring lanes overlap slightly more than planned, and no
+// strip is left. The count is n whatever F2C's own far-edge rule is, and the
+// result is symmetric in the edge it starts from, so `angle` and `angle + π` give
+// the same lanes. Deterministic for a fixed cell + angle.
+static f2c::types::Swaths generateEvenSwaths(f2c::sg::BruteForce& bf,
+                                             double angle,
+                                             double op_width,
+                                             const f2c::types::Cell& cell)
+{
+  const auto ring = cell.getGeometry(0);  // exterior
+  double lo = std::numeric_limits<double>::infinity();
+  double hi = -std::numeric_limits<double>::infinity();
+  const double nx = -std::sin(angle), ny = std::cos(angle);
+  for (std::size_t i = 0; i < ring.size(); ++i)
+  {
+    const auto p = ring.getGeometry(i);
+    const double d = p.getX() * nx + p.getY() * ny;
+    lo = std::min(lo, d);
+    hi = std::max(hi, d);
+  }
+  const double extent = hi - lo;
+  if (op_width > 1e-6 && std::isfinite(extent) && extent > op_width)
+  {
+    // Lanes F2C places: centres at 0.5·w, 1.5·w, … while inside the extent.
+    const double lanes = std::ceil(extent / op_width - 0.5);
+    const double remainder = extent - lanes * op_width;  // uncovered far-side strip
+    if (remainder > kSwathRemainderTolM)
+    {
+      const double n = std::ceil(extent / op_width);
+      auto even = bf.generateSwaths(angle, extent / n, cell);
+      if (even.size() > 0)
+      {
+        return even;
+      }
+    }
+  }
+  return bf.generateSwaths(angle, op_width, cell);
+}
+
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
@@ -1553,11 +1607,24 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                    static_cast<int>(std::lround(2.0 * M_PI / kAutoAngleStepRad)));
     }
     f2c::types::Swaths swaths = (cell_angle >= 0.0)
-                                    ? bf.generateSwaths(cell_angle, op_width, cell)
+                                    ? generateEvenSwaths(bf, cell_angle, op_width, cell)
                                     : bf.generateBestSwaths(n_swath_obj, op_width, cell);
     if (swaths.size() == 0)
     {
       continue;
+    }
+    if (cell_angle < 0.0 && !perpendicular)
+    {
+      // AUTO: keep the angle the search picked, but spread the lanes evenly
+      // across the cell so no too-narrow strip is left unplanned.
+      if (const auto best = longestValidSwathAngle(swaths); best && std::isfinite(*best))
+      {
+        auto even = generateEvenSwaths(bf, *best, op_width, cell);
+        if (even.size() > 0)
+        {
+          swaths = even;
+        }
+      }
     }
     if (perpendicular)
     {
@@ -1573,7 +1640,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       double angle = std::fmod(*base + M_PI / 2.0, M_PI);
       if (angle < 0.0)
         angle += M_PI;
-      swaths = bf.generateSwaths(angle, op_width, cell);
+      swaths = generateEvenSwaths(bf, angle, op_width, cell);
       if (swaths.size() == 0)
       {
         plan.diagnostics.drops.push_back("cross-hatch: rotated cell has no swaths");
