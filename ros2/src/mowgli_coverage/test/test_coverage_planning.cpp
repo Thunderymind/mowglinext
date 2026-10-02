@@ -2164,6 +2164,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   double total_len = 0.0, worst_turn = 0.0;
   std::size_t oob = 0, tight_run = 0;
   double min_clearance = std::numeric_limits<double>::max();
+  double max_past_ring = 0.0;
+  constexpr double kOnEdgeTol = 1e-3;  // == the planner's kOnEdgeTolM
   for (const auto& path : subs)
   {
     ASSERT_GE(path.size(), 2u);
@@ -2182,9 +2184,18 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
     // that much inside the raw boundary.
     for (const auto& p : path)
     {
+      // A connector/pivot pose can sit EXACTLY on the clearance ring (a swath end
+      // or an arc clipped to it), where the strict ray-cast pointInRing is
+      // ambiguous. The planner itself accepts that (allInside's kOnEdgeTolM, 1 mm),
+      // so judge "outside" by the same yardstick: further than 1 mm past the ring.
       if (!pointInRing(p.first, p.second, connector_boundary))
       {
-        ++oob;
+        const double past = distanceToRing(p.first, p.second, connector_boundary);
+        max_past_ring = std::max(max_past_ring, past);
+        if (past > kOnEdgeTol)
+        {
+          ++oob;
+        }
       }
       min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
     }
@@ -2208,7 +2219,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   EXPECT_LT(worst_turn, 120.0) << "a sub-path has a " << worst_turn
                                << "° turn — a near-reversal cusp is not trackable";
   EXPECT_EQ(oob, 0u) << oob << "/" << total_poses
-                     << " continuous-path points are outside the safety-inset ring";
+                     << " continuous-path points are outside the safety-inset ring (furthest "
+                     << max_past_ring << " m past it)";
   // Effective planning inset = chassis_safety_inset − op_width/2 (the outermost
   // ring centerline sits `kInset` inside the raw line; the field it is planned
   // in is shrunk by that much less). Connectors/fillets ride the planning
