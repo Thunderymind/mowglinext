@@ -116,6 +116,7 @@ export function parseMapBackup(text: string): MapBackupParseResult {
         return {ok: false, reason: lines.problem};
     }
     // The ignore lines are not part of the Map message: keep them out of it.
-    const {[BACKUP_CORRIDORS_KEY]: _lines, ...mapOnly} = parsed;
+    const mapOnly = {...parsed};
+    delete mapOnly[BACKUP_CORRIDORS_KEY];
     return {ok: true, map: mapOnly as MapType, hasDock, corridors: lines.corridors};
 }
