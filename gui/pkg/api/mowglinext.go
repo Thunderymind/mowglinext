@@ -656,6 +656,36 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, previewRes)
 				return
 			}
+		case "correct_recorded_obstacle":
+			// One-shot: shrinks a polygon recorded by driving the chassis edge
+			// around an object by the raw chassis half-width (coverage_server's
+			// erodeRingInward — never reimplemented here). The Map page calls it
+			// once, when the operator converts a just-recorded area into an
+			// obstacle; the BT's RecordArea only records mowing areas, so this
+			// is the only point where that correction can happen.
+			var correctReq struct {
+				Polygon geometry.Polygon `json:"polygon"`
+			}
+			if err = c.BindJSON(&correctReq); err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			if correctReq.Polygon.Points == nil {
+				correctReq.Polygon.Points = []geometry.Point32{}
+			}
+			var correctRes mowgli.CorrectRecordedObstacleRes
+			err = provider.CallService(ctx,
+				"/coverage_server/correct_recorded_obstacle",
+				&mowgli.CorrectRecordedObstacleReq{Polygon: correctReq.Polygon},
+				&correctRes,
+				"mowgli_interfaces/srv/CorrectRecordedObstacle")
+			if err == nil {
+				if correctRes.Corrected.Points == nil {
+					correctRes.Corrected.Points = []geometry.Point32{}
+				}
+				c.JSON(200, correctRes)
+				return
+			}
 		case "ignore_obstacle", "discard_obstacle":
 			// Reject a PENDING obstacle proposal (currently: wheel-slip dig
 			// keepouts) by its MapObstacleInfo.id. Nothing was persisted, so

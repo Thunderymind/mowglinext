@@ -9,7 +9,7 @@ import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
 import Map, {Layer, Source} from 'react-map-gl/mapbox';
 import type {Map as MapboxMap} from 'mapbox-gl';
-import type {Feature} from 'geojson';
+import type {Feature, Polygon} from 'geojson';
 import {FeatureCollection, Position} from "geojson";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {MapStyle} from "./MapStyle.tsx";
@@ -19,7 +19,7 @@ import {useSettings} from "../hooks/useSettings.ts";
 import {useConfig} from "../hooks/useConfig.tsx";
 import {useEnv} from "../hooks/useEnv.tsx";
 import {Spinner} from "../components/Spinner.tsx";
-import {MowingFeature, MowingAreaFeature, DockFeatureBase, LineFeatureBase, MowingFeatureBase, MowerFeatureBase, NavigationFeature, ObstacleFeature, ActivePathFeature, PathFeature} from "../types/map.ts";
+import {MowingFeature, MowingAreaFeature, DockFeatureBase, LineFeatureBase, MowingFeatureBase, MowerFeatureBase, NavigationFeature, ObstacleFeature, ActivePathFeature, PathFeature, closeRing} from "../types/map.ts";
 import {useMapEditHistory} from "./map/hooks/useMapEditHistory.ts";
 import {useMapOffset} from "./map/hooks/useMapOffset.ts";
 import {useMapBearing} from "./map/hooks/useMapBearing.ts";
@@ -373,6 +373,53 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         notification,
         mapInstanceRef,
     });
+
+    // A just-recorded area turned into an obstacle: the recording followed the
+    // robot's own centre, so driving the chassis edge along the object left the
+    // outline half a chassis too large. Shrink it ONCE here — the BT only ever
+    // records mowing areas, so this conversion is the only moment it can happen
+    // (coverage_server owns the geometry; nothing is reimplemented client-side).
+    // A failed correction aborts the conversion rather than saving the larger
+    // outline silently.
+    const handleSaveAreaModal = useCallback(async () => {
+        const converting = curMowingAreaFeature.feature_type === 'obstacle'
+            && curMowingAreaFeature.orig_feature_type !== 'obstacle';
+        if (!converting || !curMowingAreaFeature.shrink_recorded || !curMowingAreaFeature.id) {
+            updateMowingArea();
+            return;
+        }
+        const feature = features[curMowingAreaFeature.id];
+        const ring = feature && 'geometry' in feature ? (feature.geometry as Polygon).coordinates?.[0] : undefined;
+        if (!ring || ring.length < 3 || datum[0] === 0) {
+            updateMowingArea();
+            return;
+        }
+        try {
+            const res = await guiApi.mowglinext.callCreate("correct_recorded_obstacle", {
+                polygon: {
+                    points: ring.map((coord) => {
+                        const [lon, lat] = coord as [number, number];
+                        const [x, y] = itranspose(offsetX, offsetY, datum, lat, lon);
+                        return {x, y};
+                    }),
+                },
+            });
+            const data = res.data as unknown as {success?: boolean; message?: string; corrected?: {points?: {x?: number; y?: number}[]}};
+            const points = data?.corrected?.points ?? [];
+            if (res.error || !data?.success || points.length < 3) {
+                notification.error({
+                    message: t('mapEditArea.shrinkFailed'),
+                    description: data?.message ?? (res.error ? String(res.error) : undefined),
+                });
+                return;
+            }
+            const corrected = points.map((p) => transpose(offsetX, offsetY, datum, p.y ?? 0, p.x ?? 0));
+            updateMowingArea({type: "Polygon", coordinates: [closeRing(corrected)]});
+        } catch (e) {
+            notification.error({message: t('mapEditArea.shrinkFailed'), description: String(e)});
+        }
+    }, [curMowingAreaFeature, features, datum, offsetX, offsetY, guiApi, notification, t, updateMowingArea]);
+
     useEffect(() => {
         // Don't rebuild features from stream data while in edit mode —
         // path/plan becoming undefined when streams stop would wipe user edits.
@@ -1048,7 +1095,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 open={areaModelOpen}
                 area={curMowingAreaFeature}
                 onChange={setCurMowingAreaFeature}
-                onSave={updateMowingArea}
+                onSave={() => void handleSaveAreaModal()}
                 onCancel={cancelAreaModal}
             />
 

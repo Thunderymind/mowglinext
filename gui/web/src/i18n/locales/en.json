@@ -1662,7 +1662,10 @@
     "areaType": "Area type",
     "areaName": "Area name",
     "areaNamePlaceholder": "e.g. Front lawn",
-    "mowingOrder": "Mowing order"
+    "mowingOrder": "Mowing order",
+    "shrinkFailed": "Could not shrink the recorded outline — not converted to an obstacle",
+    "shrinkRecorded": "Recorded by driving along the object: shrink by half the chassis width",
+    "shrinkRecordedHelp": "A recording follows the robot's own centre, so driving the chassis edge along an object leaves the outline that much too large. Applied once, when the area becomes an obstacle. Untick for outlines you drew by hand."
   },
   "mapNewArea": {
     "title": "New area",

@@ -1658,7 +1658,10 @@
     "areaType": "Type de zone",
     "areaName": "Nom de la zone",
     "areaNamePlaceholder": "ex. Pelouse devant",
-    "mowingOrder": "Ordre de tonte"
+    "mowingOrder": "Ordre de tonte",
+    "shrinkFailed": "Impossible de réduire le contour enregistré — non converti en obstacle",
+    "shrinkRecorded": "Enregistré en longeant l'objet : réduire de la demi-largeur du châssis",
+    "shrinkRecordedHelp": "Un enregistrement suit le centre du robot ; longer l'objet avec le bord du châssis rend le contour trop grand d'autant. Appliqué une seule fois, quand la zone devient un obstacle. Décochez pour un contour dessiné à la main."
   },
   "mapNewArea": {
     "title": "Nouvelle zone",
