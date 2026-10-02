@@ -409,7 +409,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             if (res.error || !data?.success || points.length < 3) {
                 notification.error({
                     message: t('mapEditArea.shrinkFailed'),
-                    description: data?.message ?? (res.error ? String(res.error) : undefined),
+                    description: data?.message ?? res.error?.error,
                 });
                 return;
             }
