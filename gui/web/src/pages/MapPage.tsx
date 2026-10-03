@@ -9,11 +9,11 @@ import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
 import Map, {Layer, Source} from 'react-map-gl/mapbox';
 import type {Map as MapboxMap} from 'mapbox-gl';
-import type {Feature, Polygon} from 'geojson';
+import type {Feature, LineString, Polygon} from 'geojson';
 import {FeatureCollection, Position} from "geojson";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {MapStyle} from "./MapStyle.tsx";
-import {drawLine, itranspose, transpose} from "../utils/map.tsx";
+import {drawLine, isRingInsidePolygon, itranspose, transpose} from "../utils/map.tsx";
 import {getDockAppearanceResetForMowerChange, resolveDockAppearance, resolveMowerAppearance, shouldDisplayMapImage, shouldDisplayMowerImage, type DockAppearanceId, type MowerAppearanceId} from "../constants/mowerAppearances.ts";
 import {useSettings} from "../hooks/useSettings.ts";
 import {useConfig} from "../hooks/useConfig.tsx";
@@ -37,6 +37,10 @@ import {EditAreaModal} from "./map/components/EditAreaModal.tsx";
 import {AreasListPanel} from "./map/components/AreasListPanel.tsx";
 import {TrackedObstaclesPanel} from "./map/components/TrackedObstaclesPanel.tsx";
 import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.tsx";
+import {CORRIDOR_COLOR, LidarCorridorsPanel} from "./map/components/LidarCorridorsPanel.tsx";
+import {EditLidarCorridorModal} from "./map/components/EditLidarCorridorModal.tsx";
+import {DEFAULT_CORRIDOR_WIDTH_M, useLidarCorridors} from "./map/hooks/useLidarCorridors.ts";
+import {buildCorridorSideRuns, dropLiveVertex, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
 import {useObstacleClearancePreview} from "./map/hooks/useObstacleClearancePreview.ts";
 
 // Distinct from the red drawn-obstacle fill, so the toggleable
@@ -142,6 +146,60 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         void setConfig({"gui.map.dock.appearance": id});
     };
     const [dockPlacementMode, setDockPlacementMode] = useState<boolean>(false);
+    // LiDAR-ignore line drawing. Field-reported 2026-09-29: a hand-rolled
+    // point collector (a growing [lng,lat][] fed by our own <Map onClick>)
+    // never received taps on mobile at all — DrawControl's mapbox-gl-draw
+    // instance sits on top of the same map, permanently in some draw mode
+    // (simple_select when idle), and its own touch handling appears to
+    // consume single taps before they'd reach a sibling click listener; the
+    // symptom was identical on desktop-vs-mobile clicks vs taps despite
+    // running the exact same handler. Polygon/shape drawing never had this
+    // problem because it already goes through gl-draw's OWN draw_polygon
+    // mode (handleDrawPolygon, useMapEditing.ts) instead of a parallel
+    // custom collector — so corridor lines now do the same: drawRef.current
+    // .changeMode('draw_line_string') for a corridor, reusing gl-draw's
+    // proven-on-touch point placement instead of fighting it. This flag is
+    // just "is that mode currently active" — the points themselves live in
+    // gl-draw's OWN store (read via drawRef.current.getAll() below), not
+    // here.
+    const [corridorDrawing, setCorridorDrawing] = useState(false);
+    // Mobile: index into lidarCorridors.corridors of the line whose width the
+    // operator is editing (there is no side panel to hold the width field there).
+    const [corridorWidthModalIndex, setCorridorWidthModalIndex] = useState<number | null>(null);
+    const lidarCorridors = useLidarCorridors();
+    // Snapshot of the corridor list taken the moment map-edit mode is
+    // entered. Unlike areas/obstacles (which live only in local `features`
+    // state until "Save Map"), corridor edits are written to map_server
+    // immediately (useLidarCorridors's own design) — so "Cancel" cannot rely
+    // on simply never having persisted anything and must explicitly put this
+    // back. Read only from the onDiscard callback below; re-captured every
+    // time editMap flips false -> true (a later Save Map updates what the
+    // "current" corridor state is, so the next edit session's snapshot is
+    // taken fresh).
+    const corridorEditSnapshotRef = useRef<typeof lidarCorridors.corridors | null>(null);
+    // True while the corridor list has actually diverged from the snapshot
+    // taken at edit-session start — a corridor-only edit (no area/obstacle
+    // touched) would otherwise leave useMapEditHistory's own
+    // hasUnsavedChanges false and let Cancel silently skip both the confirm
+    // dialog and the revert.
+    const corridorsDirtySinceEdit = editMap && corridorEditSnapshotRef.current !== null &&
+        JSON.stringify(corridorEditSnapshotRef.current) !== JSON.stringify(lidarCorridors.corridors);
+
+    // Put the corridor list back the way it was when this edit session
+    // started. Called from useMapEditHistory's onDiscard — i.e. on Cancel,
+    // never on a successful Save Map.
+    const revertCorridorsOnDiscard = useCallback(async () => {
+        const snapshot = corridorEditSnapshotRef.current;
+        if (!snapshot) return;
+        try {
+            await lidarCorridors.save(snapshot);
+        } catch (error: unknown) {
+            notification.error({
+                message: t('mapLidarCorridors.saveFailed'),
+                description: error instanceof Error ? error.message : undefined,
+            });
+        }
+    }, [lidarCorridors, notification, t]);
     // OpenMower import preview — populated by handleImportOpenMower after
     // the file is uploaded + parsed server-side. Modal renders when set.
     const [importPreview, setImportPreview] = useState<ImportOpenMowerSummary | null>(null);
@@ -346,7 +404,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {
         hasUnsavedChanges, setHasUnsavedChanges, handleEditMap,
         handleUndo, handleRedo, historyIndex, editHistory,
-    } = useMapEditHistory({features, setFeatures, editMap, setEditMap});
+    } = useMapEditHistory({
+        features, setFeatures, editMap, setEditMap,
+        extraUnsavedChanges: corridorsDirtySinceEdit,
+        onDiscard: () => void revertCorridorsOnDiscard(),
+    });
 
     useEffect(() => {
         if (envs) {
@@ -822,6 +884,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         buildFeaturesFromMap,
         obstacleOriginals: obstacleOriginals.records,
         restoreObstacleOriginals: obstacleOriginals.replaceAll,
+        corridors: lidarCorridors.corridors,
+        restoreCorridors: lidarCorridors.save,
     });
 
 
@@ -851,6 +915,323 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         [features],
     );
     const obstacleClearancePreview = useObstacleClearancePreview(obstacleFeaturesList, datum, offsetX, offsetY);
+
+    // The gl-draw feature currently being drawn for a corridor: it is added to
+    // gl-draw's OWN store the instant draw_line_string mode starts (onSetup)
+    // and kept live-updated on every tap — reading it back via the public
+    // getAll() API (not an internal hack) is how both Finish and Cancel below
+    // get at "whatever points the operator has placed so far", without us
+    // tracking them ourselves. Distinguished from a SAVED corridor already in
+    // the store (corridorDrawFeatures below) by id: a fresh gl-draw feature
+    // gets gl-draw's own generated id, never our "lidar-corridor-N" scheme.
+    const getInProgressCorridorFeature = useCallback((): Feature<LineString> | null => {
+        const found = drawRef.current?.getAll().features.find(
+            (candidate): candidate is Feature<LineString> =>
+                candidate.geometry?.type === "LineString" &&
+                !String(candidate.id ?? "").startsWith("lidar-corridor-"));
+        return found ?? null;
+    }, []);
+
+    // Escape cancels an in-progress ignore line.
+    useEffect(() => {
+        if (!corridorDrawing) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") handleCancelDrawingCorridor();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [corridorDrawing]);
+
+    // Leaving map edit mode abandons an unsaved draw.
+    useEffect(() => {
+        if (!editMap && corridorDrawing) handleCancelDrawingCorridor();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [editMap]);
+
+    // Capture the pre-edit corridor snapshot exactly once, on the
+    // false -> true edge. lidarCorridors.corridors is deliberately NOT a
+    // dependency: including it would re-capture on every 10s poll (or every
+    // in-session edit) while editMap stays true, which would keep moving the
+    // snapshot forward and defeat the whole point of "what to revert to".
+    useEffect(() => {
+        if (editMap) corridorEditSnapshotRef.current = lidarCorridors.corridors;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [editMap]);
+
+    // Saves a finished corridor line (>= 2 points, ROS map-frame). Called
+    // either from the Finish button (handleFinishDrawingCorridor, which reads
+    // gl-draw's current in-progress feature) or from onDrawCreate below (the
+    // fallback path if the operator instead finishes via gl-draw's own
+    // double-click/Enter gesture on draw_line_string).
+    const handleFinishCorridor = useCallback(async (coords: [number, number][]) => {
+        const points = coords.map(([lng, lat]) => {
+            const [x, y] = itranspose(offsetX, offsetY, datum, lat, lng);
+            return {x, y, z: 0};
+        });
+        try {
+            await lidarCorridors.save([
+                ...lidarCorridors.corridors,
+                {name: "", polyline: {points}, width_m: DEFAULT_CORRIDOR_WIDTH_M, id: 0},
+            ]);
+        } catch (error: unknown) {
+            notification.error({
+                message: t('mapLidarCorridors.saveFailed'),
+                description: error instanceof Error ? error.message : undefined,
+            });
+        }
+    }, [offsetX, offsetY, datum, lidarCorridors, notification, t]);
+
+    // The explicit Finish (✓) button: read whatever gl-draw has accumulated
+    // so far (>= 2 points required, same rule gl-draw itself enforces for a
+    // valid line), remove the in-progress draft feature from gl-draw's store
+    // (it is never one of OUR saved corridors — handleFinishCorridor adds the
+    // real one once the save round-trips), and leave draw_line_string mode.
+    const handleFinishDrawingCorridor = useCallback(() => {
+        const f = getInProgressCorridorFeature();
+        const raw = f?.geometry.coordinates as [number, number][] | undefined;
+        // Still in draw_line_string, the last coordinate is gl-draw's live
+        // cursor vertex, not a point the operator placed (dropLiveVertex).
+        const coords = raw && drawRef.current?.getMode() === 'draw_line_string'
+            ? dropLiveVertex(raw)
+            : raw;
+        if (f && drawRef.current) drawRef.current.delete(String(f.id));
+        drawRef.current?.changeMode('simple_select');
+        setCorridorDrawing(false);
+        if (coords && coords.length >= 2) void handleFinishCorridor(coords);
+    }, [getInProgressCorridorFeature, handleFinishCorridor]);
+
+    // The explicit Cancel (✗) button / Escape / leaving edit mode: drop
+    // whatever gl-draw has drawn so far without saving anything.
+    const handleCancelDrawingCorridor = useCallback(() => {
+        const f = getInProgressCorridorFeature();
+        if (f && drawRef.current) drawRef.current.delete(String(f.id));
+        drawRef.current?.changeMode('simple_select');
+        setCorridorDrawing(false);
+    }, [getInProgressCorridorFeature]);
+
+    const handleStartDrawingCorridor = useCallback(() => {
+        setCorridorDrawing(true);
+        drawRef.current?.changeMode('draw_line_string');
+    }, []);
+
+    const handleCorridorChange = useCallback(async (next: typeof lidarCorridors.corridors) => {
+        try {
+            await lidarCorridors.save(next);
+        } catch (error: unknown) {
+            notification.error({
+                message: t('mapLidarCorridors.saveFailed'),
+                description: error instanceof Error ? error.message : undefined,
+            });
+        }
+    }, [lidarCorridors, notification, t]);
+
+    // Corridors are also handed to DrawControl (map edit mode only) so they get
+    // the same vertex drag / midpoint add / vertex delete editing as areas.
+    const corridorDrawId = (c: {id?: number}) => `lidar-corridor-${c.id}`;
+    const isCorridorDrawFeature = (f: Feature) => String(f.id ?? "").startsWith("lidar-corridor-");
+
+    const corridorDrawFeatures = useMemo((): Feature[] => {
+        if (!editMap || datum[0] === 0) return [];
+        return lidarCorridors.corridors
+            .filter((c) => (c.id ?? 0) !== 0 && (c.polyline?.points?.length ?? 0) >= 2)
+            .map((c): Feature => ({
+                type: "Feature",
+                id: corridorDrawId(c),
+                properties: {feature_type: "lidar_corridor", color: CORRIDOR_COLOR, width: 4},
+                geometry: {
+                    type: "LineString",
+                    coordinates: (c.polyline?.points ?? []).map((p) => transpose(offsetX, offsetY, datum, p.y ?? 0, p.x ?? 0)),
+                },
+            }));
+    }, [editMap, lidarCorridors.corridors, datum, offsetX, offsetY]);
+
+    const drawControlFeatures = useMemo(
+        () => [...drawableFeatures, ...corridorDrawFeatures],
+        [drawableFeatures, corridorDrawFeatures]);
+
+    // A finished vertex drag / add / remove on a corridor line -> save the list.
+    const handleCorridorDrawUpdate = useCallback((changed: Feature[]) => {
+        const byId = new globalThis.Map(changed.map((f) => [String(f.id), f]));
+        const next = lidarCorridors.corridors.map((c) => {
+            const f = byId.get(corridorDrawId(c));
+            if (!f || f.geometry.type !== "LineString") return c;
+            const points = f.geometry.coordinates.map(([lng, lat]) => {
+                const [x, y] = itranspose(offsetX, offsetY, datum, lat, lng);
+                return {x, y, z: 0};
+            });
+            return points.length >= 2 ? {...c, polyline: {points}} : c;
+        });
+        void handleCorridorChange(next);
+    }, [lidarCorridors.corridors, offsetX, offsetY, datum, handleCorridorChange]);
+
+    const handleCorridorDrawDelete = useCallback((deleted: Feature[]) => {
+        const ids = new Set(deleted.map((f) => String(f.id)));
+        void handleCorridorChange(lidarCorridors.corridors.filter((c) => !ids.has(corridorDrawId(c))));
+    }, [lidarCorridors.corridors, handleCorridorChange]);
+
+    const onDrawUpdate = useCallback((e: {features: Feature[]; action: string}) => {
+        const corr = e.features.filter(isCorridorDrawFeature);
+        const rest = e.features.filter((f) => !isCorridorDrawFeature(f));
+        if (corr.length > 0) handleCorridorDrawUpdate(corr);
+        if (rest.length > 0) onUpdate({...e, features: rest});
+    }, [handleCorridorDrawUpdate, onUpdate]);
+
+    const onDrawDelete = useCallback((e: {features: Feature[]}) => {
+        const corr = e.features.filter(isCorridorDrawFeature);
+        const rest = e.features.filter((f) => !isCorridorDrawFeature(f));
+        if (corr.length > 0) handleCorridorDrawDelete(corr);
+        if (rest.length > 0) onDelete({...e, features: rest});
+    }, [handleCorridorDrawDelete, onDelete]);
+
+    // Fallback path for finishing a corridor line: normally the operator taps
+    // the Finish (✓) button (handleFinishDrawingCorridor, which reads
+    // drawRef.current.getAll() directly and never lets gl-draw fire its own
+    // draw.create), but gl-draw's OWN double-click/Enter gesture for
+    // draw_line_string still works too and DOES fire draw.create — this
+    // catches that case so a corridor drawn that way still saves instead of
+    // falling through to onCreate's generic "not a Polygon, discard" branch.
+    const onDrawCreate = useCallback((e: {features: Feature[]}) => {
+        if (corridorDrawing) {
+            const f = e.features[0];
+            const coords = f?.geometry?.type === "LineString" ? f.geometry.coordinates as [number, number][] : undefined;
+            if (f && drawRef.current) drawRef.current.delete(String(f.id));
+            setCorridorDrawing(false);
+            if (coords && coords.length >= 2) void handleFinishCorridor(coords);
+            return;
+        }
+        onCreate(e);
+    }, [corridorDrawing, onCreate, handleFinishCorridor]);
+
+    // Double-click (or Enter on a selected feature — see DirectSelectWithBoxMode)
+    // on an ignore line opens its edit modal directly, the same gesture areas
+    // already use to open EditAreaModal.
+    const onDrawOpenDetails = useCallback((e: {feature?: Feature}) => {
+        const feature = e.feature;
+        if (feature && isCorridorDrawFeature(feature)) {
+            const i = lidarCorridors.corridors.findIndex((c) => corridorDrawId(c) === String(feature.id));
+            if (i >= 0) setCorridorWidthModalIndex(i);
+            return;
+        }
+        onOpenDetails(e);
+    }, [onOpenDetails, lidarCorridors.corridors]);
+
+    // Index of the line currently selected on the map (for Make curved / Simplify).
+    const selectedCorridorIndex = lidarCorridors.corridors.findIndex((c) => selectedFeatureIds.includes(corridorDrawId(c)));
+
+    // "Edit properties" on the mobile toolbar: a selected ignore line has no
+    // MowingFeature entry (handleEditSelectedFeature would no-op on it), so open
+    // the width modal instead; anything else falls through as before.
+    const handleEditSelectedFeatureOrCorridor = useCallback(() => {
+        if (selectedCorridorIndex >= 0) {
+            setCorridorWidthModalIndex(selectedCorridorIndex);
+            return;
+        }
+        handleEditSelectedFeature();
+    }, [selectedCorridorIndex, handleEditSelectedFeature]);
+    const handleReshapeSelectedCorridor = (reshape: (points: XY[]) => XY[]) => {
+        const i = selectedCorridorIndex;
+        if (i < 0) return;
+        const points = (lidarCorridors.corridors[i].polyline?.points ?? []).map((p) => ({x: p.x ?? 0, y: p.y ?? 0}));
+        const out = reshape(points);
+        void handleCorridorChange(lidarCorridors.corridors.map((c, k) =>
+            k === i ? {...c, polyline: {points: out.map((p) => ({x: p.x, y: p.y, z: 0}))}} : c));
+    };
+
+    // ROS-frame corridors, as GeoJSON for the map. The line currently being
+    // drawn is NOT included here any more — it lives in gl-draw's own store
+    // (drawRef, draw_line_string mode) and gl-draw renders it itself with its
+    // stock in-progress-line styling, the same way it already renders an
+    // in-progress polygon.
+    const corridorFeatures = useMemo((): FeatureCollection => {
+        const features: Feature[] = [];
+        if (datum[0] !== 0) {
+            lidarCorridors.corridors.forEach((corridor) => {
+                // In map edit mode the lines are drawn (and edited) by DrawControl.
+                if (editMap) return;
+                const pts = corridor.polyline?.points ?? [];
+                if (pts.length < 2) return;
+                features.push({
+                    type: "Feature",
+                    properties: {kind: "corridor"},
+                    geometry: {
+                        type: "LineString",
+                        coordinates: pts.map((p) => transpose(offsetX, offsetY, datum, p.y ?? 0, p.x ?? 0)),
+                    },
+                });
+            });
+        }
+        return {type: "FeatureCollection", features};
+    }, [lidarCorridors.corridors, editMap, datum, offsetX, offsetY]);
+
+    // Recorded (working + navigation) area outer rings, lng/lat — used to
+    // restrict the rendered band below to the side of each corridor that
+    // actually overlaps a recorded area, matching costmap_scan_filter_node's
+    // point_in_any_area restriction (a beam is only ever suppressed there;
+    // the visualization must not claim more coverage than that).
+    const recordedAreaRings = useMemo((): Position[][] =>
+        Object.values(features)
+            .filter((f): f is MowingAreaFeature | NavigationFeature =>
+                f instanceof MowingAreaFeature || f instanceof NavigationFeature)
+            .map((f) => f.geometry.coordinates[0] ?? [])
+            .filter((ring) => ring.length >= 3),
+    [features]);
+    const insideRecordedArea = useCallback((lng: number, lat: number): boolean =>
+        recordedAreaRings.some((ring) => isRingInsidePolygon([[lng, lat]], ring)),
+    [recordedAreaRings]);
+
+    // The actual ignored BAND (width_m wide), not just the centerline the
+    // operator clicked — so it's visible on the map exactly what area gets
+    // an ignore, not only where. Shown in both view and edit mode (DrawControl
+    // itself only ever renders the thin centerline + vertex handles). A saved
+    // corridor's band only ever covers the recorded-area side of the line
+    // (buildCorridorSideRuns, gated on insideRecordedArea above) — the other
+    // side is never suppressed by the filter either, so drawing it would be
+    // actively misleading. The in-progress draft (not yet saved) falls back
+    // to the plain symmetric band: it has no saved width/id yet and is only
+    // a rough preview while the operator is still clicking points.
+    // Geometry is built in ROS metres, then each vertex is transposed to
+    // lng/lat for rendering — corridors persist in ROS map-frame points, so
+    // this stays exact regardless of map projection.
+    const corridorBandFeatures = useMemo((): FeatureCollection => {
+        const features: Feature[] = [];
+        if (datum[0] !== 0) {
+            lidarCorridors.corridors.forEach((corridor) => {
+                const pts = (corridor.polyline?.points ?? []).map((p) => ({x: p.x ?? 0, y: p.y ?? 0}));
+                if (pts.length < 2) return;
+                const widthM = corridor.width_m ?? DEFAULT_CORRIDOR_WIDTH_M;
+                const insideAreaRos = (p: XY): boolean => {
+                    const [lng, lat] = transpose(offsetX, offsetY, datum, p.y, p.x);
+                    return insideRecordedArea(lng, lat);
+                };
+                (['left', 'right'] as const).forEach((side) => {
+                    buildCorridorSideRuns(pts, widthM, side, insideAreaRos).forEach((ring) => features.push({
+                        type: "Feature",
+                        properties: {kind: "band"},
+                        geometry: {
+                            type: "Polygon",
+                            coordinates: [ring.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x))],
+                        },
+                    }));
+                });
+            });
+            // The line currently being drawn has no saved width/id yet and no
+            // longer has a JS-side point array to build a preview band from
+            // (gl-draw owns those points now — see corridorFeatures above) —
+            // it draws with gl-draw's own stock in-progress-line styling
+            // instead, same as an in-progress polygon has no fill-band preview
+            // either.
+        }
+        return {type: "FeatureCollection", features};
+    // insideRecordedArea (and transitively recordedAreaRings/features) was
+    // missing here: corridors and areas load from two independent sources
+    // (lidarCorridors polls its own endpoint; features comes from the /map
+    // WS stream) — whichever arrives first left this memo permanently
+    // cached against a stale (often empty) area list, since none of the
+    // OTHER deps necessarily change again afterwards. The band then never
+    // recovered until something unrelated (e.g. editing a corridor) forced
+    // a recompute. Field-reported 2026-09-28: no band drawn at all.
+    }, [lidarCorridors.corridors, datum, offsetX, offsetY, insideRecordedArea]);
 
     const handleMapClick = useCallback((e: {lngLat: {lng: number; lat: number}}) => {
         if (!dockPlacementMode) return;
@@ -1132,6 +1513,18 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 onSave={() => void handleSaveAreaModal()}
                 onCancel={cancelAreaModal}
             />
+            <EditLidarCorridorModal
+                key={corridorWidthModalIndex ?? 'none'}
+                corridor={corridorWidthModalIndex !== null ? lidarCorridors.corridors[corridorWidthModalIndex] ?? null : null}
+                busy={lidarCorridors.busy}
+                onSave={(name, widthM) => {
+                    if (corridorWidthModalIndex === null) return;
+                    void handleCorridorChange(lidarCorridors.corridors.map((c, i) =>
+                        i === corridorWidthModalIndex ? {...c, name, width_m: widthM} : c));
+                    setCorridorWidthModalIndex(null);
+                }}
+                onCancel={() => setCorridorWidthModalIndex(null)}
+            />
 
             <div style={{height: '100%', position: 'relative'}}>
                 {map_sw?.length && map_ne?.length ? <Map key={mapKey}
@@ -1151,7 +1544,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          onClick={handleMapClick}
                                                          interactiveLayerIds={DYN_OBSTACLE_INTERACTIVE_LAYERS}
                                                          onMouseMove={handleMapMouseMove}
-                                                         cursor={dockPlacementMode ? 'crosshair' : undefined}
+                                                         cursor={dockPlacementMode || corridorDrawing ? 'crosshair' : undefined}
                 >
                     {tileUri ? <Source type={"raster"} id={"custom-raster"} tiles={[tileUri]} tileSize={256}/> : null}
                     {tileUri ? <Layer type={"raster"} source={"custom-raster"} id={"custom-layer"}/> : null}
@@ -1170,18 +1563,18 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         drawRef={drawRef}
                         styles={MapStyle}
                         userProperties={true}
-                        features={drawableFeatures}
+                        features={drawControlFeatures}
                         position="top-left"
                         displayControlsDefault={false}
                         editMode={editMap}
                         controls={{}}
                         defaultMode="simple_select"
-                        onCreate={onCreate}
-                        onUpdate={onUpdate}
+                        onCreate={onDrawCreate}
+                        onUpdate={onDrawUpdate}
                         onCombine={onCombine}
-                        onDelete={onDelete}
+                        onDelete={onDrawDelete}
                         onSelectionChange={onSelectionChange}
-                        onOpenDetails={onOpenDetails}
+                        onOpenDetails={onDrawOpenDetails}
                     />
                     {/* Display-only features: mower, dock, heading, paths */}
                     <Source type={"geojson"} id={"display-features"} data={displayFeatures}>
@@ -1276,6 +1669,32 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 paint={{'line-color': OBSTACLE_CLEARANCE_PREVIEW_COLOR, 'line-width': 2, 'line-dasharray': [1, 1.5]}}/>
                         </Source>
                     )}
+                    {/* The actual ignored band (width_m), under everything else so the
+                        centerline / vertex handles / draft points stay legible on top.
+                        A narrow band (the default is 0.2 m) can rasterize to a
+                        sub-pixel-wide fill at normal zoom and simply disappear —
+                        fill-opacity alone is not enough. The outline `line` layers
+                        below draw at a fixed PIXEL width regardless of how thin the
+                        polygon is geographically (same reason the centerline itself
+                        stays a constant 4 px), so the two edges of the band stay
+                        visible even for a very narrow line. */}
+                    <Source type={"geojson"} id={"lidar-corridor-bands"} data={corridorBandFeatures}>
+                        <Layer type={"fill"} id={"lidar-corridor-band-fill"}
+                            filter={['==', ['get', 'kind'], 'band']}
+                            paint={{'fill-color': CORRIDOR_COLOR, 'fill-opacity': 0.35}}/>
+                        <Layer type={"line"} id={"lidar-corridor-band-outline"}
+                            filter={['==', ['get', 'kind'], 'band']}
+                            paint={{'line-color': CORRIDOR_COLOR, 'line-width': 2, 'line-opacity': 0.9}}/>
+                    </Source>
+                    {/* Operator-drawn LiDAR-ignore lines. The line currently being drawn
+                        is NOT here — it lives in gl-draw's own store (draw_line_string
+                        mode) and gl-draw renders it with its own stock styling. */}
+                    <Source type={"geojson"} id={"lidar-corridors"} data={corridorFeatures}>
+                        <Layer type={"line"} id={"lidar-corridor-lines"}
+                            filter={['==', ['get', 'kind'], 'corridor']}
+                            layout={{'line-cap': 'round', 'line-join': 'round'}}
+                            paint={{'line-color': CORRIDOR_COLOR, 'line-width': 4, 'line-dasharray': [2, 1]}}/>
+                    </Source>
                     {/* fusion_graph's LiDAR anchor map (walls as ink, scanned ground as a faint wash). */}
                     {lidarMapImage && (
                         <Source type={"image"} id={"lidar-map"} url={lidarMapImage.url} coordinates={lidarMapImage.coordinates}>
@@ -1331,7 +1750,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         mowingAreas={mowingAreas}
                         selectedFeatureCount={selectedFeatureIds.length}
                         onEditMap={handleEditMap}
-                        onEditSelectedFeature={handleEditSelectedFeature}
+                        onEditSelectedFeature={handleEditSelectedFeatureOrCorridor}
                         onDrawPolygon={handleDrawPolygon}
                         onDrawShape={handleDrawShape}
                         onDrawEmoji={handleDrawEmoji}
@@ -1341,6 +1760,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onSplit={handleSplit}
                         onPlaceDock={handleDockPlacement}
                         dockPlacementMode={dockPlacementMode}
+                        onDrawLidarCorridor={handleStartDrawingCorridor}
+                        lidarCorridorDrawing={corridorDrawing}
+                        onFinishLidarCorridor={handleFinishDrawingCorridor}
+                        onCancelLidarCorridor={handleCancelDrawingCorridor}
+                        lidarCorridorSelected={selectedCorridorIndex >= 0}
                         onSaveMap={handleSaveMap}
                         onUndo={handleUndo}
                         onRedo={handleRedo}
@@ -1392,11 +1816,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onDrawPolygon={handleDrawPolygon}
                         onDrawShape={handleDrawShape}
                         onDrawEmoji={handleDrawEmoji}
+                        onDrawLidarCorridor={handleStartDrawingCorridor}
                         onTrash={handleTrash}
                         onCombine={handleCombine}
                         onSubtract={handleSubtract}
                         onSplit={handleSplit}
-                        onEditSelectedFeature={handleEditSelectedFeature}
+                        onEditSelectedFeature={handleEditSelectedFeatureOrCorridor}
                         onPlaceDock={handleDockPlacement}
                         dockPlacementMode={dockPlacementMode}
                     />
@@ -1462,6 +1887,30 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 />
                             </div>
                         )}
+                        {/* This wrapper must itself be a shrinkable flex participant
+                            (flex + minHeight:0), same as AreasListPanel's own root div
+                            above — otherwise it sizes to its content's natural (auto)
+                            height regardless of the panel's internal flex:1 list, the
+                            list never gets a bounded height to overflow against, and
+                            long corridor lists silently clip against this column's
+                            overflow:hidden instead of scrolling. */}
+                        <div style={{borderTop: `1px solid ${colors.borderSubtle}`, display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0}}>
+                            <LidarCorridorsPanel
+                                corridors={lidarCorridors.corridors}
+                                busy={lidarCorridors.busy}
+                                editable={editMap}
+                                drawing={corridorDrawing}
+                                onFinishDraw={handleFinishDrawingCorridor}
+                                onCancelDraw={handleCancelDrawingCorridor}
+                                onSelect={(index) => {
+                                    const c = lidarCorridors.corridors[index];
+                                    if (c) handleAreaSelect(corridorDrawId(c));
+                                }}
+                                selectedIndex={selectedCorridorIndex >= 0 ? selectedCorridorIndex : null}
+                                onSmooth={() => handleReshapeSelectedCorridor((pts) => smoothPolyline(pts))}
+                                onSimplify={() => handleReshapeSelectedCorridor((pts) => simplifyPolyline(pts))}
+                            />
+                        </div>
                         <div style={{borderTop: `1px solid ${colors.borderSubtle}`, padding: 8}}>
                             <MapOffsetPanel
                                 offsetX={offsetX}

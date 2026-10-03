@@ -15,9 +15,23 @@ interface UseMapEditHistoryOptions {
     setFeatures: (features: Record<string, MowingFeature>) => void;
     editMap: boolean;
     setEditMap: (v: boolean) => void;
+    // Called whenever an edit session is genuinely ABANDONED (either branch
+    // of exitEditMode — no unsaved area/obstacle changes to begin with, or
+    // the operator confirmed "discard"). NOT called on a successful Save
+    // Map, which sets editMap false directly without going through here.
+    // MapPage uses this to revert LiDAR-ignore corridors, which (unlike
+    // areas/obstacles) are written to map_server immediately on every edit
+    // rather than staying buffered in `features` until Save — see
+    // useLidarCorridors's own doc comment.
+    onDiscard?: () => void;
+    // Additional "there are unsaved changes" signal from outside this hook
+    // (area/obstacle edits are tracked internally via the `features` watcher
+    // below; this covers a corridor-only edit, which never touches
+    // `features` and so would otherwise silently skip the confirm dialog).
+    extraUnsavedChanges?: boolean;
 }
 
-export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: UseMapEditHistoryOptions) {
+export function useMapEditHistory({features, setFeatures, editMap, setEditMap, onDiscard, extraUnsavedChanges}: UseMapEditHistoryOptions) {
     const {modal} = App.useApp();
     const {t} = useTranslation();
     // History entries are PLAIN serialized snapshots, never the class
@@ -41,6 +55,7 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
         setHasUnsavedChanges(false);
         lastRecordedRef.current = null;
         setEditMap(false);
+        onDiscard?.();
     }
 
     function handleEditMap() {
@@ -49,7 +64,7 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
             setHistoryIndex(0);
             lastRecordedRef.current = features;
             setEditMap(true);
-        } else if (hasUnsavedChanges) {
+        } else if (hasUnsavedChanges || extraUnsavedChanges) {
             modal.confirm({
                 title: t('mapEditHistory.discardTitle'),
                 content: t('mapEditHistory.discardContent'),

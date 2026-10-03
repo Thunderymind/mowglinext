@@ -68,4 +68,31 @@ describe('useMapEditHistory', () => {
         });
         expect(result.current.hasUnsavedChanges).toBe(true);
     });
+
+    it('calls onDiscard when cancelling with nothing to confirm', () => {
+        const onDiscard = vi.fn();
+        editMap = true;
+        const {result} = renderHook(() =>
+            useMapEditHistory({features, setFeatures, editMap, setEditMap, onDiscard})
+        );
+        act(() => {
+            result.current.handleEditMap();
+        });
+        expect(setEditMap).toHaveBeenCalledWith(false);
+        expect(onDiscard).toHaveBeenCalledTimes(1);
+    });
+
+    it('extraUnsavedChanges (a corridor-only edit) still prompts to confirm, and onDiscard fires on confirm', () => {
+        const onDiscard = vi.fn();
+        editMap = true;
+        const {result} = renderHook(() =>
+            useMapEditHistory({features, setFeatures, editMap, setEditMap, onDiscard, extraUnsavedChanges: true})
+        );
+        act(() => {
+            result.current.handleEditMap();
+        });
+        expect(mockConfirm).toHaveBeenCalled();
+        expect(setEditMap).toHaveBeenCalledWith(false);
+        expect(onDiscard).toHaveBeenCalledTimes(1);
+    });
 });

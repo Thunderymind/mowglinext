@@ -83,6 +83,16 @@ interface MapToolbarMobileProps {
     onSubtract?: () => void;
     onSplit?: () => void;
     onPlaceDock?: () => void;
+    /// LiDAR-ignore line drawing (draw_line_string on the map, click-to-place).
+    onDrawLidarCorridor?: () => void;
+    lidarCorridorDrawing?: boolean;
+    onFinishLidarCorridor?: () => void;
+    onCancelLidarCorridor?: () => void;
+    /// True when the current map selection is specifically an ignore LINE
+    /// (not an area/obstacle) — shows a dedicated pencil button that opens
+    /// its edit popup (name + distance) directly, instead of only being
+    /// reachable through the "editProps" entry buried in the ⋯ More menu.
+    lidarCorridorSelected?: boolean;
     dockPlacementMode?: boolean;
     stateName?: string;
     highLevelState?: number;
@@ -115,6 +125,8 @@ export const MapToolbarMobile = ({
     onMowArea, selectedFeatureCount = 0, onEditSelectedFeature,
     onDrawPolygon, onDrawShape, onDrawEmoji, onTrash, onCombine, onSubtract, onSplit,
     onPlaceDock, dockPlacementMode,
+    onDrawLidarCorridor, lidarCorridorDrawing = false, onFinishLidarCorridor, onCancelLidarCorridor,
+    lidarCorridorSelected = false,
     stateName, highLevelState, emergency,
     mowerAppearanceId = "urdf", onMowerAppearanceChange = () => {},
     dockAppearanceId = "marker", onDockAppearanceChange = () => {},
@@ -324,6 +336,47 @@ export const MapToolbarMobile = ({
         </AsyncButton>
     );
 
+    // While placing points for a LiDAR-ignore line, the toolbar becomes just
+    // Cancel (✗) / Finish (✓) / hint — nothing else in the normal row is
+    // usable mid-draw anyway (undo/redo, other draw tools, dock placement),
+    // and burying Finish/Cancel at the tail of a long horizontally-scrolling
+    // row meant they were easy to miss entirely on a phone, right when the
+    // operator is mid-tap on the map and least likely to go hunting for a
+    // button off-screen. This mirrors how the RECORDING state already hands
+    // Finish/Cancel/Home to JoystickOverlay instead of sharing the row. Both
+    // action buttons sit together at the FRONT (field-requested 2026-09-29)
+    // so they're the first thing the eye finds; the hint text trails after,
+    // and is deliberately short (points are placed via gl-draw's own
+    // draw_line_string mode now, not a JS-side counter — see MapPage.tsx —
+    // so there is no live count to show any more).
+    if (editMap && lidarCorridorDrawing) {
+        return (
+            <>
+                <div style={toolbarStyle}>
+                    <Button
+                        size="large"
+                        icon={<CloseOutlined />}
+                        onClick={onCancelLidarCorridor}
+                        aria-label={t("mapLidarCorridors.cancel")}
+                        style={touchTarget}
+                    />
+                    <Button
+                        type="primary"
+                        size="large"
+                        icon={<CheckOutlined />}
+                        onClick={onFinishLidarCorridor}
+                        aria-label={t("mapLidarCorridors.finish")}
+                        style={touchTarget}
+                    />
+                    <div style={{fontSize: 13, color: colors.text, whiteSpace: "nowrap"}}>
+                        {t("mapLidarCorridors.drawing")}
+                    </div>
+                </div>
+                {stopButton}
+            </>
+        );
+    }
+
     if (editMap) {
         return (
             <>
@@ -380,6 +433,7 @@ export const MapToolbarMobile = ({
                         <ShapePickerDropdown
                             onDrawShape={onDrawShape}
                             onDrawEmoji={onDrawEmoji}
+                            onDrawLidarCorridor={onDrawLidarCorridor}
                             placement="top"
                         >
                             <Button size="large" icon={<PlusOutlined />} aria-label={t("mapToolbarMobile.addShape")} style={touchTarget} />
@@ -402,6 +456,21 @@ export const MapToolbarMobile = ({
                         aria-label={t("mapToolbarMobile.placeDock")}
                         style={touchTarget}
                     />
+
+                    {/* Only for a selected LiDAR-ignore LINE, not areas/obstacles (those
+                        already reach "Edit properties" via the ⋯ More menu below) — the
+                        line's edit popup (name + ignore distance) has no other entry
+                        point on mobile at all, since there is no side panel here to hold
+                        an inline field the way the desktop LidarCorridorsPanel does. */}
+                    {lidarCorridorSelected && (
+                        <Button
+                            size="large"
+                            icon={<EditOutlined />}
+                            onClick={onEditSelectedFeature}
+                            aria-label={t("mapToolbarMobile.editProperties")}
+                            style={touchTarget}
+                        />
+                    )}
 
                     {/* Combine/Subtract/Split now live inside this More menu
                         (editMenuItems) to keep the top row uncluttered. */}
