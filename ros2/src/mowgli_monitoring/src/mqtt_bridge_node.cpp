@@ -1046,10 +1046,13 @@ void MqttBridgeNode::poll_areas()
     return;
   }
   areas_poll_in_flight_ = true;
-  poll_areas_step(0, std::make_shared<std::vector<AreaSummary>>());
+  ++areas_poll_.generation;
+  areas_poll_.deadline = map_poll_now_() + kMapPollTimeout;
+  poll_areas_step(0, areas_poll_.generation, std::make_shared<std::vector<AreaSummary>>());
 }
 
 void MqttBridgeNode::poll_areas_step(uint32_t index,
+                                     uint64_t generation,
                                      std::shared_ptr<std::vector<AreaSummary>> collected)
 {
   if (index >= kMaxAreasPoll)
@@ -1062,34 +1065,41 @@ void MqttBridgeNode::poll_areas_step(uint32_t index,
   auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
   request->index = index;
 
-  srv_get_area_->async_send_request(
+  const auto pending = srv_get_area_->async_send_request(
       request,
-      [this, index, collected](
+      [this, index, generation, collected](
           rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
       {
-        const auto response = future.get();
-        if (!response->success)
-        {
-          // index >= areas_.size() on the server side — end of the list.
-          areas_poll_in_flight_ = false;
-          publish_areas_if_changed(*collected);
-          return;
-        }
-
-        // Navigation-only areas (keepout/boundary zones, never mowed) are
-        // deliberately excluded — same split the GUI applies
-        // (splitMapAreas) before offering "mow this area" to an operator. A
-        // start_area command targeting one would just be skipped by the
-        // BT's own mow-selection loop regardless, but excluding it here
-        // keeps the published list meaning "things you can actually ask
-        // this topic to mow".
-        if (!response->area.is_navigation_area)
-        {
-          collected->push_back(AreaSummary{index, response->area.name});
-        }
-
-        poll_areas_step(index + 1, collected);
+        on_areas_response(index, generation, collected, future);
       });
+  areas_poll_.request_id = pending.request_id;
+}
+
+void MqttBridgeNode::on_areas_response(uint32_t index,
+                                       uint64_t generation,
+                                       std::shared_ptr<std::vector<AreaSummary>> collected,
+                                       AreaClient::SharedFuture future)
+{
+  // A queued or late callback must not consume or finish a replacement poll.
+  if (!areas_poll_in_flight_ || generation != areas_poll_.generation ||
+      expire_map_poll(areas_poll_in_flight_, areas_poll_, srv_get_area_, "areas"))
+  {
+    return;
+  }
+  areas_poll_.request_id.reset();
+  const auto response = future.get();
+  if (!response->success)
+  {
+    areas_poll_in_flight_ = false;
+    publish_areas_if_changed(*collected);
+    return;
+  }
+  // Navigation-only areas are not offered as mowing targets.
+  if (!response->area.is_navigation_area)
+  {
+    collected->push_back(AreaSummary{index, response->area.name});
+  }
+  poll_areas_step(index + 1, generation, collected);
 }
 
 void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& areas)
@@ -1115,9 +1125,32 @@ void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& ar
 // Timers: rate-limited publishes (on_timer) + network loop (net_timer_)
 // ---------------------------------------------------------------------------
 
+bool MqttBridgeNode::expire_map_poll(bool& active,
+                                     MapPollState& poll,
+                                     const AreaClient::SharedPtr& client,
+                                     const char* description)
+{
+  if (!active || map_poll_now_() < poll.deadline)
+  {
+    return false;
+  }
+  // Invalidate callback ownership before releasing the pending ROS request.
+  ++poll.generation;
+  active = false;
+  if (poll.request_id.has_value())
+  {
+    client->remove_pending_request(*poll.request_id);
+    poll.request_id.reset();
+  }
+  RCLCPP_WARN(get_logger(), "MQTT %s poll timed out; retaining previous complete map", description);
+  return true;
+}
+
 void MqttBridgeNode::on_timer()
 {
   // The MQTT network loop runs on net_timer_, not here.
+  expire_map_poll(areas_poll_in_flight_, areas_poll_, srv_get_area_, "areas");
+  expire_map_poll(area_poll_in_progress_, boundary_poll_, srv_get_mowing_area_, "area boundary");
 
   // Attempt reconnect if disconnected.
   if (!mqtt_client_->is_connected())
@@ -1264,14 +1297,17 @@ void MqttBridgeNode::maybe_poll_area_boundaries()
   }
 
   area_poll_in_progress_ = true;
+  ++boundary_poll_.generation;
+  boundary_poll_.deadline = map_poll_now_() + kMapPollTimeout;
   last_area_poll_ = t;
   auto accumulated =
       std::make_shared<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>>();
-  poll_area_boundary_step(0, accumulated);
+  poll_area_boundary_step(0, boundary_poll_.generation, accumulated);
 }
 
 void MqttBridgeNode::poll_area_boundary_step(
     uint32_t index,
+    uint64_t generation,
     std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated)
 {
   if (index >= kMaxAreaPollCount)
@@ -1287,27 +1323,40 @@ void MqttBridgeNode::poll_area_boundary_step(
   // executor's queue, not synchronously inline — each step's lambda returns
   // immediately after scheduling the next request, so there is no growing
   // call stack even for many areas.
-  srv_get_mowing_area_->async_send_request(
+  const auto pending = srv_get_mowing_area_->async_send_request(
       request,
-      [this, index, accumulated](
+      [this, index, generation, accumulated](
           rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedFuture future)
       {
-        const auto response = future.get();
-        if (!response->success)
-        {
-          // Index out of range = end of the (possibly non-contiguous, see
-          // docs/MQTT_CONTROL.md) area list.
-          finish_area_boundary_poll(accumulated);
-          return;
-        }
-        if (!response->area.is_navigation_area)
-        {
-          // Navigation-only areas (keepout/boundary zones, never mowed) are
-          // excluded — matches <prefix>/areas' own filter (PR #638).
-          accumulated->emplace_back(index, response->area);
-        }
-        poll_area_boundary_step(index + 1, accumulated);
+        on_area_boundary_response(index, generation, accumulated, future);
       });
+  boundary_poll_.request_id = pending.request_id;
+}
+
+void MqttBridgeNode::on_area_boundary_response(
+    uint32_t index,
+    uint64_t generation,
+    std::shared_ptr<std::vector<std::pair<uint32_t, mowgli_interfaces::msg::MapArea>>> accumulated,
+    AreaClient::SharedFuture future)
+{
+  if (!area_poll_in_progress_ || generation != boundary_poll_.generation ||
+      expire_map_poll(
+          area_poll_in_progress_, boundary_poll_, srv_get_mowing_area_, "area boundary"))
+  {
+    return;
+  }
+  boundary_poll_.request_id.reset();
+  const auto response = future.get();
+  if (!response->success)
+  {
+    finish_area_boundary_poll(accumulated);
+    return;
+  }
+  if (!response->area.is_navigation_area)
+  {
+    accumulated->emplace_back(index, response->area);
+  }
+  poll_area_boundary_step(index + 1, generation, accumulated);
 }
 
 void MqttBridgeNode::finish_area_boundary_poll(
