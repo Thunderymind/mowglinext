@@ -691,6 +691,8 @@ def generate_launch_description() -> LaunchDescription:
                 # Follow the same authoritative LiDAR flag as the Nav stack so the
                 # health check reports "disabled" instead of a false "no scan" error.
                 "lidar_enabled": ParameterValue(use_lidar, value_type=bool),
+                "battery_empty_voltage": float(robot_params.get("battery_empty_voltage", 24.0)),
+                "battery_full_voltage": float(robot_params.get("battery_full_voltage", 28.0)),
             },
         ],
     )
@@ -719,6 +721,8 @@ def generate_launch_description() -> LaunchDescription:
                 # bundled mowgli-mqtt container: the mowgli service runs
                 # network_mode: host.
                 "mqtt_host": str(robot_params.get("mqtt_host", "localhost")),
+                "battery_empty_voltage": float(robot_params.get("battery_empty_voltage", 24.0)),
+                "battery_full_voltage": float(robot_params.get("battery_full_voltage", 28.0)),
                 "mqtt_port": int(robot_params.get("mqtt_port", 1883)),
                 "mqtt_username": str(robot_params.get("mqtt_username", "")),
                 "mqtt_password": str(robot_params.get("mqtt_password", "")),

@@ -34,6 +34,7 @@
 #include <string>
 #include <utility>
 
+#include "mowgli_monitoring/battery_percentage.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -559,6 +560,8 @@ void MqttBridgeNode::declare_parameters()
   mqtt_client_id_ = declare_parameter<std::string>("mqtt_client_id", "mowgli_ros2");
   topic_prefix_ = declare_parameter<std::string>("mqtt_topic_prefix", "mowgli");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
+  battery_empty_voltage_ = declare_parameter<double>("battery_empty_voltage", 24.0);
+  battery_full_voltage_ = declare_parameter<double>("battery_full_voltage", 28.0);
   use_ssl_ = declare_parameter<bool>("use_ssl", false);
   home_assistant_discovery_enabled_ =
       declare_parameter<bool>("home_assistant_discovery_enabled", false);
@@ -1197,7 +1200,15 @@ void MqttBridgeNode::on_timer()
   flush(pending_odom_, last_odom_publish_, "position", serialise_position, /*retain=*/false);
   flush(pending_gps_, last_gps_publish_, "gps", serialise_gps, /*retain=*/false);
   flush(pending_status_, last_status_publish_, "status", serialise_status, /*retain=*/true);
-  flush(pending_power_, last_power_publish_, "power", serialise_power, /*retain=*/true);
+  flush(
+      pending_power_,
+      last_power_publish_,
+      "power",
+      [this](const mowgli_interfaces::msg::Power& power)
+      {
+        return serialise_power(power, battery_empty_voltage_, battery_full_voltage_);
+      },
+      /*retain=*/true);
   flush(pending_pose_, last_pose_publish_, "pose", serialise_pose, /*retain=*/false);
   flush(pending_gnss_status_,
         last_gnss_status_publish_,
@@ -1371,14 +1382,12 @@ std::string MqttBridgeNode::serialise_status(const mowgli_interfaces::msg::Statu
   return std::string{buf};
 }
 
-std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg)
+std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg,
+                                            double empty_voltage,
+                                            double full_voltage)
 {
-  // Derive battery percentage same as diagnostics (4S LiPo 12.0–16.8V range).
-  constexpr double kVFull = 16.8;
-  constexpr double kVEmpty = 12.0;
   const double voltage = static_cast<double>(msg.v_battery);
-  double pct = 100.0 * (voltage - kVEmpty) / (kVFull - kVEmpty);
-  pct = std::max(0.0, std::min(100.0, pct));
+  const double pct = battery_percentage(voltage, empty_voltage, full_voltage);
 
   char buf[256];
   std::snprintf(buf,

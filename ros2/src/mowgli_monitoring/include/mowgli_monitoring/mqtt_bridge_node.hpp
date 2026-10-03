@@ -344,7 +344,9 @@ public:
   // DiagnosticsNode's check_*() methods (diagnostics_node.hpp).
 
   static std::string serialise_status(const mowgli_interfaces::msg::Status& msg);
-  static std::string serialise_power(const mowgli_interfaces::msg::Power& msg);
+  static std::string serialise_power(const mowgli_interfaces::msg::Power& msg,
+                                     double empty_voltage = 24.0,
+                                     double full_voltage = 28.0);
   static std::string serialise_emergency(const mowgli_interfaces::msg::Emergency& msg);
   static std::string serialise_position(const nav_msgs::msg::Odometry& msg);
 
@@ -604,6 +606,8 @@ private:
   double dock_pose_x_{0.0};
   double dock_pose_y_{0.0};
   double dock_pose_yaw_{0.0};
+  double battery_empty_voltage_{24.0};
+  double battery_full_voltage_{28.0};
 
   // Tracks MQTT connection edges so discovery is refreshed after reconnect.
   bool mqtt_was_connected_{false};
