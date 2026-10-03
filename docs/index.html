@@ -12,9 +12,9 @@
 
 <!-- ─── Beta Banner ─────────────────────────────────── -->
 <div class="beta-banner">
-  <span class="beta-tag">v1.4.0</span>
-  Out now: update from the GUI, Home Assistant over MQTT, push notifications, remote access, ROS 2 Lyrical.
-  <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.4.0">Read the release notes</a>
+  <span class="beta-tag">v1.5.0</span>
+  Out now: mows to the edge, blade-on pivot turns, firmware settings without a custom build, LiDAR ignore lines, Home Assistant auto-discovery.
+  <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0">Read the release notes</a>
 </div>
 
 <!-- ─── Navigation ──────────────────────────────────── -->
@@ -141,54 +141,53 @@
 <!-- ─── What's New ──────────────────────────────────── -->
 <section class="whats-new" id="whats-new">
   <div class="container">
-    <p class="release-pill">Release <strong>v1.4.0</strong> · September 2026</p>
-    <h2>The mower now looks after itself</h2>
-    <p class="section-subtitle">Checks for its own updates, tells your phone what it is doing, talks to Home Assistant, and is reachable from anywhere — privately.</p>
+    <p class="release-pill">Release <strong>v1.5.0</strong> · October 2026</p>
+    <h2>The mower mows to the edge</h2>
+    <p class="section-subtitle">Closer to the boundary, cleaner at the row ends, and firmware settings you can change without building your own.</p>
     <div class="features-grid">
 
       <div class="feature-card">
-        <div class="icon">🔄</div>
-        <h3>Update From the GUI</h3>
-        <p><strong>Settings → Updates</strong> checks for new releases every day and shows them in the notification bell. One reviewed click installs the whole stack — robot software, GUI and sensor drivers together — with a backup, a health check and automatic rollback, and only while the mower is idle with the blade off. Pin a version, follow Production or Development, or roll back.</p>
+        <div class="icon">✂️</div>
+        <h3>Mows to the Edge</h3>
+        <p>The outermost pass now rides on the line you recorded instead of 20&nbsp;cm inside it, so the blade cuts to the edge. Obstacles you record by driving around them are saved at their real size, and a map overlay shows exactly how much room the planner keeps around each one.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🔁</div>
+        <h3>Row Ends That Stay on the Lawn</h3>
+        <p>Where no turn-around arc fits, the robot pivots in place with the blade on and carries on, instead of leaving the lawn in dozens of pieces. And when it meets a turn it cannot drive around an obstacle, it improvises the turn instead of giving up.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🔧</div>
+        <h3>Firmware Settings, No Custom Build</h3>
+        <p>Emergency-stop timings, charge ceiling, speed cap and tilt threshold come from your configuration. The board clamps every value to a safety envelope, keeps it in flash so it applies before the robot software starts, and reports what it applied.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="icon">🌿</div>
+        <h3>LiDAR Ignore Lines</h3>
+        <p>Draw a line along a hedge or ornamental grass and give it a width. LiDAR returns inside that band are ignored, so soft vegetation the robot is meant to brush past no longer stops the mow.</p>
       </div>
 
       <div class="feature-card">
         <div class="icon">🏠</div>
-        <h3>Home Assistant &amp; MQTT</h3>
-        <p>A real MQTT bridge, configured from the GUI: retained mowing status, battery and coverage, live GPS position, online/offline availability and a command topic. Works with the bundled broker or the one you already run. The topic contract is documented for any integration to build on.</p>
+        <h3>Home Assistant Auto-Discovery</h3>
+        <p>Turn it on and the mower appears in Home Assistant as one device: a native lawn-mower card with start, pause and dock, a <em>Mow</em> button for each area, and battery, coverage, GPS, RTK and rain sensors.</p>
       </div>
 
       <div class="feature-card">
-        <div class="icon">📲</div>
-        <h3>Push Notifications</h3>
-        <p>Telegram, Pushover, ntfy or a JSON webhook. Know when the mower starts, finishes a zone, gets home, gets stuck, hits the emergency stop, waits for rain or GPS, or runs low on battery — in English or French, with a test button to prove the channel.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🌍</div>
-        <h3>Remote Access</h3>
-        <p>An optional, hardened Tailscale sidecar puts the web interface on your private tailnet with HTTPS — reachable from your phone anywhere, without opening a router port. Never public: no Funnel, no exposed login, userspace networking with every capability dropped.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">✂️</div>
-        <h3>Cross-Hatch Mowing</h3>
-        <p>Alternate the stripe angle by 90° every session, per area, so the lawn is not always cut in the same direction. See and override the next direction for each zone without interrupting a run.</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="icon">🐢</div>
-        <h3>ROS 2 Lyrical</h3>
-        <p>Every image rebuilt on ROS 2 Lyrical and Ubuntu 26.04 with pinned source dependencies, plus a Cyclone DDS discovery fix, wheel gains that actually turn the inner wheel on tight arcs, and dock calibration that works on real receivers. The host OS does not change.</p>
+        <div class="icon">🛠️</div>
+        <h3>Install, Update, Repair</h3>
+        <p>The installer gains real modes: a manual update that regenerates the stack, a repair that re-applies everything from your saved answers, a check, and an uninstall that keeps your maps and configuration. Plus GNSS in its own updatable container, and multi-robot coordination in beta.</p>
       </div>
 
     </div>
 
     <div class="release-callout">
       <h3>Already running MowgliNext?</h3>
-      <p>Rerun the installer once to enable in-GUI updates, then open <strong>Settings → Updates</strong>. That replaces <code>mowgli-pull &amp;&amp; mowgli-up</code> for good.</p>
-      <code>curl -sSL https://mowgli.garden/install.sh | bash</code>
-      <p class="composer-note">Check <code>docker volume ls | grep mowgli_maps</code> first — if your map volume is not prefixed <code>install_</code>, set <code>COMPOSE_PROJECT_NAME</code> in <code>docker/.env</code> so the stack keeps its data. Full steps in the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.4.0">release notes</a>.</p>
+      <p>v1.5.0 changes the mainboard firmware protocol, so update in this order in <strong>Settings → Updates</strong>: <em>Update the update service</em>, then <em>Review update</em> → <em>Install</em>, then <strong>Flash firmware</strong> when the new interface asks for it.</p>
+      <p class="composer-note">The mower now mows on the recorded boundary by default. If your perimeter is not drivable all the way round, read the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0">release notes</a> before the first mow. Installed before v1.4.0? Rerun the installer once first: <code>curl -sSL https://mowgli.garden/install.sh | bash</code></p>
     </div>
   </div>
 </section>
