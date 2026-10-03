@@ -16,6 +16,7 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <future>
 #include <limits>
 #include <memory>
@@ -51,6 +52,16 @@ namespace mowgli_behavior
 // (mow_angle_deg) → behavior_tree_node blackboard → PlanCoverageArea goal.
 // ---------------------------------------------------------------------------
 inline constexpr double kMowAngleAutoDeg = -1.0;
+
+// Time to wait after enabling the blade before dispatching the first coverage
+// goal. A negative or non-finite configured value is unsafe to interpret as a
+// duration, so it falls back to the conservative default.
+inline constexpr double kDefaultBladeSpinupDelaySec = 3.0;
+
+inline double sanitizeBladeSpinupDelaySec(double delay_sec)
+{
+  return std::isfinite(delay_sec) && delay_sec >= 0.0 ? delay_sec : kDefaultBladeSpinupDelaySec;
+}
 
 // ---------------------------------------------------------------------------
 // Resume-cursor resolution — shared between FollowStrip (which trims the driven
@@ -180,6 +191,9 @@ public:
         BT::InputPort<double>("detour_footprint_radius_m",
                               0.25,
                               "Footprint disc radius for the resume-pose clearance test (m)"),
+        BT::InputPort<double>("blade_spinup_delay_sec",
+                              kDefaultBladeSpinupDelaySec,
+                              "Seconds to wait after enabling the blade before coverage motion"),
     };
   }
 
@@ -384,8 +398,8 @@ private:
   // to a >kSegmentTransitGap segment start blade-on.
   static constexpr double kTransitServerWaitSec = 5.0;
 
-  // Blade spinup delay — wait before sending the FIRST segment goal
-  static constexpr double kBladeSpinupDelaySec = 1.5;
+  // Blade spinup delay — wait before sending the FIRST segment goal.
+  double blade_spinup_delay_sec_{kDefaultBladeSpinupDelaySec};
   std::chrono::steady_clock::time_point blade_start_time_;
   // Host-side blade intent. The installed safety firmware rejects (and clears)
   // an ON request unless a drive authorization is currently fresh. Keep an

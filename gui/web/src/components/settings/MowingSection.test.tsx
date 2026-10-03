@@ -46,4 +46,11 @@ describe("MowingSection — headland passes", () => {
 
         expect(onChange).toHaveBeenCalledWith("num_headland_passes", 0);
     });
+
+    it("exposes the blade spin-up delay with the three-second default", () => {
+        const onChange = vi.fn();
+        renderSection(onChange);
+
+        expect(screen.getByDisplayValue("3")).toBeInTheDocument();
+    });
 });

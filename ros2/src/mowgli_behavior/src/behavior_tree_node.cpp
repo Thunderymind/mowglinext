@@ -917,6 +917,13 @@ private:
     context_->transit_speed = declare_parameter<double>("transit_speed", 0.2);
     context_->mowing_speed = declare_parameter<double>("mowing_speed", 0.2);
 
+    // Wait for the cutting motor to reach speed before FollowStrip can send
+    // its first coverage goal. This is a blackboard value because FollowStrip
+    // is a BT node rather than an rclcpp node of its own.
+    const double blade_spinup_delay_sec =
+        declare_parameter<double>("blade_spinup_delay_sec", kDefaultBladeSpinupDelaySec);
+    blackboard_->set("blade_spinup_delay_sec", blade_spinup_delay_sec);
+
     // Rain delay: parameter in minutes, blackboard in seconds.
     const double rain_delay_minutes = declare_parameter<double>("rain_delay_minutes", 30.0);
     blackboard_->set("rain_delay_sec", rain_delay_minutes * 60.0);

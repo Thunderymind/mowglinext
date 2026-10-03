@@ -306,6 +306,9 @@ mowgli:
     # (mowgli_hardware/blade_gate.hpp). Read at startup: takes effect on the
     # next ROS2 container restart.
     mowing_enabled: true
+    # Time after enabling the cutting motor before the first coverage motion.
+    # Gives the blade time to reach operating speed; 0 disables the wait.
+    blade_spinup_delay_sec: 3.0
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
     transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP desired_linear_vel)
     # turn_speed_ratio: the coverage controller's speed THROUGH a bend, as a

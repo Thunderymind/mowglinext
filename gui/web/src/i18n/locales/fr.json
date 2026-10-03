@@ -2392,6 +2392,8 @@
     "mowingSpeedTooltip": "Vitesse pendant les bandes de tonte (m/s)",
     "transitSpeed": "Vitesse de transit",
     "transitSpeedTooltip": "Vitesse lors des trajets vers/depuis la base ou entre les zones",
+    "bladeSpinupDelay": "Délai de montée en régime de la lame",
+    "bladeSpinupDelayTooltip": "Attendre après l’activation de la lame avant le premier mouvement de tonte",
     "mowingPattern": "Motif de tonte",
     "headlandWidth": "Largeur de tournière",
     "headlandWidthTooltip": "Largeur de la bande périmétrique tondue avant le champ intérieur (retrait ConstHL de F2C). Relié à coverage_server.default_headland_width.",

@@ -485,6 +485,13 @@
           "default": true,
           "description": "Enable the mowing blade. false = DRY RUN: the robot mows the full path with the blade never spinning (commissioning, coverage tuning). This is a convenience inhibit, NOT a safety cut-out \u2014 the STM32 firmware remains the blade safety authority. Read by hardware_bridge_node at startup: takes effect after a ROS2 restart."
         },
+        "blade_spinup_delay_sec": {
+          "type": "number",
+          "minimum": 0,
+          "title": "Blade Spin-up Delay",
+          "default": 3.0,
+          "description": "Seconds to wait after enabling the cutting motor before the robot starts its first coverage motion."
+        },
         "mowing_speed": {
           "type": "number",
           "title": "Mowing Speed",

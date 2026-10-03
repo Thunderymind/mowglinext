@@ -239,6 +239,16 @@ export const MowingSection: React.FC<Props> = ({
                                     />
                                 </Form.Item>
                             </Col>
+                            <Col xs={12} sm={8}>
+                                <Form.Item label={fieldLabel("blade_spinup_delay_sec", t("settingsMowing.bladeSpinupDelay"))} tooltip={t("settingsMowing.bladeSpinupDelayTooltip")}>
+                                    <InputNumber
+                                        value={values.blade_spinup_delay_sec ?? 3.0}
+                                        onChange={(v) => onChange("blade_spinup_delay_sec", v)}
+                                        min={0} max={30} step={0.5} precision={1}
+                                        style={{ width: "100%" }} addonAfter="s"
+                                    />
+                                </Form.Item>
+                            </Col>
                         </Row>
                     </Form>
                 </Space>

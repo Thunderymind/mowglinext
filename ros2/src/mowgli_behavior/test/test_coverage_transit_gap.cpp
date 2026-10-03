@@ -25,9 +25,12 @@
 // blade-on-diagonal-crossing / redundant-transit failure modes described in
 // coverage_geometry.hpp.
 
+#include <limits>
+
+#include <gtest/gtest.h>
+
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
-#include <gtest/gtest.h>
 
 TEST(CoverageTransitGap, ExecutionSideMatchesSharedConstant)
 {
@@ -47,4 +50,20 @@ TEST(CoverageTransitGap, ValueIsPinnedAndSane)
   EXPECT_DOUBLE_EQ(mowgli_interfaces::coverage_geometry::kSegmentTransitGapM, 0.6);
   EXPECT_GT(mowgli_interfaces::coverage_geometry::kSegmentTransitGapM, 0.0);
   EXPECT_LT(mowgli_interfaces::coverage_geometry::kSegmentTransitGapM, 2.0);
+}
+
+TEST(BladeSpinupDelay, DefaultIsThreeSeconds)
+{
+  EXPECT_DOUBLE_EQ(mowgli_behavior::kDefaultBladeSpinupDelaySec, 3.0);
+  EXPECT_DOUBLE_EQ(mowgli_behavior::sanitizeBladeSpinupDelaySec(3.0), 3.0);
+  EXPECT_DOUBLE_EQ(mowgli_behavior::sanitizeBladeSpinupDelaySec(0.0), 0.0);
+}
+
+TEST(BladeSpinupDelay, InvalidValuesFallBackToDefault)
+{
+  EXPECT_DOUBLE_EQ(mowgli_behavior::sanitizeBladeSpinupDelaySec(-0.1),
+                   mowgli_behavior::kDefaultBladeSpinupDelaySec);
+  EXPECT_DOUBLE_EQ(mowgli_behavior::sanitizeBladeSpinupDelaySec(
+                       std::numeric_limits<double>::infinity()),
+                   mowgli_behavior::kDefaultBladeSpinupDelaySec);
 }

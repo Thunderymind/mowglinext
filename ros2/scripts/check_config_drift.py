@@ -97,7 +97,7 @@ USER_OVERRIDE = {
     "gps_wait_after_undock_sec",
     "ntrip_enabled", "ntrip_host", "ntrip_port",
     "ntrip_user", "ntrip_password", "ntrip_mountpoint",
-    "transit_speed", "mowing_speed", "undock_speed", "undock_distance",
+    "transit_speed", "mowing_speed", "blade_spinup_delay_sec", "undock_speed", "undock_distance",
     "mowing_enabled", "automatic_mode", "rain_mode", "rain_debounce_sec",
     "rain_delay_minutes",
     "lift_recovery_mode", "lift_blade_resume_delay_sec",

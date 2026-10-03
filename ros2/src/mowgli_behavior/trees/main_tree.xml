@@ -747,7 +747,7 @@
                         <Fallback name="MowOrRecover">
                         <Sequence name="MowPath">
                           <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                          <FollowStrip/>
+                          <FollowStrip blade_spinup_delay_sec="{blade_spinup_delay_sec}"/>
                         </Sequence>
                         <!-- Start-pose blocked recovery (issue #487).
                              Every blade-off sub-path transit was refused by

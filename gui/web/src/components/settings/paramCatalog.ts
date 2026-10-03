@@ -38,6 +38,7 @@ const CATALOG: Record<string, ParamMeta> = {
   tool_width: {label: "paramCatalog.tool_width.label", description: "paramCatalog.tool_width.description", tier: "basic", group: "Coverage", unit: "m"},
   transit_speed: {label: "paramCatalog.transit_speed.label", description: "paramCatalog.transit_speed.description", tier: "basic", group: "Coverage", unit: "m/s"},
   mowing_speed: {label: "paramCatalog.mowing_speed.label", description: "paramCatalog.mowing_speed.description", tier: "basic", group: "Coverage", unit: "m/s"},
+  blade_spinup_delay_sec: {label: "paramCatalog.blade_spinup_delay_sec.label", description: "paramCatalog.blade_spinup_delay_sec.description", tier: "basic", group: "Coverage", unit: "s"},
   num_headland_passes: {label: "paramCatalog.num_headland_passes.label", description: "paramCatalog.num_headland_passes.description", tier: "basic", group: "Coverage"},
   headland_width: {label: "paramCatalog.headland_width.label", description: "paramCatalog.headland_width.description", tier: "middle", group: "Coverage", unit: "m"},
   swath_overlap: {label: "paramCatalog.swath_overlap.label", description: "paramCatalog.swath_overlap.description", tier: "middle", group: "Coverage", unit: "m"},

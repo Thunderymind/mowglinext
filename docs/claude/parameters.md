@@ -302,6 +302,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 | `lethal_outside_areas` | `true` (`full_system.launch.py:416`) | `map_server` (also a static default in `map_server.yaml:96`) |
 | `enforce_boundary_margin_m` | 0.40 (`full_system.launch.py:418`) | `map_server` (static default `map_server.yaml:112`) |
 | `lift_recovery_mode` / `lift_blade_resume_delay_sec` | `false` / 1.0 (`mowgli.launch.py:230–232`) | `hardware_bridge` — GUI section *Safety* |
+| `blade_spinup_delay_sec` | 3.0 (`full_system.launch.py`) | `behavior_tree_node` → `FollowStrip`; waits after blade enable before the first coverage goal |
 | `imu_roll` / `imu_pitch` | 0.0 (`mowgli.launch.py:115–116`) | xacro |
 
 ## Keys that live only in the sparse installed file

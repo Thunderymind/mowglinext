@@ -408,6 +408,16 @@ BT::NodeStatus FollowStrip::onStart()
     getInput<int>("max_detours_per_segment", max_detours);
     max_detours_per_segment_ = max_detours > 0 ? static_cast<std::size_t>(max_detours) : 0;
     getInput<double>("detour_footprint_radius_m", detour_footprint_radius_m_);
+    double blade_spinup_delay_sec = kDefaultBladeSpinupDelaySec;
+    getInput<double>("blade_spinup_delay_sec", blade_spinup_delay_sec);
+    blade_spinup_delay_sec_ = sanitizeBladeSpinupDelaySec(blade_spinup_delay_sec);
+    if (blade_spinup_delay_sec_ != blade_spinup_delay_sec)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: blade_spinup_delay_sec must be finite and non-negative; "
+                  "using default %.1fs",
+                  kDefaultBladeSpinupDelaySec);
+    }
   }
   detours_used_ = 0;
   if (!follow_client_->wait_for_action_server(std::chrono::seconds(5)))
@@ -427,7 +437,7 @@ BT::NodeStatus FollowStrip::onStart()
               area_idx_,
               swaths_.size(),
               ctx->area_completed_swaths[area_idx_].size(),
-              kBladeSpinupDelaySec);
+              blade_spinup_delay_sec_);
 
   // Seed the smooth GUI percent for THIS area: 0 % for a fresh area, or the
   // resumed fraction if resuming mid-path. Resets the value per area so it does
@@ -843,7 +853,7 @@ BT::NodeStatus FollowStrip::onRunning()
   if (!goal_sent_)
   {
     auto elapsed = std::chrono::steady_clock::now() - blade_start_time_;
-    if (elapsed < std::chrono::duration<double>(kBladeSpinupDelaySec))
+    if (elapsed < std::chrono::duration<double>(blade_spinup_delay_sec_))
       return BT::NodeStatus::RUNNING;
     goal_sent_ = true;
     sendCurrentSwath(ctx);

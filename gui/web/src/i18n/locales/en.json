@@ -2396,6 +2396,8 @@
     "mowingSpeedTooltip": "Speed during mowing strips (m/s)",
     "transitSpeed": "Transit Speed",
     "transitSpeedTooltip": "Speed when going to/from dock or between zones",
+    "bladeSpinupDelay": "Blade Spin-up Delay",
+    "bladeSpinupDelayTooltip": "Wait after enabling the blade before the first mowing movement",
     "mowingPattern": "Mowing Pattern",
     "headlandWidth": "Headland Width",
     "headlandWidthTooltip": "Width of perimeter strip mowed before the inner field (F2C ConstHL inset). Wired to coverage_server.default_headland_width.",
