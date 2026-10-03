@@ -80,20 +80,18 @@ func (b *fakeBackend) Apply(_ context.Context, images map[string]string) error {
 	}
 	return b.event("apply-new")
 }
-func (b *fakeBackend) Verify(_ context.Context, images map[string]string, _ *Deployment, change *FirmwareProtocolChange) error {
+func (b *fakeBackend) Verify(ctx context.Context, images map[string]string, _ *Deployment, change *FirmwareProtocolChange) error {
 	b.mu.Lock()
 	b.verifyChanges = append(b.verifyChanges, change)
+	if allowance := healthVerificationFromContext(ctx); allowance != nil {
+		b.verifiedHealth = append(b.verifiedHealth, append([]HealthIssue(nil), allowance.Allowed...))
+		allowance.Remaining = append([]HealthIssue(nil), allowance.Allowed...)
+	}
 	b.mu.Unlock()
 	if images["gui"] == "old-gui" {
 		return b.event("verify-old")
 	}
 	return b.event("verify-new")
-}
-func (b *fakeBackend) VerifyWithPreexistingHealth(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange, issues []HealthIssue) ([]HealthIssue, error) {
-	b.mu.Lock()
-	b.verifiedHealth = append(b.verifiedHealth, append([]HealthIssue(nil), issues...))
-	b.mu.Unlock()
-	return append([]HealthIssue(nil), issues...), b.Verify(ctx, images, d, change)
 }
 func (b *fakeBackend) PreexistingHealthIssues(context.Context, map[string]string) ([]HealthIssue, error) {
 	b.mu.Lock()

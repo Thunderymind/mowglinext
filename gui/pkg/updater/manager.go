@@ -692,13 +692,9 @@ func (m *Manager) run(recovery bool) {
 		}
 		var remainingHealthIssues []HealthIssue
 		if err == nil {
-			if backend, ok := m.backend.(interface {
-				VerifyWithPreexistingHealth(context.Context, map[string]string, *Deployment, *FirmwareProtocolChange, []HealthIssue) ([]HealthIssue, error)
-			}); ok {
-				remainingHealthIssues, err = backend.VerifyWithPreexistingHealth(ctx, j.Plan.Images, &j.Plan.Target, j.Plan.FirmwareProtocolChange, j.Plan.PreexistingHealthIssues)
-			} else {
-				err = m.backend.Verify(ctx, j.Plan.Images, &j.Plan.Target, j.Plan.FirmwareProtocolChange)
-			}
+			verifyCtx, allowance := withPreexistingHealthVerification(ctx, j.Plan.PreexistingHealthIssues)
+			err = m.backend.Verify(verifyCtx, j.Plan.Images, &j.Plan.Target, j.Plan.FirmwareProtocolChange)
+			remainingHealthIssues = allowance.Remaining
 		}
 		var installed map[string]string
 		if err == nil {
