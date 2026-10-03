@@ -64,6 +64,8 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
             buildFeaturesFromMap: vi.fn(),
             obstacleOriginals: [],
             restoreObstacleOriginals: vi.fn(),
+            corridors: [],
+            restoreCorridors: vi.fn(),
         }));
 
         await act(async () => {
@@ -84,6 +86,35 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
     });
 });
 
+// Everything handleBackupMap does NOT care about. Shared by the two backup
+// tests below so the untyped antd `notification` stub is cast once.
+type BackupOverrides = Partial<Parameters<typeof useMapFiles>[0]>;
+function backupOptions(overrides: BackupOverrides): Parameters<typeof useMapFiles>[0] {
+    return {
+        features: {},
+        setFeatures: vi.fn(),
+        map: {working_area: [], navigation_areas: []},
+        setMap: vi.fn(),
+        editMap: false,
+        setEditMap: vi.fn(),
+        setHasUnsavedChanges: vi.fn(),
+        offsetX: 0,
+        offsetY: 0,
+        datum: [0, 0, 0],
+        notification: {success: vi.fn(), warning: vi.fn(), error: vi.fn()} as unknown as
+            Parameters<typeof useMapFiles>[0]['notification'],
+        guiApi: {} as unknown as Api<unknown>,
+        dockDirty: false,
+        setDockDirty: vi.fn(),
+        buildFeaturesFromMap: vi.fn(),
+        obstacleOriginals: [],
+        restoreObstacleOriginals: vi.fn(),
+        corridors: [],
+        restoreCorridors: vi.fn(),
+        ...overrides,
+    };
+}
+
 // The pre-shrink obstacle outlines live in the GUI config store, not in the Map
 // message, so a backup that only stringified `map` silently lost them.
 describe('useMapFiles backup carries the pre-shrink obstacle outlines', () => {
@@ -96,9 +127,7 @@ describe('useMapFiles backup carries the pre-shrink obstacle outlines', () => {
         Object.assign(window.URL, {createObjectURL: vi.fn((b: Blob) => { blob = b; return 'blob:x'; }), revokeObjectURL: vi.fn()});
         vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 
-        const hook = renderHook(() => useMapFiles({
-            features: {},
-            setFeatures: vi.fn(),
+        const hook = renderHook(() => useMapFiles(backupOptions({
             map: {
                 working_area: [{
                     name: 'A', area: {points: []}, is_navigation_area: false,
@@ -106,25 +135,36 @@ describe('useMapFiles backup carries the pre-shrink obstacle outlines', () => {
                 }],
                 navigation_areas: [],
             },
-            setMap: vi.fn(),
-            editMap: false,
-            setEditMap: vi.fn(),
-            setHasUnsavedChanges: vi.fn(),
-            offsetX: 0,
-            offsetY: 0,
-            datum: [0, 0, 0],
-            notification: {success: vi.fn(), warning: vi.fn(), error: vi.fn()} as any,
-            guiApi: {} as unknown as Api<unknown>,
-            dockDirty: false,
-            setDockDirty: vi.fn(),
-            buildFeaturesFromMap: vi.fn(),
             obstacleOriginals: [kept, stale],
-            restoreObstacleOriginals: vi.fn(),
-        }));
+        })));
 
         hook.result.current.handleBackupMap();
 
-        const saved = JSON.parse(await blob!.text());
+        const saved = JSON.parse(await blob!.text()) as {obstacle_originals: unknown};
         expect(saved.obstacle_originals).toEqual([kept]);
+    });
+});
+
+// The LiDAR-ignore lines are map_server state, not part of the Map message, so
+// a backup that only stringified `map` silently lost them.
+describe('useMapFiles backup carries the ignore lines', () => {
+    it('writes them into map.json', async () => {
+        const line = {name: 'Hedge', polyline: {points: [{x: 0, y: 0, z: 0}, {x: 2, y: 0, z: 0}]}, width_m: 0.4, id: 9};
+        let blob: Blob | undefined;
+        const createObjectURL = vi.fn((b: Blob) => { blob = b; return 'blob:x'; });
+        Object.assign(window.URL, {createObjectURL, revokeObjectURL: vi.fn()});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        const hook = renderHook(() => useMapFiles(backupOptions({corridors: [line]})));
+
+        hook.result.current.handleBackupMap();
+
+        const saved = JSON.parse(await blob!.text()) as {
+            lidar_ignore_corridors: unknown; working_area: unknown;
+        };
+        expect(saved.lidar_ignore_corridors).toEqual([
+            {name: 'Hedge', polyline: line.polyline, width_m: 0.4},
+        ]);
+        expect(saved.working_area).toEqual([]);
     });
 });

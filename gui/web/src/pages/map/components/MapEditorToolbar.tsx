@@ -31,6 +31,7 @@ interface MapEditorToolbarProps {
     onDrawPolygon?: () => void;
     onDrawShape?: (shape: ShapeType, sizeMeters: number) => void;
     onDrawEmoji?: (emoji: string, sizeMeters: number) => void;
+    onDrawLidarCorridor?: () => void;
     onTrash?: () => void;
     onCombine?: () => void;
     onSubtract?: () => void;
@@ -89,7 +90,7 @@ const ToolButton = ({icon, tooltip, onClick, disabled, danger, primary, glow}: T
 export const MapEditorToolbar = ({
     hasUnsavedChanges, historyIndex, editHistoryLength,
     selectedFeatureCount, onSaveMap, onCancel, onUndo, onRedo,
-    onDrawPolygon, onDrawShape, onDrawEmoji, onTrash, onCombine, onSubtract, onSplit, onEditSelectedFeature,
+    onDrawPolygon, onDrawShape, onDrawEmoji, onDrawLidarCorridor, onTrash, onCombine, onSubtract, onSplit, onEditSelectedFeature,
     onPlaceDock, dockPlacementMode,
 }: MapEditorToolbarProps) => {
     const {colors, displayMode} = useThemeMode();
@@ -155,7 +156,7 @@ export const MapEditorToolbar = ({
 
         {/* Drawing tools */}
         <ToolButton icon={<BorderOutlined/>} tooltip={t('mapEditorToolbar.drawPolygon')} onClick={onDrawPolygon}/>
-        <ShapePickerDropdown onDrawShape={onDrawShape} onDrawEmoji={onDrawEmoji} placement="bottomLeft">
+        <ShapePickerDropdown onDrawShape={onDrawShape} onDrawEmoji={onDrawEmoji} onDrawLidarCorridor={onDrawLidarCorridor} placement="bottomLeft">
             <Tooltip title={t('mapEditorToolbar.addShape')} placement="right">
                 <button
                     aria-label={t('mapEditorToolbar.addShape')}

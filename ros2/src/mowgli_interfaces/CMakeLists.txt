@@ -33,6 +33,10 @@ set(msg_files
   "msg/CoverageSession.msg"
   "msg/FirmwareParam.msg"
   "msg/FirmwareParams.msg"
+  "msg/LidarIgnoreCorridor.msg"
+  "msg/LidarIgnoreCorridorArray.msg"
+  "msg/RecordedAreaPolygon.msg"
+  "msg/RecordedAreaPolygonArray.msg"
 )
 
 # Declare service files
@@ -56,6 +60,9 @@ set(srv_files
   "srv/PromoteObstacle.srv"
   "srv/PreviewObstacleClearance.srv"
   "srv/CorrectRecordedObstacle.srv"
+  "srv/AddLidarIgnoreCorridor.srv"
+  "srv/GetLidarIgnoreCorridors.srv"
+  "srv/ClearLidarIgnoreCorridors.srv"
 )
 
 # Declare action files
