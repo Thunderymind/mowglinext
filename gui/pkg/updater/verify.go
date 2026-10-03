@@ -12,23 +12,36 @@ import (
 )
 
 func (b DockerBackend) Verify(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange) error {
+	allowance := healthVerificationFromContext(ctx)
 	return waitForVerification(ctx, 3*time.Minute, 2*time.Second, func(ctx context.Context) []string {
 		problems, warnings := b.verificationProblems(ctx, images, d, change)
+		if allowance != nil {
+			allowance.Remaining = acceptedHealthIssues(warnings, allowance.Allowed)
+			return append(problems, unacceptedHealthIssueMessages(warnings, allowance.Allowed)...)
+		}
 		return append(problems, healthIssueMessages(warnings)...)
 	})
 }
 
-// VerifyWithPreexistingHealth accepts only optional-component failures which
-// were still present immediately before maintenance. A different check on the
-// same service is a new failure and remains blocking.
-func (b DockerBackend) VerifyWithPreexistingHealth(ctx context.Context, images map[string]string, d *Deployment, change *FirmwareProtocolChange, allowed []HealthIssue) ([]HealthIssue, error) {
-	var remaining []HealthIssue
-	err := waitForVerification(ctx, 3*time.Minute, 2*time.Second, func(ctx context.Context) []string {
-		problems, warnings := b.verificationProblems(ctx, images, d, change)
-		remaining = acceptedHealthIssues(warnings, allowed)
-		return append(problems, unacceptedHealthIssueMessages(warnings, allowed)...)
-	})
-	return remaining, err
+type healthVerificationContextKey struct{}
+
+type healthVerificationAllowance struct {
+	Allowed   []HealthIssue
+	Remaining []HealthIssue
+}
+
+// Keep the Backend.Verify contract stable so wrappers can inject failures,
+// metrics or policy before delegating to DockerBackend.Verify. Context carries
+// this one-job verification policy through those wrappers without widening the
+// public HTTP or Docker interfaces.
+func withPreexistingHealthVerification(ctx context.Context, allowed []HealthIssue) (context.Context, *healthVerificationAllowance) {
+	allowance := &healthVerificationAllowance{Allowed: append([]HealthIssue(nil), allowed...)}
+	return context.WithValue(ctx, healthVerificationContextKey{}, allowance), allowance
+}
+
+func healthVerificationFromContext(ctx context.Context) *healthVerificationAllowance {
+	allowance, _ := ctx.Value(healthVerificationContextKey{}).(*healthVerificationAllowance)
+	return allowance
 }
 
 // VerifyRecovery verifies that the previous deployment was restored and is safe
