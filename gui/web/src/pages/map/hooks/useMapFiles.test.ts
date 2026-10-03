@@ -62,6 +62,8 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
             dockDirty: false,
             setDockDirty: vi.fn(),
             buildFeaturesFromMap: vi.fn(),
+            obstacleOriginals: [],
+            restoreObstacleOriginals: vi.fn(),
         }));
 
         await act(async () => {
@@ -79,5 +81,50 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
         expect(byName['Area 2'].id).toBeUndefined();
         expect(navAreas).toHaveLength(1);
         expect(navAreas[0].area.id).toBe(777);
+    });
+});
+
+// The pre-shrink obstacle outlines live in the GUI config store, not in the Map
+// message, so a backup that only stringified `map` silently lost them.
+describe('useMapFiles backup carries the pre-shrink obstacle outlines', () => {
+    it('writes the records that still match an obstacle into map.json', async () => {
+        const ring = (x0: number, y0: number, x1: number, y1: number) =>
+            [{x: x0, y: y0}, {x: x1, y: y0}, {x: x1, y: y1}, {x: x0, y: y1}];
+        const kept = {shrunk: ring(4.3, 4.3, 5.7, 5.7), original: ring(4, 4, 6, 6)};
+        const stale = {shrunk: ring(9, 9, 10, 10), original: ring(8, 8, 11, 11)};
+        let blob: Blob | undefined;
+        Object.assign(window.URL, {createObjectURL: vi.fn((b: Blob) => { blob = b; return 'blob:x'; }), revokeObjectURL: vi.fn()});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        const hook = renderHook(() => useMapFiles({
+            features: {},
+            setFeatures: vi.fn(),
+            map: {
+                working_area: [{
+                    name: 'A', area: {points: []}, is_navigation_area: false,
+                    obstacles: [{points: [{x: 4.3, y: 4.3, z: 0}, {x: 5.7, y: 4.3, z: 0}, {x: 5.7, y: 5.7, z: 0}, {x: 4.3, y: 5.7, z: 0}]}],
+                }],
+                navigation_areas: [],
+            },
+            setMap: vi.fn(),
+            editMap: false,
+            setEditMap: vi.fn(),
+            setHasUnsavedChanges: vi.fn(),
+            offsetX: 0,
+            offsetY: 0,
+            datum: [0, 0, 0],
+            notification: {success: vi.fn(), warning: vi.fn(), error: vi.fn()} as any,
+            guiApi: {} as unknown as Api<unknown>,
+            dockDirty: false,
+            setDockDirty: vi.fn(),
+            buildFeaturesFromMap: vi.fn(),
+            obstacleOriginals: [kept, stale],
+            restoreObstacleOriginals: vi.fn(),
+        }));
+
+        hook.result.current.handleBackupMap();
+
+        const saved = JSON.parse(await blob!.text());
+        expect(saved.obstacle_originals).toEqual([kept]);
     });
 });

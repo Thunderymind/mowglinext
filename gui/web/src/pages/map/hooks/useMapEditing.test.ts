@@ -1,6 +1,6 @@
 import {act, renderHook} from '@testing-library/react';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
-import {useMapEditing, type UseMapEditingOptions} from './useMapEditing';
+import {useMapEditing, type ShrinkMemory, type UseMapEditingOptions} from './useMapEditing';
 import {MowingAreaFeature, ObstacleFeature, type MowingFeature} from '../../../types/map.ts';
 
 interface DeleteDialog {
@@ -76,18 +76,32 @@ function areaFeature(id: string, geom: ReturnType<typeof square>) {
     return f;
 }
 
+// In-memory stand-in for the persisted shrink memory MapPage provides.
+function makeShrinkMemory(): ShrinkMemory {
+    const rows: {original: unknown; shrunk: unknown}[] = [];
+    return {
+        find: (ring) => rows.find((r) => JSON.stringify(r.shrunk) === JSON.stringify(ring))?.original as never,
+        remember: (original, shrunk) => { rows.push({original, shrunk}); },
+        forget: (shrunk) => {
+            const i = rows.findIndex((r) => JSON.stringify(r.shrunk) === JSON.stringify(shrunk));
+            if (i >= 0) rows.splice(i, 1);
+        },
+    };
+}
+
 describe('recorded-outline shrink survives an obstacle round trip', () => {
     it('restores the original outline when the shrunk obstacle becomes an area again', () => {
         const parent = areaFeature('area-0-area-0', square(0, 0, 10, 10));
         const recorded = areaFeature('area-1-area-0', square(4, 4, 6, 6));
         const shrunk = square(4.3, 4.3, 5.7, 5.7);
 
+        const memory = makeShrinkMemory();
         let current: Record<string, MowingFeature> = {[parent.id]: parent, [recorded.id]: recorded};
         const setFeatures = vi.fn((next: Record<string, MowingFeature>) => { current = next; });
         const options = () => ({
             features: current, setFeatures, editMap: true, mowingAreas: [],
             drawRef: {current: null}, notification: {error: vi.fn(), info: vi.fn(), success: vi.fn()},
-            mapInstanceRef: {current: null},
+            mapInstanceRef: {current: null}, shrinkMemory: memory,
         } as unknown as UseMapEditingOptions);
         const hook = renderHook(() => useMapEditing(options()));
 
@@ -113,12 +127,13 @@ describe('recorded-outline shrink survives an obstacle round trip', () => {
     it('keeps an obstacle outline the operator edited after the shrink', () => {
         const parent = areaFeature('area-0-area-0', square(0, 0, 10, 10));
         const recorded = areaFeature('area-1-area-0', square(4, 4, 6, 6));
+        const memory = makeShrinkMemory();
         let current: Record<string, MowingFeature> = {[parent.id]: parent, [recorded.id]: recorded};
         const setFeatures = vi.fn((next: Record<string, MowingFeature>) => { current = next; });
         const options = () => ({
             features: current, setFeatures, editMap: true, mowingAreas: [],
             drawRef: {current: null}, notification: {error: vi.fn(), info: vi.fn(), success: vi.fn()},
-            mapInstanceRef: {current: null},
+            mapInstanceRef: {current: null}, shrinkMemory: memory,
         } as unknown as UseMapEditingOptions);
         const hook = renderHook(() => useMapEditing(options()));
         const convert = (from: string, to: string, corrected?: ReturnType<typeof square>) => {
