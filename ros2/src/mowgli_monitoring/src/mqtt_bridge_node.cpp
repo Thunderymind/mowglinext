@@ -848,12 +848,8 @@ void MqttBridgeNode::on_coverage_path(nav_msgs::msg::Path::ConstSharedPtr msg)
   // no rate limiting needed. Only republish (retained) when the plan actually changed,
   // matching <prefix>/area_boundary's own poll-but-only-republish-on-change pattern.
   const std::string json = serialise_coverage_path(*msg);
-  if (json == last_coverage_path_json_)
-  {
-    return;
-  }
-  last_coverage_path_json_ = json;
-  mqtt_client_->publish(full_topic("coverage_path"), json, /*retain=*/true);
+  pending_coverage_path_json_ = json;
+  publish_pending_retained("coverage_path", pending_coverage_path_json_, last_coverage_path_json_);
 }
 
 void MqttBridgeNode::on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -1098,14 +1094,14 @@ void MqttBridgeNode::poll_areas_step(uint32_t index,
 void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& areas)
 {
   const std::string json = serialise_areas(areas);
-  if (json == last_areas_json_)
-  {
-    return;
-  }
-  last_areas_json_ = json;
+  // Discovery describes the latest desired map, independently of whether
+  // the retained /areas submission succeeded. A -> failed B -> A must also
+  // restore discovery's buttons to A after discovery B was accepted.
+  const bool changed = json != serialise_areas(last_areas_);
   last_areas_ = areas;
-  mqtt_client_->publish(full_topic("areas"), json, /*retain=*/true);
-  if (home_assistant_discovery_enabled_)
+  pending_areas_json_ = json;
+  publish_pending_retained("areas", pending_areas_json_, last_areas_json_);
+  if (home_assistant_discovery_enabled_ && changed)
   {
     // Area buttons are part of the same device-discovery document. Refresh it
     // when the map's mowable area list changes so Home Assistant adds, renames
@@ -1117,6 +1113,22 @@ void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& ar
 // ---------------------------------------------------------------------------
 // Timers: rate-limited publishes (on_timer) + network loop (net_timer_)
 // ---------------------------------------------------------------------------
+
+void MqttBridgeNode::publish_pending_retained(const char* suffix,
+                                              std::optional<std::string>& pending,
+                                              std::string& last_accepted)
+{
+  if (!pending.has_value())
+  {
+    return;
+  }
+  if (*pending == last_accepted ||
+      mqtt_client_->publish(full_topic(suffix), *pending, /*retain=*/true))
+  {
+    last_accepted = *pending;
+    pending.reset();
+  }
+}
 
 void MqttBridgeNode::on_timer()
 {
@@ -1148,6 +1160,12 @@ void MqttBridgeNode::on_timer()
       mqtt_client_->publish(home_assistant_discovery_topic(topic_prefix_), "", /*retain=*/true);
     }
   }
+
+  // Map snapshots can arrive only once (notably the latched coverage plan).
+  // Retry failed submissions without needing another ROS message or map poll.
+  publish_pending_retained("coverage_path", pending_coverage_path_json_, last_coverage_path_json_);
+  publish_pending_retained("areas", pending_areas_json_, last_areas_json_);
+  publish_pending_retained("area_boundary", pending_area_boundary_json_, last_area_boundary_json_);
 
   // A Home Assistant birth message is received while spin_once() is driving
   // the MQTT client. Publish only after spin_once() has returned completely,
@@ -1330,14 +1348,8 @@ void MqttBridgeNode::finish_area_boundary_poll(
                                 datum_lat_,
                                 datum_lon_,
                                 make_dock_pose(dock_pose_x_, dock_pose_y_, dock_pose_yaw_));
-  if (json == last_area_boundary_json_)
-  {
-    // Retained topic: republish only when the geometry actually changed,
-    // not every ~10s poll tick.
-    return;
-  }
-  last_area_boundary_json_ = json;
-  mqtt_client_->publish(full_topic("area_boundary"), json, /*retain=*/true);
+  pending_area_boundary_json_ = json;
+  publish_pending_retained("area_boundary", pending_area_boundary_json_, last_area_boundary_json_);
 }
 
 // ---------------------------------------------------------------------------
