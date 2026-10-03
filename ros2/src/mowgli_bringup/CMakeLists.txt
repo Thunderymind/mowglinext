@@ -102,6 +102,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_launch_injection test/test_launch_injection.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_battery_launch_config test/test_battery_launch_config.py
+    TIMEOUT 30
+  )
 
   # Lockstep guard for the firmware wheel-PI defaults: template ==
   # mowgli.launch.py fallback == hardware_bridge_node.cpp declared default, and
