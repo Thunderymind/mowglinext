@@ -30,6 +30,20 @@ type StatusListener = (status: MultiplexStatus) => void;
 /** Minimum interval between "malformed frame" console warnings. */
 const DECODE_WARN_INTERVAL_MS = 10_000;
 
+// Browser JavaScript cannot observe protocol-level ping/pong frames. If the
+// robot roams between access points, the server may close the old connection
+// while that FIN/RST never reaches the browser, leaving WebSocket.readyState
+// stuck at OPEN indefinitely. Live ROS topics should produce frames
+// continuously, so abandon such a half-open socket and let the existing
+// reconnect backoff create a fresh TCP connection.
+export const MULTIPLEX_STALE_TIMEOUT_MS = 30_000;
+const STALE_CHECK_INTERVAL_MS = 5_000;
+const CONTINUOUS_TOPICS = new Set([
+    "status", "highLevelStatus", "gps", "gnssStatus", "pose", "imu",
+    "ticks", "wheelOdom", "lidar", "power", "diagnostics", "fusionDiag",
+    "fusionRaw", "icpOdom",
+]);
+
 interface ServerFrame {
     topic: string;
     data: unknown;
@@ -40,7 +54,7 @@ interface ClientOp {
     topic: string;
 }
 
-class MultiplexedSocket {
+export class MultiplexedSocket {
     private url: string;
     private ws: WebSocket | null = null;
     private state: "idle" | "connecting" | "open" = "idle";
@@ -52,6 +66,8 @@ class MultiplexedSocket {
     private reconnectTimer: number | null = null;
     private statusListeners = new Set<StatusListener>();
     private lastDecodeWarnAt = 0;
+    private lastFrameAt = 0;
+    private staleCheckTimer: number | null = null;
 
     constructor(url: string) {
         this.url = url;
@@ -106,6 +122,7 @@ class MultiplexedSocket {
             this.connect();
         } else if (this.state === "open" && isFirstSubscriberForTopic) {
             this.send({op: "subscribe", topic});
+            this.ensureStaleCheck();
         }
 
         return () => this.unsubscribe(topic, listener);
@@ -122,6 +139,7 @@ class MultiplexedSocket {
                 this.send({op: "unsubscribe", topic});
             }
         }
+        if (!this.hasContinuousListeners()) this.stopStaleCheck();
         if (this.listeners.size === 0) {
             // Cancel any pending reconnect — nothing to subscribe for.
             if (this.reconnectTimer != null) {
@@ -150,6 +168,7 @@ class MultiplexedSocket {
         this.ws = ws;
 
         ws.onopen = () => {
+            if (this.ws !== ws) return;
             // Every subscriber may have gone away during the handshake —
             // don't keep an orphan connection alive.
             if (this.listeners.size === 0) {
@@ -158,6 +177,8 @@ class MultiplexedSocket {
             }
             this.state = "open";
             this.reconnectAttempt = 0;
+            this.lastFrameAt = Date.now();
+            this.ensureStaleCheck();
             this.notifyStatus();
             // Re-subscribe to every topic that still has listeners.
             for (const topic of this.listeners.keys()) {
@@ -166,6 +187,7 @@ class MultiplexedSocket {
         };
 
         ws.onmessage = (e: MessageEvent) => {
+            if (this.ws !== ws) return;
             // MessagePack binary frame → {topic, data: <decoded object>}.
             let frame: ServerFrame;
             try {
@@ -175,6 +197,7 @@ class MultiplexedSocket {
                 this.warnDecodeFailure(e.data, err);
                 return;
             }
+            this.lastFrameAt = Date.now();
             const set = this.listeners.get(frame.topic);
             if (!set || set.size === 0) return;
             // Snapshot listeners so a callback that unsubscribes mid-iteration
@@ -192,18 +215,63 @@ class MultiplexedSocket {
         };
 
         ws.onerror = () => {
+            if (this.ws !== ws) return;
             try { ws.close(); } catch { /* ignore */ }
         };
 
         ws.onclose = () => {
+            if (this.ws !== ws) return;
             this.ws = null;
             this.state = "idle";
+            this.stopStaleCheck();
             this.notifyStatus();
             // Reconnect only if there's still something to listen for.
             if (this.listeners.size > 0) {
                 this.scheduleReconnect();
             }
         };
+    }
+
+    private hasContinuousListeners(): boolean {
+        for (const topic of this.listeners.keys()) {
+            if (CONTINUOUS_TOPICS.has(topic)) return true;
+        }
+        return false;
+    }
+
+    private ensureStaleCheck(): void {
+        if (this.staleCheckTimer != null) return;
+        if (this.state !== "open" || !this.hasContinuousListeners()) return;
+        this.staleCheckTimer = window.setInterval(() => {
+            if (this.state !== "open" || !this.hasContinuousListeners()) {
+                this.stopStaleCheck();
+                return;
+            }
+            if (Date.now() - this.lastFrameAt < MULTIPLEX_STALE_TIMEOUT_MS) return;
+
+            const staleSocket = this.ws;
+            if (!staleSocket) return;
+
+            // Do not wait for close/onclose: on a half-open connection that is
+            // precisely the event that can be lost. Detach this generation,
+            // close it best-effort, then use the normal reconnect scheduler.
+            this.ws = null;
+            this.state = "idle";
+            this.stopStaleCheck();
+            this.notifyStatus();
+            staleSocket.onopen = null;
+            staleSocket.onmessage = null;
+            staleSocket.onerror = null;
+            staleSocket.onclose = null;
+            try { staleSocket.close(); } catch { /* ignore */ }
+            if (this.listeners.size > 0) this.scheduleReconnect();
+        }, STALE_CHECK_INTERVAL_MS);
+    }
+
+    private stopStaleCheck(): void {
+        if (this.staleCheckTimer == null) return;
+        clearInterval(this.staleCheckTimer);
+        this.staleCheckTimer = null;
     }
 
     /**
