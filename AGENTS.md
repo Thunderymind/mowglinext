@@ -9,6 +9,7 @@ These files are the maintained map of the tree — read the relevant one before 
 - [`CLAUDE.md`](CLAUDE.md) — safety rules, monorepo layout, architecture invariants, "what NOT to do".
 - Per-tree notes: [`ros2/CLAUDE.md`](ros2/CLAUDE.md), [`gui/CLAUDE.md`](gui/CLAUDE.md), [`firmware/CLAUDE.md`](firmware/CLAUDE.md), [`install/CLAUDE.md`](install/CLAUDE.md), [`docker/CLAUDE.md`](docker/CLAUDE.md), [`sensors/CLAUDE.md`](sensors/CLAUDE.md).
 - [`docs/claude/doc-index.md`](docs/claude/doc-index.md) — which document is authoritative and which is a historical record.
+- [`docs/robot-operations/README.md`](docs/robot-operations/README.md) — **start here for the real robot**: known hosts, safe operation, fastest build/deploy route, field diagnosis, and evidence capture.
 - [`docs/claude/codemaps/`](docs/claude/codemaps/) (per-package file maps), [`ros-interfaces.md`](docs/claude/ros-interfaces.md) (every topic/service/action/TF), [`parameters.md`](docs/claude/parameters.md) (every config key and its default), [`testing-ci.md`](docs/claude/testing-ci.md) (every test and the CI job that gates it).
 
 ## ROS2 formatting

@@ -93,6 +93,7 @@ tree at f21729e9; regenerate when files are added or removed rather than hand-pa
 
 | Doc | What it is |
 |-----|-----------|
+| [`docs/robot-operations/README.md`](../robot-operations/README.md) | Field-tested entry point for the real robot: fixed local host facts, safe operation, delta build/deploy routing, live diagnosis, and the evidence workflow. |
 | [`docs/FIRST_BOOT.md`](../FIRST_BOOT.md) | The post-install checklist: GUI up → RTK Fixed → IMU cal → yaw cal → dock pose → drive tuning → record area → first mow, plus troubleshooting. |
 | [`wiki/User-Guide.md`](../../wiki/User-Guide.md) | Operator walkthrough of the live GUI, built from a real-robot session (also synced to the wiki). |
 | [`docker/README.md`](../../docker/README.md) | Manual (non-installer) Docker Compose deployment: hardware requirements, quick start, config reference, container architecture. **Partially stale** — still documents SLAM Toolbox, `slam_mode`, `slam_toolbox.yaml`, which were removed (see stale claims below). |
