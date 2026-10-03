@@ -211,6 +211,10 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_mqtt_bridge
     test/test_mqtt_bridge.cpp
   )
+  ament_add_ros_isolated_gtest(test_mqtt_map_poll
+    test/test_mqtt_map_poll.cpp
+  )
+  target_link_libraries(test_mqtt_map_poll mowgli_monitoring_core)
 
   ament_add_ros_isolated_gtest(test_configured_battery
     test/test_configured_battery.cpp
