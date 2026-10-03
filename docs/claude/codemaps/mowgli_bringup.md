@@ -57,6 +57,7 @@
 | `scripts/wait_for_tf.py` | 70 | `--parent map --child odom --timeout 120`; exit 0 when TF resolvable, 1 on timeout |
 | `scripts/empty_static_map_pub.py` | 61 | Latched empty `OccupancyGrid` on `/no_lidar_static_map` (params `size_m` 200, `resolution` 0.5, `frame_id` map) |
 | `scripts/cmd_vel_ws_relay.py` | 121 | WebSocket 127.0.0.1:8766 JSON → `/cmd_vel_teleop` (`TwistStamped`, clamps ±2.0 m/s / ±5.0 rad/s) |
+| `scripts/fleet_peer_obstacles.py` | 158 | Fleet coordination (commit `4bc36b74`, 2026-09-15): subs `/fleet/peers`, publishes `/fleet/peer_obstacles` consumed by both Nav2 costmap variants as an obstacle source; launched unconditionally from `full_system.launch.py` |
 | **`urdf/`** | | |
 | `urdf/mowgli.urdf.xacro` | 408 | Frames + visuals only (no sim plugins): base_footprint→base_link→wheels/casters/blade/imu/gps/lidar; all dims are xacro args |
 | **`test/`** | | |
@@ -65,6 +66,10 @@
 | `test/test_launch_injection.py` | 262 | AST guards: `num_headland_passes` unclamped, `mowing_enabled` → hardware_bridge only, `dock_max_retries`/`dock_use_charger_detection` → docking_server |
 | `test/test_tf_ownership.py` | 100 | Only fusion_graph + wheel_odometry construct `TransformBroadcaster`; `wheel_odometry.yaml publish_tf: false`; no launch file sets `publish_tf` |
 | `test/test_gnss_launch_config.py` | 61 | `full_system` declares no `use_universal_gnss`, includes no `universal_gnss.launch.py`, passes no legacy `gnss_backend`/`gps_protocol` params |
+| `test/test_fleet_peer_obstacles.py` | 63 | Guards `fleet_peer_obstacles.py`'s `/fleet/peers` sub / `/fleet/peer_obstacles` pub wiring |
+| `test/test_drive_pid_defaults.py` | 167 | Drive PID/yaw-tuning template defaults |
+| `test/test_fusion_graph_launch_types.py` | 146 | `fusion_graph.launch.py` param type/coercion guards |
+| `test/test_gnss_sidecar_launcher.py` | 178 | Guards the Universal GNSS sidecar inline launcher (`docker-compose.gps.yml`'s Python `command:` block) reads `mowgli_robot.yaml` correctly |
 | `test/test_urdf_xacro.py` | 49 | `chassis_mass_kg` reaches base_link inertial; `blade_joint` is fixed base_link→blade_link |
 | `test/test_nodes_startup.launch.py` | 257 | launch_test: 5 nodes stay alive 5 s, `/wheel_odom` `/diagnostics` `/mowgli_behavior_node/high_level_status` advertised, map_server/BT services present, exit 0 |
 | `test/test_navsat_status_universal.launch.py` | 138 | launch_test: `navsat_to_absolute_pose_node` publishes `/gps/absolute_pose` + `/gps/pose_cov`, never `/gps/status` |
@@ -220,7 +225,7 @@ Deployment entry points: `install/compose/docker-compose.base.yml` L42–44 `ros
 - Do NOT rebind `coverage_xy_tolerance` inside the nested injector — it becomes function-local and the launch crashes with `UnboundLocalError` (L891–896, guarded by `test_nav2_params.py` L180).
 - Template keys with NO template default: `lidar_enabled` (deliberate, L146–172 of `robot_config_util.py`), `connector_turn_radius` (fallback 0.20 only in `navigation.launch.py` L403) and `fusion_graph_node_period_s` (fallback 0.04, L139) — the GUI cannot "reset" the last two, and `check_config_drift.py` flags installed structural keys with no template default.
 - Injected but NOT declared by the target node: `map_server_node.chassis_safety_inset` (`full_system.launch.py` L395–398; no `chassis_safety_inset` in `ros2/src/mowgli_map`), `hardware_bridge.imu_yaw` (`mowgli.launch.py` L203; node comment L622 says URDF-only). Both are inert.
-- Declared by a node but NOT injected from the template: behavior_tree_node `rain_mode`, `rain_delay_minutes`, `rain_debounce_sec` (template L508–510; node defaults `behavior_tree_node.cpp` L877–891 — `rain_debounce_sec` default 0.0 vs template 10.0). Editing these template keys changes nothing on the robot until an injection is added.
+- `rain_mode`, `rain_delay_minutes`, `rain_debounce_sec` (template L508–510) ARE now injected into `behavior_tree_node` from the merged robot config by `full_system.launch.py:335–337` (commit `e77ed83f`, 2026-09-24, "#758") — editing them in the template/GUI does change the running robot. `rain_debounce_sec` resolves to the template's 10.0, not the node's compiled default of 0.0 (`behavior_tree_node.cpp` L891).
 - Orphan template keys with no consumer anywhere in `ros2/src`: `gps_wait_after_undock_sec`, `gps_timeout_sec`. (`path_spacing` and `ticks_per_revolution` were the other two and were DELETED from the template on 2026-09-05; `path_spacing` survives in the GUI schema only, allow-listed in `schema_template_parity_test.go`.) `dock_pose_yaw_sigma_rad` is read by `navigation.launch.py` L574 but injected nowhere there — `fusion_graph.launch.py` reads it itself (its L154).
 - `config/foxglove_bridge.yaml` is dead: both `full_system.launch.py` L563–582 and `foxglove_bridge.launch.py` inline their params. The whitelist regex lives in `full_system.launch.py` L66–68.
 - `hardware_bridge.yaml`, `twist_mux.yaml` are loaded from the PACKAGE share dir (`mowgli.launch.py` L185–187, L271), never from `/ros2_ws/config/`; the copies in `install/config/mowgli/` differ and are not read. Only `mowgli_robot.yaml` is read from `/ros2_ws/config` (`robot_config_util.py` L31).

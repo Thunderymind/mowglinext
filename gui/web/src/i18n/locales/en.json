@@ -339,7 +339,10 @@
     "stateCoverageFailed": "Coverage failed"
   },
   "flashBoard": {
+    "boardBiltemaRM1000": "Mowgli - Biltema RM1000",
     "firmwareSourceTitle": "Firmware source",
+    "firmwareTargetTitle": "Firmware target",
+    "firmwareTargetTooltip": "Advanced: choose an exact firmware build target. Automatic keeps the target inferred from the mower model.",
     "firmwareSourcePrebuilt": "Prebuilt image (recommended)",
     "firmwareSourceCustom": "Custom — compile from source (expert)",
     "firmwareSourceTooltip": "'Prebuilt image' flashes the tested, checksum-verified binary for your board. 'Custom' compiles the firmware from the repository/branch below with the parameters in the expert section and flashes that instead.",
@@ -2201,6 +2204,10 @@
       "label": "YardForce 500B",
       "description": "500 B variant with different blade motor UART and panel layout."
     },
+    "BiltemaRM1000": {
+      "label": "Biltema RM1000",
+      "description": "Biltema RM1000 robotic mower."
+    },
     "YardForceSA650": {
       "label": "YardForce SA650",
       "description": "Larger model (570x390mm) with higher encoder resolution."
@@ -3886,6 +3893,9 @@
     "recoveryHelp": "Maintenance remains active and the mower stays inhibited. Correct the restore, container, firmware, or mower safety problem shown above, then retry recovery.",
     "recoveryWarnings": "Some components still need attention",
     "recoveryWarningsHelp": "The previous deployment was restored and maintenance was released. Check the reported components before mowing.",
+    "forcedHealthBaseline": "Forced update baseline",
+    "remainingHealthIssues": "Pre-existing component issues still need attention",
+    "remainingHealthIssuesHelp": "These exact checks were already failing immediately before maintenance and still fail after the update. New failures would have restored the previous deployment.",
     "softwareUpdates": "Software updates",
     "simple": "Simple",
     "advanced": "Advanced",
@@ -3912,6 +3922,9 @@
     "firmwareInstallWarning": "Mainboard firmware protocol changes from {{from}} to {{to}}",
     "firmwareInstallHelp": "Mowing stays blocked after installation until the mainboard is flashed. Keep the ST-Link at hand.",
     "firmwareInstallAccept": "Install and flash the mainboard firmware afterwards. I understand the robot cannot mow until then.",
+    "healthInstallWarning": "Some installed components are already unhealthy",
+    "healthInstallHelp": "You can force this update so the affected containers can be replaced. Only the same component checks that are still failing immediately before maintenance may remain unhealthy; any new failure stops the update and restores the previous deployment.",
+    "healthInstallAccept": "Force this update with the listed pre-existing issues.",
     "firmwareFlashNeeded": "Flash the mainboard firmware now (protocol {{from}} → {{to}})",
     "firmwareFlashNeededHelp": "The installed software speaks a newer mainboard protocol than the board. The robot will not mow until the firmware is flashed."
   },

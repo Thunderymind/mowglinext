@@ -403,7 +403,8 @@ for(const mobile of [false,true])test(`standard branch versus custom image ident
 for (const mobile of [false,true]) test(`compact installed dates and completed update ${mobile?'mobile':'desktop'}`, async ({page}) => {
     const data=fixture();
     data.state.releases[0].updater['linux/arm64'].version='new-deployment-same-worker';
-    Object.assign(data.state,{job:{id:'job-completed',kind:'containers',phase:'succeeded',started_at:'2026-09-07T09:30:00Z',plan:plan(data.state.active)}});
+    const repairedPlan={...plan(data.state.active),preexisting_health_issues:[{service:'lidar',check:'application.lidar',message:'lidar: No fresh LiDAR scans'}]};
+    Object.assign(data.state,{job:{id:'job-completed',kind:'containers',phase:'succeeded',started_at:'2026-09-07T09:30:00Z',plan:repairedPlan}});
     const {panel,errors,posts}=await open(page,data,mobile);
     await expect(panel.getByRole('table',{name:'Installed stack'})).toBeVisible();
     await expect(panel.getByRole('table',{name:'Available to install'})).toContainText(devHead.slice(0,8));
@@ -425,6 +426,15 @@ for (const mobile of [false,true]) test(`compact installed dates and completed u
     }
     await page.getByRole('table',{name:'Installed stack'}).screenshot({path:`tests/e2e/.artifacts/updater-stack-${mobile?'mobile':'desktop'}.png`});
     expect(errors).toEqual([]);expect(posts).toEqual([]);
+});
+
+test('completed forced update reports only a pre-existing issue which remains',async({page})=>{
+    const data=fixture();const issue={service:'lidar',check:'application.lidar',message:'lidar: No fresh LiDAR scans'};
+    const forcedPlan={...plan(data.state.active),preexisting_health_issues:[issue]};
+    data.state.job={id:'forced-health-job',kind:'containers',phase:'succeeded',started_at:'2026-09-07T09:40:00Z',plan:forcedPlan,remaining_health_issues:[issue]} as never;
+    const {panel}=await open(page,data);
+    await expect(panel.getByTestId('remaining-health-issues')).toContainText('lidar: No fresh LiDAR scans');
+    await expect(panel.getByTestId('remaining-health-issues')).toContainText('New failures would have restored the previous deployment.');
 });
 
 test('installed build date never comes from a different cached image',async({page})=>{
@@ -497,6 +507,23 @@ test('matching firmware protocol shows no allowance and sends an explicit refusa
     await panel.getByRole('button',{name:'Review update'}).click();
     await expect(page.getByRole('dialog')).toBeVisible();
     expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true,allow_firmware_protocol_change:false}}]);
+});
+for(const mobile of [false,true])test(`pre-existing optional health failure needs explicit force ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();data.capabilities.push('preexisting-health');
+    const {panel,posts,errors}=await open(page,data,mobile);
+    const issue={service:'lidar',check:'application.lidar',message:'lidar: No fresh LiDAR scans'};
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:{...plan(data.state.releases[0]),preexisting_health_issues:[issue]}}));
+    await page.route('**/api/system/updater/apply',r=>r.fulfill({json:{job:'forced-health-job'}}));
+    await panel.getByRole('button',{name:'Review update'}).click();
+    const dialog=page.getByRole('dialog');const warning=dialog.getByTestId('preexisting-health-review');
+    await expect(warning).toContainText('Some installed components are already unhealthy');
+    await expect(warning).toContainText('lidar: No fresh LiDAR scans');
+    await expect(dialog.getByRole('button',{name:'Install reviewed deployment'})).toBeDisabled();
+    await shot(page,'host-updater-preexisting-health-review',mobile);
+    await warning.getByRole('checkbox',{name:'Force this update with the listed pre-existing issues.'}).check();
+    await dialog.getByRole('button',{name:'Install reviewed deployment'}).click();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true}},{path:'/api/system/updater/apply',body:{plan:'review-plan',preexisting_health_acknowledged:true}}]);
+    expect(errors).toEqual([]);
 });
 for(const protocol of [6,7])test(`after a forced install the flash reminder ${protocol===6?'stays until the board is flashed':'clears once the board runs the new protocol'}`,async({page})=>{
     const data=fixture();data.capabilities.push('firmware-protocol-change');

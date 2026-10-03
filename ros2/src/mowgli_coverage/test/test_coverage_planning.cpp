@@ -329,6 +329,46 @@ TEST(CoveragePlanning, FixedAngleIsHonouredAndDeterministic)
   }
 }
 
+// BruteForce steps lanes by a fixed op_width from one edge, so an extent that is
+// not a whole number of lanes left a strip (up to op_width/2 + the stepping
+// granularity) on the far side that no lane covered — field-reported 2026-10-02
+// as a skipped strip under the headland. The lanes are now spread evenly over
+// the extent. 1.0 m across / 0.16 m lanes = 6.25: fixed stepping puts the last
+// lane centre 0.12 m from the far edge (strip 0.04 m beyond its reach), even
+// spreading puts BOTH outer lanes within op_width/2 of their edge.
+TEST(CoveragePlanning, SwathsAreSpreadEvenlyAcrossTheCell)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeight = 1.0;
+  const auto plan = planBoustrophedon(makeRectCentered(3.0, kHeight),
+                                      kOpWidth,
+                                      0.18,
+                                      /*passes=*/-1,
+                                      /*chassis_safety_inset=*/kOpWidth / 2.0,
+                                      /*mow_angle_rad=*/0.0,
+                                      0.15);
+  ASSERT_TRUE(plan.rings.empty());
+  ASSERT_GE(plan.swaths.size(), 6u);
+
+  std::vector<double> lanes;
+  for (const auto& s : plan.swaths)
+  {
+    lanes.push_back(0.5 * (s.first.second + s.second.second));
+  }
+  std::sort(lanes.begin(), lanes.end());
+
+  constexpr double kSlack = 0.01;  // densification / GEOS buffer noise
+  EXPECT_LE(lanes.front() - (-kHeight / 2.0), kOpWidth / 2.0 + kSlack)
+      << "near-edge strip left unplanned";
+  EXPECT_LE(kHeight / 2.0 - lanes.back(), kOpWidth / 2.0 + kSlack)
+      << "far-edge strip left unplanned — lanes were stepped, not spread evenly";
+  for (std::size_t i = 1; i < lanes.size(); ++i)
+  {
+    EXPECT_LE(lanes[i] - lanes[i - 1], kOpWidth + 1e-6)
+        << "gap between lanes " << i - 1 << "→" << i;
+  }
+}
+
 // 5x5 m square with a 1.5x1.5 m central hole: no swath may cross the hole —
 // each sweep line is clipped into per-side swaths (F2C v3 makes every disjoint
 // clip its own swath; that property replaces decomposition).
@@ -2124,6 +2164,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   double total_len = 0.0, worst_turn = 0.0;
   std::size_t oob = 0, tight_run = 0;
   double min_clearance = std::numeric_limits<double>::max();
+  double max_past_ring = 0.0;
+  constexpr double kOnEdgeTol = 1e-3;  // == the planner's kOnEdgeTolM
   for (const auto& path : subs)
   {
     ASSERT_GE(path.size(), 2u);
@@ -2142,9 +2184,18 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
     // that much inside the raw boundary.
     for (const auto& p : path)
     {
+      // A connector/pivot pose can sit EXACTLY on the clearance ring (a swath end
+      // or an arc clipped to it), where the strict ray-cast pointInRing is
+      // ambiguous. The planner itself accepts that (allInside's kOnEdgeTolM, 1 mm),
+      // so judge "outside" by the same yardstick: further than 1 mm past the ring.
       if (!pointInRing(p.first, p.second, connector_boundary))
       {
-        ++oob;
+        const double past = distanceToRing(p.first, p.second, connector_boundary);
+        max_past_ring = std::max(max_past_ring, past);
+        if (past > kOnEdgeTol)
+        {
+          ++oob;
+        }
       }
       min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
     }
@@ -2168,7 +2219,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   EXPECT_LT(worst_turn, 120.0) << "a sub-path has a " << worst_turn
                                << "° turn — a near-reversal cusp is not trackable";
   EXPECT_EQ(oob, 0u) << oob << "/" << total_poses
-                     << " continuous-path points are outside the safety-inset ring";
+                     << " continuous-path points are outside the safety-inset ring (furthest "
+                     << max_past_ring << " m past it)";
   // Effective planning inset = chassis_safety_inset − op_width/2 (the outermost
   // ring centerline sits `kInset` inside the raw line; the field it is planned
   // in is shrunk by that much less). Connectors/fillets ride the planning
