@@ -590,7 +590,7 @@
 (function() {
   var state = { backend: 'mowgli', gnssReceiverFamily: 'auto', gnssConnection: 'uart', lidar: 'ldlidar-uart', channel: 'main' };
   var baseUrl = 'https://mowgli.garden/install.sh';
-  var defaultGnssHint = 'Universal GNSS is the only supported direct GNSS path. Pick first-boot GNSS defaults here; the installer will ask for the exact serial device and detect baud, while the active runtime configuration later lives in the GUI/YAML.';
+  var defaultGnssHint = 'Universal GNSS is the only supported direct GNSS path. Pick the serial link here; the receiver profile, baud, datum and NTRIP are configured in the GUI onboarding wizard after the first start.';
   var mavrosGnssHint = 'MAVROS uses the flight controller telemetry link. Direct Universal GNSS selection is disabled for this backend.';
 
   function setGroupDisabled(groupId, disabled) {
@@ -639,6 +639,10 @@
     if (state.channel !== 'main') {
       parts.push('--branch=' + state.channel);
     }
+
+    // The composed command is complete: nothing is left to ask. Every choice
+    // not listed here has a documented default, so the run never prompts.
+    parts.push('--non-interactive');
 
     document.getElementById('install-command').textContent = parts.join(' \\\n  ');
   }

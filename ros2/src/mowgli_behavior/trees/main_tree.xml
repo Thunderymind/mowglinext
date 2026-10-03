@@ -157,6 +157,14 @@
              drift on idle can falsely put the reported pose outside the
              polygon. No reason to run any boundary handler in that state. -->
         <IsCharging/>
+        <!-- No autonomous motion exists in IDLE (0) or operator STOP (8).
+             A mower can be parked outside an area without charger contact;
+             GPS drift must not start boundary recovery or publish an
+             AUTONOMOUS status in either state. Recheck these on every tick
+             so STOP also cancels an in-progress recovery. A later START
+             still passes through the full boundary guard. -->
+        <IsCommand command="0"/>
+        <IsCommand command="8"/>
         <!-- Short-circuit during manual mowing (COMMAND_MANUAL_MOW = 7),
              the WHOLE area-recording lifecycle (COMMAND_RECORD_AREA = 3,
              COMMAND_RECORD_FINISH = 5, COMMAND_RECORD_CANCEL = 6), and going

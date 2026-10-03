@@ -26,6 +26,7 @@ using mowgli_coverage::buildContinuousPath;
 using mowgli_coverage::buildContinuousSubPaths;
 using mowgli_coverage::dedupClosedRing;
 using mowgli_coverage::distanceToRing;
+using mowgli_coverage::orderSubPathsForMinimalTransit;
 using mowgli_coverage::planBoustrophedon;
 using mowgli_coverage::pointInRing;
 
@@ -329,6 +330,46 @@ TEST(CoveragePlanning, FixedAngleIsHonouredAndDeterministic)
   }
 }
 
+// BruteForce steps lanes by a fixed op_width from one edge, so an extent that is
+// not a whole number of lanes left a strip (up to op_width/2 + the stepping
+// granularity) on the far side that no lane covered — field-reported 2026-10-02
+// as a skipped strip under the headland. The lanes are now spread evenly over
+// the extent. 1.0 m across / 0.16 m lanes = 6.25: fixed stepping puts the last
+// lane centre 0.12 m from the far edge (strip 0.04 m beyond its reach), even
+// spreading puts BOTH outer lanes within op_width/2 of their edge.
+TEST(CoveragePlanning, SwathsAreSpreadEvenlyAcrossTheCell)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeight = 1.0;
+  const auto plan = planBoustrophedon(makeRectCentered(3.0, kHeight),
+                                      kOpWidth,
+                                      0.18,
+                                      /*passes=*/-1,
+                                      /*chassis_safety_inset=*/kOpWidth / 2.0,
+                                      /*mow_angle_rad=*/0.0,
+                                      0.15);
+  ASSERT_TRUE(plan.rings.empty());
+  ASSERT_GE(plan.swaths.size(), 6u);
+
+  std::vector<double> lanes;
+  for (const auto& s : plan.swaths)
+  {
+    lanes.push_back(0.5 * (s.first.second + s.second.second));
+  }
+  std::sort(lanes.begin(), lanes.end());
+
+  constexpr double kSlack = 0.01;  // densification / GEOS buffer noise
+  EXPECT_LE(lanes.front() - (-kHeight / 2.0), kOpWidth / 2.0 + kSlack)
+      << "near-edge strip left unplanned";
+  EXPECT_LE(kHeight / 2.0 - lanes.back(), kOpWidth / 2.0 + kSlack)
+      << "far-edge strip left unplanned — lanes were stepped, not spread evenly";
+  for (std::size_t i = 1; i < lanes.size(); ++i)
+  {
+    EXPECT_LE(lanes[i] - lanes[i - 1], kOpWidth + 1e-6)
+        << "gap between lanes " << i - 1 << "→" << i;
+  }
+}
+
 // 5x5 m square with a 1.5x1.5 m central hole: no swath may cross the hole —
 // each sweep line is clipped into per-side swaths (F2C v3 makes every disjoint
 // clip its own swath; that property replaces decomposition).
@@ -575,6 +616,118 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   EXPECT_LT(transit, field_diag * static_cast<double>(subs.size()))
       << "relocation transit " << transit << " m implausibly long for " << subs.size()
       << " sub-paths — the NN order is not sequencing lobes locally";
+}
+
+// mowglinext#818: field-measured 9.78 m transit gap between the only two
+// sub-paths of an otherwise-adjacent area — traced to the single-seed NN
+// search only ever entering sub-path B from A's END (A pinned as seed 0,
+// always driven forward), never trying the reverse: starting from B and
+// letting A be entered from whichever of ITS ends is closer. Here A's FRONT
+// sits right next to B's END while A's BACK (the only point the single-seed
+// search ever measured from) is far from both ends of B — a case the old
+// algorithm could not find no matter which way it reversed B.
+TEST(CoveragePlanning, SubPathOrderTriesEverySeedNotJustTheFirst)
+{
+  // A: front=(0,1.05) very close to B's back; back=(5,5) far from B either way.
+  const std::vector<std::pair<double, double>> a{{0.0, 1.05}, {5.0, 5.0}};
+  // B: front=(20,20) far from A either way; back=(0,1) 0.05 m from A's front.
+  const std::vector<std::pair<double, double>> b{{20.0, 20.0}, {0.0, 1.0}};
+
+  const auto ordered = orderSubPathsForMinimalTransit({a, b});
+  ASSERT_EQ(ordered.size(), 2u);
+
+  const double realized_transit = std::hypot(ordered[1].front().first - ordered[0].back().first,
+                                             ordered[1].front().second - ordered[0].back().second);
+
+  // The single-seed algorithm this replaces could only reach 6.4 m here (seed
+  // forced to A, B reversed: A.back=(5,5) to B.back=(0,1)). Trying B as the
+  // seed instead finds B.back=(0,1) -> A.front=(0,1.05), 0.05 m.
+  EXPECT_NEAR(realized_transit, 0.05, 1e-6)
+      << "expected the seed=B order (0.05 m link) instead of the old single-seed "
+         "optimum (6.4 m, seed pinned to A)";
+
+  // Whichever sub-path ends up second, ITS points must be unchanged as a set
+  // (only reordered/reversed, never altered) — same safety contract as the
+  // full-plan reorder test above.
+  auto asSet = [](const std::vector<std::pair<double, double>>& poly)
+  {
+    std::vector<std::pair<double, double>> sorted(poly.begin(), poly.end());
+    std::sort(sorted.begin(), sorted.end());
+    return sorted;
+  };
+  std::vector<std::pair<double, double>> all_ordered;
+  for (const auto& sp : ordered)
+  {
+    all_ordered.insert(all_ordered.end(), sp.begin(), sp.end());
+  }
+  std::vector<std::pair<double, double>> all_input = a;
+  all_input.insert(all_input.end(), b.begin(), b.end());
+  EXPECT_EQ(asSet(all_ordered), asSet(all_input)) << "reorder must not add/drop/move points";
+}
+
+// A field where the raw input order is already optimal must come back
+// byte-for-byte unchanged (never spuriously reversed/reordered by float noise
+// in the O(n^3) seed search).
+TEST(CoveragePlanning, SubPathOrderLeavesAnAlreadyOptimalChainAlone)
+{
+  const std::vector<std::pair<double, double>> a{{0.0, 0.0}, {0.0, 1.0}};
+  const std::vector<std::pair<double, double>> b{{0.0, 1.01}, {0.0, 2.0}};
+  const auto ordered = orderSubPathsForMinimalTransit({a, b});
+  ASSERT_EQ(ordered.size(), 2u);
+  EXPECT_EQ(ordered[0], a);
+  EXPECT_EQ(ordered[1], b);
+}
+
+// Above kMaxSeedSearchSize sub-paths, the search falls back to the
+// single-seed=0 behavior rather than paying the full O(n^3) cost — still
+// expected to return a valid permutation of every input point.
+TEST(CoveragePlanning, SubPathOrderHandlesManySubPathsWithoutCrashing)
+{
+  std::vector<std::vector<std::pair<double, double>>> many;
+  for (int i = 0; i < 50; ++i)
+  {
+    const double x = static_cast<double>(i) * 3.0;
+    many.push_back({{x, 0.0}, {x, 1.0}});
+  }
+  // Shuffle-ish input order (reverse) so there is real reordering to do.
+  std::reverse(many.begin(), many.end());
+  const auto ordered = orderSubPathsForMinimalTransit(many);
+  ASSERT_EQ(ordered.size(), many.size());
+  std::size_t total_points = 0;
+  for (const auto& sp : ordered)
+  {
+    total_points += sp.size();
+  }
+  EXPECT_EQ(total_points, many.size() * 2);
+}
+
+// mowglinext#819 review (liltaket): trying every sub-path as seed must never
+// reverse sub-path 0's ORIGINAL winding, even when a DIFFERENT sub-path wins
+// as seed and pulls sub-path 0 in as an ordinary candidate. sub-path 0 is the
+// one most likely to carry headland-ring material (buildContinuousSubPaths
+// appends rings before swaths), and reversing a ring's point order reverses
+// its driven winding — silently inverting the operator's ring_direction
+// (#335) for a shorter transit link.
+//
+// Constructed so seed=2 ("Z") is the clear global optimum IF sub-path 0
+// ("R") may be reversed (Z->R-reversed->Y totals 0.002 m), strictly beating
+// every other seed (seed=0 totals 10.001 m, seed=1 totals ~64 m) — so an
+// unprotected search would pick it and reverse R. With R protected, seed=2's
+// own total rises to 20.0 m (R must be entered forward, at 9.999 m instead
+// of 0.001 m), making seed=0 (10.001 m, R AS the seed — always forward
+// regardless) the new global optimum: R survives untouched either way, but
+// only the protection guarantees it.
+TEST(CoveragePlanning, SubPathOrderNeverReversesSubPathZero)
+{
+  const std::vector<std::pair<double, double>> r{{0.0, 10.0}, {0.0, 0.0}};
+  const std::vector<std::pair<double, double>> y{{0.0, 10.001}, {50.0, 50.0}};
+  const std::vector<std::pair<double, double>> z{{0.0, -0.001}, {0.0, 0.001}};
+
+  const auto ordered = orderSubPathsForMinimalTransit({r, y, z});
+  ASSERT_EQ(ordered.size(), 3u);
+
+  const auto it = std::find(ordered.begin(), ordered.end(), r);
+  ASSERT_NE(it, ordered.end()) << "sub-path 0 (R) must survive as an exact, unreversed match";
 }
 
 // #335: ring_direction controls the perimeter/headland travel winding (blade
@@ -2124,6 +2277,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   double total_len = 0.0, worst_turn = 0.0;
   std::size_t oob = 0, tight_run = 0;
   double min_clearance = std::numeric_limits<double>::max();
+  double max_past_ring = 0.0;
+  constexpr double kOnEdgeTol = 1e-3;  // == the planner's kOnEdgeTolM
   for (const auto& path : subs)
   {
     ASSERT_GE(path.size(), 2u);
@@ -2142,9 +2297,18 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
     // that much inside the raw boundary.
     for (const auto& p : path)
     {
+      // A connector/pivot pose can sit EXACTLY on the clearance ring (a swath end
+      // or an arc clipped to it), where the strict ray-cast pointInRing is
+      // ambiguous. The planner itself accepts that (allInside's kOnEdgeTolM, 1 mm),
+      // so judge "outside" by the same yardstick: further than 1 mm past the ring.
       if (!pointInRing(p.first, p.second, connector_boundary))
       {
-        ++oob;
+        const double past = distanceToRing(p.first, p.second, connector_boundary);
+        max_past_ring = std::max(max_past_ring, past);
+        if (past > kOnEdgeTol)
+        {
+          ++oob;
+        }
       }
       min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
     }
@@ -2168,7 +2332,8 @@ TEST_P(CrossHatchContinuousPath, RecordedArea1NoCuspInBounds)
   EXPECT_LT(worst_turn, 120.0) << "a sub-path has a " << worst_turn
                                << "° turn — a near-reversal cusp is not trackable";
   EXPECT_EQ(oob, 0u) << oob << "/" << total_poses
-                     << " continuous-path points are outside the safety-inset ring";
+                     << " continuous-path points are outside the safety-inset ring (furthest "
+                     << max_past_ring << " m past it)";
   // Effective planning inset = chassis_safety_inset − op_width/2 (the outermost
   // ring centerline sits `kInset` inside the raw line; the field it is planned
   // in is shrunk by that much less). Connectors/fillets ride the planning

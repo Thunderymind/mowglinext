@@ -246,6 +246,45 @@ func (m *Manager) recordFirmwareProtocolChange(ctx context.Context, target Deplo
 	}
 	return firmwareProtocolChange(running, target, opts)
 }
+
+func (m *Manager) preexistingHealthIssues(ctx context.Context, images map[string]string) ([]HealthIssue, error) {
+	backend, ok := m.backend.(interface {
+		PreexistingHealthIssues(context.Context, map[string]string) ([]HealthIssue, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return backend.PreexistingHealthIssues(ctx, images)
+}
+
+func retainedHealthScope(previous, target map[string]string) map[string]string {
+	scope := make(map[string]string)
+	for name, image := range previous {
+		if _, retained := target[name]; retained {
+			scope[name] = image
+		}
+	}
+	return scope
+}
+
+// confirmPreexistingHealth narrows the reviewed list to failures which still
+// exist immediately before maintenance. A newly failing service/check pair
+// stops the job and requires a fresh review; a recovered check loses its
+// exception and must remain healthy after activation.
+func (m *Manager) confirmPreexistingHealth(ctx context.Context, p Plan) ([]HealthIssue, error) {
+	current, err := m.preexistingHealthIssues(ctx, retainedHealthScope(p.Previous, p.Images))
+	if err != nil {
+		return nil, err
+	}
+	reviewed := healthIssueKeys(p.PreexistingHealthIssues)
+	for _, issue := range current {
+		if _, ok := reviewed[healthIssueKey(issue)]; !ok {
+			return nil, fmt.Errorf("installed component health changed; review the update again: %s", issue.Message)
+		}
+	}
+	return current, nil
+}
+
 func (m *Manager) MakeServicePlan(ctx context.Context, id string, pinned bool, requested map[string]string, opts PlanOptions) (Plan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -331,12 +370,16 @@ func (m *Manager) MakeServicePlan(ctx context.Context, id string, pinned bool, r
 	if err != nil {
 		return Plan{}, err
 	}
+	healthIssues, err := m.preexistingHealthIssues(ctx, retainedHealthScope(previous, images))
+	if err != nil {
+		return Plan{}, err
+	}
 	for service, override := range overrides {
 		if override.ID == target.ID {
 			delete(overrides, service)
 		}
 	}
-	p := Plan{Stack: stack, Overrides: overrides, FirmwareProtocolChange: change, Target: *target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous}
+	p := Plan{Stack: stack, Overrides: overrides, FirmwareProtocolChange: change, PreexistingHealthIssues: healthIssues, Target: *target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous}
 	p.Policy.Pinned = pinned
 	p.ID = fmt.Sprintf("plan-%d", m.now().UnixNano())
 	m.state.Plans = []Plan{p}
@@ -350,6 +393,10 @@ func (m *Manager) Start(id string) (string, error) {
 // needs its own explicit acknowledgement at install time: a plan lives 15
 // minutes and the review dialog is where the operator reads the consequence.
 func (m *Manager) StartAcknowledged(id string, customAcknowledged, firmwareAcknowledged bool) (string, error) {
+	return m.StartWithAcknowledgements(id, customAcknowledged, firmwareAcknowledged, false)
+}
+
+func (m *Manager) StartWithAcknowledgements(id string, customAcknowledged, firmwareAcknowledged, healthAcknowledged bool) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busy || m.checking || m.state.Job.Pending() {
@@ -369,6 +416,9 @@ func (m *Manager) StartAcknowledged(id string, customAcknowledged, firmwareAckno
 	}
 	if plan.FirmwareProtocolChange != nil && !firmwareAcknowledged {
 		return "", errors.New("confirm the mainboard firmware change before installation")
+	}
+	if len(plan.PreexistingHealthIssues) > 0 && !healthAcknowledged {
+		return "", errors.New("confirm the pre-existing component health warning before installation")
 	}
 	j := Job{PreviousCustomImages: m.state.CustomImages, ID: fmt.Sprintf("job-%d", m.now().UnixNano()), Kind: "containers", Phase: "planned", StartedAt: m.now(), Plan: *plan, PreviousPolicy: m.state.Policy, PreviousActive: m.state.Active, PreviousOverrides: m.state.Overrides, PreviousImages: m.state.InstalledImages, PreviousJobID: m.state.ActiveJobID}
 	if m.state.InstalledPolicy != nil {
@@ -567,6 +617,19 @@ func (m *Manager) run(recovery bool) {
 			failed(errors.New("deployment changed during download"))
 			return
 		}
+		healthIssues, healthErr := m.confirmPreexistingHealth(ctx, j.Plan)
+		if healthErr != nil {
+			failed(healthErr)
+			return
+		}
+		j.Plan.PreexistingHealthIssues = healthIssues
+		m.mu.Lock()
+		m.state.Job.Plan.PreexistingHealthIssues = healthIssues
+		err = m.save()
+		m.mu.Unlock()
+		if err != nil {
+			return
+		}
 		if err = m.phase("quiescing", nil); err != nil {
 			return
 		}
@@ -627,8 +690,11 @@ func (m *Manager) run(recovery bool) {
 		if err == nil {
 			err = m.phase("verifying", nil)
 		}
+		var remainingHealthIssues []HealthIssue
 		if err == nil {
-			err = m.backend.Verify(ctx, j.Plan.Images, &j.Plan.Target, j.Plan.FirmwareProtocolChange)
+			verifyCtx, allowance := withPreexistingHealthVerification(ctx, j.Plan.PreexistingHealthIssues)
+			err = m.backend.Verify(verifyCtx, j.Plan.Images, &j.Plan.Target, j.Plan.FirmwareProtocolChange)
+			remainingHealthIssues = allowance.Remaining
 		}
 		var installed map[string]string
 		if err == nil {
@@ -636,6 +702,7 @@ func (m *Manager) run(recovery bool) {
 		}
 		if err == nil {
 			m.mu.Lock()
+			m.state.Job.RemainingHealthIssues = remainingHealthIssues
 			m.state.ActiveJobID = j.ID
 			m.state.Overrides = j.Plan.Overrides
 			m.state.InstalledImages = installed

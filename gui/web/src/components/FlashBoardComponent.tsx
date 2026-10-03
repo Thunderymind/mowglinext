@@ -43,6 +43,7 @@ type Config = {
     version: string,
     boardType: string,
     panelType: string,
+    firmwareTarget: string,
     // "prebuilt" (default) flashes the tested binary; "custom" enables the
     // expert compile-from-source path. This is the single control that decides.
     firmwareSource: string,
@@ -66,6 +67,7 @@ type Config = {
     perimeterWire: boolean
     boardTypeOrigin?: FirmwareFieldOrigin
     panelTypeOrigin?: FirmwareFieldOrigin
+    firmwareTargetOrigin?: FirmwareFieldOrigin
     firmwareSelectionModel?: string
 }
 
@@ -115,6 +117,12 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 if (initializedModelRef.current && !applyingModelDefaultsRef.current) {
                     manualOverridesRef.current.panelType = true;
                     form.setValues({panelTypeOrigin: 'manual'});
+                }
+            })
+            onFieldValueChange('firmwareTarget', () => {
+                if (initializedModelRef.current && !applyingModelDefaultsRef.current) {
+                    manualOverridesRef.current.firmwareTarget = true;
+                    form.setValues({firmwareTargetOrigin: 'manual'});
                 }
             })
             onFieldValueChange('firmwareSource', (field) => {
@@ -170,7 +178,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     // request is submitted (including failed flash attempts).
                     // Unknown/legacy configs are deliberately conservative:
                     // preserve both saved fields instead of guessing a board.
-                    manualOverridesRef.current = manualOverridesFromProvenance(saved);
+                    manualOverridesRef.current = manualOverridesFromProvenance(saved, model);
                     // If the model/settings lookup is unavailable, restoring
                     // the saved config must still work. In particular, do not
                     // turn a previously known automatic value into an empty
@@ -183,6 +191,8 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                         (saved.boardTypeOrigin ?? "legacy") : "auto";
                     seeded.panelTypeOrigin = manualOverridesRef.current.panelType ?
                         (saved.panelTypeOrigin ?? "legacy") : "auto";
+                    seeded.firmwareTargetOrigin = manualOverridesRef.current.firmwareTarget ?
+                        (saved.firmwareTargetOrigin ?? "legacy") : "auto";
                     setSelectedBoard(String(seeded.boardType ?? ""));
                     setSelectedPanel(String(seeded.panelType ?? ""));
                     setIsExpert(seeded.firmwareSource === "custom");
@@ -195,6 +205,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     seeded.firmwareSelectionModel = model;
                     seeded.boardTypeOrigin = "auto";
                     seeded.panelTypeOrigin = "auto";
+                    seeded.firmwareTargetOrigin = "auto";
                     setSelectedBoard(String(seeded.boardType ?? ""));
                     setSelectedPanel(String(seeded.panelType ?? ""));
                     applyingModelDefaultsRef.current = true;
@@ -235,6 +246,8 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
             (form.values as FirmwareSelection).boardTypeOrigin ?? "manual" : "auto";
         seeded.panelTypeOrigin = manualOverridesRef.current.panelType ?
             (form.values as FirmwareSelection).panelTypeOrigin ?? "manual" : "auto";
+        seeded.firmwareTargetOrigin = manualOverridesRef.current.firmwareTarget ?
+            (form.values as FirmwareSelection).firmwareTargetOrigin ?? "manual" : "auto";
         applyingModelDefaultsRef.current = true;
         form.setValues(seeded);
         applyingModelDefaultsRef.current = false;
@@ -347,6 +360,8 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 (manualOverridesRef.current.boardType ? "manual" : "auto"),
             panelTypeOrigin: values.panelTypeOrigin ??
                 (manualOverridesRef.current.panelType ? "manual" : "auto"),
+            firmwareTargetOrigin: values.firmwareTargetOrigin ??
+                (manualOverridesRef.current.firmwareTarget ? "manual" : "auto"),
             firmwareSelectionModel: values.firmwareSelectionModel ??
                 mowerModelRef.current ?? configuredMowerModel,
         };
@@ -462,7 +477,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                             label: "Mowgli - YardForce 500 Classic",
                             value: "BOARD_YARDFORCE500"
                         }, {
-                            label: "Mowgli - YardForce 500 B Variant",
+                            label: (props.mowerModel ?? configuredMowerModel) === "BiltemaRM1000"
+                                ? t('flashBoard.boardBiltemaRM1000')
+                                : "Mowgli - YardForce 500 B Variant",
                             value: "BOARD_YARDFORCE500B"
                         },
                             {
@@ -537,6 +554,25 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                                         message={t('flashBoard.expertBuildAlertMessage')}
                                         description={t('flashBoard.expertBuildAlertDescription')}
                                     />
+                                    <SchemaField><SchemaField.String
+                                        name={"firmwareTarget"}
+                                        title={t('flashBoard.firmwareTargetTitle')}
+                                        default={""}
+                                        x-decorator-props={{tooltip: t('flashBoard.firmwareTargetTooltip')}}
+                                        enum={[{
+                                            label: "Yardforce500",
+                                            value: "Yardforce500"
+                                        }, {
+                                            label: "Yardforce500B",
+                                            value: "Yardforce500B"
+                                        }, {
+                                            label: "BiltemaRM1000",
+                                            value: "BiltemaRM1000"
+                                        }, {
+                                            label: "LUV1000RI",
+                                            value: "LUV1000RI"
+                                        }]} x-component="Select"
+                                        x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"version"}
                         title={t('flashBoard.versionTitle')}

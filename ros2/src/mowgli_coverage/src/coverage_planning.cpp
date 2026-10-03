@@ -66,6 +66,12 @@ constexpr double kAutoAngleMaxAreaM2 = 400.0;  // ~20 × 20 m
 // argmin is deterministic across re-plans, which the resume cursor relies on.
 constexpr double kAutoAngleStepRad = 5.0 * M_PI / 180.0;
 
+// Largest far-side remainder strip (m) left by BruteForce's fixed lane stepping
+// that is still accepted as is. Above it the lanes are re-spread evenly over the
+// cell (generateEvenSwaths). ~ the default swath_overlap: a strip this thin is
+// already inside the overlap between the blade and the neighbouring lane.
+constexpr double kSwathRemainderTolM = 0.02;
+
 // On-edge tolerance for allInside(). The outermost DRIVEN geometry can lie
 // EXACTLY on the ring it is validated against: with the headland ring stage
 // DISABLED (num_headland_passes < 0 → n_rings == 0, issue #429) the swath ENDS
@@ -1063,6 +1069,54 @@ std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths)
   return angle;
 }
 
+// Swaths at `angle` with the lane spacing spread EVENLY over the cell's extent
+// across the swath direction.
+//
+// BruteForce places the first lane op_width/2 inside one bbox edge and then steps
+// by a fixed op_width, so whatever is left over (up to op_width/2 plus the
+// stepping granularity) piles up as ONE unplanned strip on the far side — a strip
+// too narrow for a whole extra lane, which the robot then never mows. When that
+// remainder is more than kSwathRemainderTolM, use n = ceil(extent / op_width)
+// lanes at extent / n spacing instead: both edges get a lane op_width/2 (or less)
+// from the edge, neighbouring lanes overlap slightly more than planned, and no
+// strip is left. The count is n whatever F2C's own far-edge rule is, and the
+// result is symmetric in the edge it starts from, so `angle` and `angle + π` give
+// the same lanes. Deterministic for a fixed cell + angle.
+static f2c::types::Swaths generateEvenSwaths(f2c::sg::BruteForce& bf,
+                                             double angle,
+                                             double op_width,
+                                             const f2c::types::Cell& cell)
+{
+  const auto ring = cell.getGeometry(0);  // exterior
+  double lo = std::numeric_limits<double>::infinity();
+  double hi = -std::numeric_limits<double>::infinity();
+  const double nx = -std::sin(angle), ny = std::cos(angle);
+  for (std::size_t i = 0; i < ring.size(); ++i)
+  {
+    const auto p = ring.getGeometry(i);
+    const double d = p.getX() * nx + p.getY() * ny;
+    lo = std::min(lo, d);
+    hi = std::max(hi, d);
+  }
+  const double extent = hi - lo;
+  if (op_width > 1e-6 && std::isfinite(extent) && extent > op_width)
+  {
+    // Lanes F2C places: centres at 0.5·w, 1.5·w, … while inside the extent.
+    const double lanes = std::ceil(extent / op_width - 0.5);
+    const double remainder = extent - lanes * op_width;  // uncovered far-side strip
+    if (remainder > kSwathRemainderTolM)
+    {
+      const double n = std::ceil(extent / op_width);
+      auto even = bf.generateSwaths(angle, extent / n, cell);
+      if (even.size() > 0)
+      {
+        return even;
+      }
+    }
+  }
+  return bf.generateSwaths(angle, op_width, cell);
+}
+
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
@@ -1553,11 +1607,24 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                    static_cast<int>(std::lround(2.0 * M_PI / kAutoAngleStepRad)));
     }
     f2c::types::Swaths swaths = (cell_angle >= 0.0)
-                                    ? bf.generateSwaths(cell_angle, op_width, cell)
+                                    ? generateEvenSwaths(bf, cell_angle, op_width, cell)
                                     : bf.generateBestSwaths(n_swath_obj, op_width, cell);
     if (swaths.size() == 0)
     {
       continue;
+    }
+    if (cell_angle < 0.0 && !perpendicular)
+    {
+      // AUTO: keep the angle the search picked, but spread the lanes evenly
+      // across the cell so no too-narrow strip is left unplanned.
+      if (const auto best = longestValidSwathAngle(swaths); best && std::isfinite(*best))
+      {
+        auto even = generateEvenSwaths(bf, *best, op_width, cell);
+        if (even.size() > 0)
+        {
+          swaths = even;
+        }
+      }
     }
     if (perpendicular)
     {
@@ -1573,7 +1640,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       double angle = std::fmod(*base + M_PI / 2.0, M_PI);
       if (angle < 0.0)
         angle += M_PI;
-      swaths = bf.generateSwaths(angle, op_width, cell);
+      swaths = generateEvenSwaths(bf, angle, op_width, cell);
       if (swaths.size() == 0)
       {
         plan.diagnostics.drops.push_back("cross-hatch: rotated cell has no swaths");
@@ -1737,7 +1804,12 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
   // vertex is a valid start) so it begins at the vertex nearest the previous
   // ring's end: concentric rings are locally parallel there, so the junction
   // becomes a gentle ~op_width sideways shift the connector joins tangentially.
-  // The first ring keeps F2C's start (TransitToStrip already targets it).
+  // The first ring keeps F2C's own start vertex — this is a ring-GENERATION
+  // decision, made before any sub-path splitting, and is unaffected by which
+  // sub-path ends up first after orderSubPathsForMinimalTransit reorders the
+  // FINISHED sub-paths below (mowglinext#819: transit order can now change,
+  // so this is no longer necessarily what TransitToStrip drives to first —
+  // it just means one ring somewhere keeps F2C's own un-rotated start).
   // Ring DRIVE-ORDER grouping. F2C's generateHeadlandSwaths emits ring loops PER
   // PASS as [outer, hole, outer, hole, …], so consecutive concentric OUTER rings
   // are interleaved with the field-centre hole rings. Driven in that raw order the
@@ -2164,58 +2236,120 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
   }
 
-  // Sub-path DRIVE ORDER: minimize the blade-off Nav2 transit BETWEEN sub-paths.
-  // The sub-paths above come out in swath-chain order; on a multi-hole field that
-  // leaves the driver criss-crossing the lawn between lobes (measured 77 m of
-  // blade-off transit on the recorded 4-hole garden). Greedy nearest-neighbour
-  // over the FINISHED sub-path polylines, entering each at whichever end is
-  // nearer, mows spatially adjacent lobes consecutively (77 → 47 m there).
+  // Sub-path DRIVE ORDER: see orderSubPathsForMinimalTransit's doc comment —
+  // extracted to its own pure, unit-testable function (mowgli_coverage
+  // convention for decision logic like this; see test_coverage_planning.cpp).
+  return orderSubPathsForMinimalTransit(std::move(out));
+}
+
+std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTransit(
+    std::vector<std::vector<std::pair<double, double>>> sub_paths)
+{
+  // Minimize the blade-off Nav2 transit BETWEEN sub-paths. Sub-paths arrive in
+  // swath-chain order; on a multi-hole field that leaves the driver
+  // criss-crossing the lawn between lobes (measured 77 m of blade-off transit
+  // on the recorded 4-hole garden). Greedy nearest-neighbour over the
+  // FINISHED sub-path polylines, entering each at whichever end is nearer,
+  // mows spatially adjacent lobes consecutively (77 → 47 m there).
   //   * Reversing a FINISHED polyline is safe: the points are identical, so every
   //     turn-around / fillet stays exactly as in-bounds and trackable as before —
   //     only reversing the swath ORDER *before* the path is built relocates
-  //     U-turns (the hazard the seed-from-BoustrophedonOrder note above guards);
-  //     driving the same polyline backwards moves nothing.
-  //   * Sub-path 0 stays the seed — TransitToStrip already drives the robot to
-  //     its start, and the BT resumes by sub-path index (deterministic: a fixed
-  //     plan yields a fixed NN order, so indices are stable across re-plans).
-  //   * Adopt the NN order ONLY when it actually shortens the transit, so a field
-  //     the chain order already sequenced well can never regress.
-  if (out.size() > 1)
+  //     U-turns (the hazard the seed-from-BoustrophedonOrder note in
+  //     buildContinuousSubPaths guards); driving the same polyline backwards
+  //     moves nothing.
+  //   * The SEED (which sub-path drives first) is tried at every candidate, not
+  //     pinned to the input's own first element (mowglinext#818: with only 2
+  //     sub-paths, a fixed seed=0 can only ever reverse the OTHER one — it
+  //     structurally cannot discover that starting from the other sub-path
+  //     gives a shorter link, field-measured as a single 9.78 m gap on an
+  //     otherwise-adjacent 2-lobe area). This stays deterministic — still a
+  //     pure function of the sub-path geometries, no robot-position input — so
+  //     the BT's resume-by-index contract (a fixed plan yields a fixed order,
+  //     stable across re-plans) holds exactly as before; only the SEARCH grew,
+  //     not what makes the result reproducible. TransitToStrip has no prior
+  //     commitment to any particular sub-path — it simply reads
+  //     drivable_subpaths.front() from buildContinuousSubPaths' result
+  //     (PlanCoverageArea, mowgli_behavior/src/coverage_nodes.cpp) — so any
+  //     sub-path is free to end up there.
+  //   * The seed itself is always driven forward (front→back) — only the
+  //     NON-seed sub-paths may be reversed. Trying every sub-path as seed still
+  //     covers the reverse-the-other-one case the single-seed version had,
+  //     plus every case where the BEST link is to the seed's normally-unused
+  //     front end via a different sub-path arriving there first.
+  //   * Sub-path 0's ORIGINAL winding is NEVER reversed, whether or not it
+  //     wins as seed (mowglinext#819 review): buildContinuousSubPaths appends
+  //     rings before swaths, so sub-path 0 is the one most likely to carry
+  //     headland-ring material, and reversing a ring's point order reverses
+  //     its DRIVEN winding — silently inverting the operator's configured
+  //     ring_direction (blade-side clockwise/counter-clockwise, issue #335)
+  //     for a shorter transit link. "The seed is never reversed" alone does
+  //     not protect sub-path 0 when a DIFFERENT sub-path wins as seed and
+  //     pulls sub-path 0 in as an ordinary candidate — this is the one
+  //     exception the seed search may not touch, regardless of which seed is
+  //     best. See RingDirection*Preserved in test_coverage_planning.cpp.
+  //   * Bounded to kMaxSeedSearchSize sub-paths (O(n^3) — every seed reruns the
+  //     O(n^2) chain): a pathological multi-hole field with more lobes than that
+  //     falls back to the single-seed=0 search instead, which is still a
+  //     strict improvement over the raw input order and was the whole behavior
+  //     before this change.
+  //   * Adopt the best seed's order ONLY when it actually shortens the transit
+  //     versus the raw input order, so a field the input order already
+  //     sequenced well can never regress.
+  if (sub_paths.size() <= 1)
   {
-    auto gap = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
-    {
-      return std::hypot(a.first - b.first, a.second - b.second);
-    };
-    double chain_transit = 0.0;
-    for (std::size_t i = 1; i < out.size(); ++i)
-    {
-      chain_transit += gap(out[i - 1].back(), out[i].front());
-    }
-    std::vector<std::size_t> order{0};
-    std::vector<bool> reversed_flag(out.size(), false);
-    std::vector<bool> used(out.size(), false);
-    used[0] = true;
-    std::pair<double, double> cur = out[0].back();
-    double nn_transit = 0.0;
-    for (std::size_t n = 1; n < out.size(); ++n)
+    return sub_paths;
+  }
+  auto gap = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+  {
+    return std::hypot(a.first - b.first, a.second - b.second);
+  };
+  double chain_transit = 0.0;
+  for (std::size_t i = 1; i < sub_paths.size(); ++i)
+  {
+    chain_transit += gap(sub_paths[i - 1].back(), sub_paths[i].front());
+  }
+
+  // Greedy NN chain starting from `seed`: at each step, enter whichever
+  // unused sub-path is nearest (forward or reversed) to the current end.
+  struct SeedResult
+  {
+    std::vector<std::size_t> order;
+    std::vector<bool> reversed_flag;
+    double transit;
+  };
+  auto chainFromSeed = [&](std::size_t seed) -> SeedResult
+  {
+    SeedResult result{{seed}, std::vector<bool>(sub_paths.size(), false), 0.0};
+    std::vector<bool> used(sub_paths.size(), false);
+    used[seed] = true;
+    std::pair<double, double> cur = sub_paths[seed].back();
+    for (std::size_t n = 1; n < sub_paths.size(); ++n)
     {
       std::size_t best = 0;
       bool best_rev = false;
       double best_d = std::numeric_limits<double>::max();
-      for (std::size_t j = 0; j < out.size(); ++j)
+      for (std::size_t j = 0; j < sub_paths.size(); ++j)
       {
         if (used[j])
         {
           continue;
         }
-        const double ds = gap(cur, out[j].front());  // enter forward
-        const double de = gap(cur, out[j].back());  // enter reversed
+        const double ds = gap(cur, sub_paths[j].front());  // enter forward
         if (ds < best_d)
         {
           best_d = ds;
           best = j;
           best_rev = false;
         }
+        // Sub-path 0 (ORIGINAL index, not the winning seed) is never entered
+        // reversed — see the doc comment above: it is the one sub-path this
+        // function does not own the winding of, so no seed choice may flip
+        // it, no matter how much shorter that link would be.
+        if (j == 0)
+        {
+          continue;
+        }
+        const double de = gap(cur, sub_paths[j].back());  // enter reversed
         if (de < best_d)
         {
           best_d = de;
@@ -2224,28 +2358,42 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         }
       }
       used[best] = true;
-      reversed_flag[best] = best_rev;
-      order.push_back(best);
-      nn_transit += best_d;
-      cur = best_rev ? out[best].front() : out[best].back();
+      result.reversed_flag[best] = best_rev;
+      result.order.push_back(best);
+      result.transit += best_d;
+      cur = best_rev ? sub_paths[best].front() : sub_paths[best].back();
     }
-    if (nn_transit + 1e-6 < chain_transit)
+    return result;
+  };
+
+  constexpr std::size_t kMaxSeedSearchSize = 40;
+  const std::size_t seed_count = sub_paths.size() <= kMaxSeedSearchSize ? sub_paths.size() : 1;
+  SeedResult best = chainFromSeed(0);
+  for (std::size_t seed = 1; seed < seed_count; ++seed)
+  {
+    SeedResult candidate = chainFromSeed(seed);
+    if (candidate.transit + 1e-6 < best.transit)
     {
-      std::vector<std::vector<std::pair<double, double>>> reordered;
-      reordered.reserve(out.size());
-      for (const std::size_t idx : order)
-      {
-        std::vector<std::pair<double, double>> sp = std::move(out[idx]);
-        if (reversed_flag[idx])
-        {
-          std::reverse(sp.begin(), sp.end());
-        }
-        reordered.push_back(std::move(sp));
-      }
-      out = std::move(reordered);
+      best = std::move(candidate);
     }
   }
-  return out;
+
+  if (best.transit + 1e-6 >= chain_transit)
+  {
+    return sub_paths;
+  }
+  std::vector<std::vector<std::pair<double, double>>> reordered;
+  reordered.reserve(sub_paths.size());
+  for (const std::size_t idx : best.order)
+  {
+    std::vector<std::pair<double, double>> sp = std::move(sub_paths[idx]);
+    if (best.reversed_flag[idx])
+    {
+      std::reverse(sp.begin(), sp.end());
+    }
+    reordered.push_back(std::move(sp));
+  }
+  return reordered;
 }
 
 std::vector<std::pair<double, double>> buildContinuousPath(

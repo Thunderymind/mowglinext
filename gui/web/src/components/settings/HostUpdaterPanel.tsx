@@ -37,6 +37,7 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
     const [reviewAccepted, setReviewAccepted] = useState(false);
     const [firmwareChangeAccepted, setFirmwareChangeAccepted] = useState(false);
     const [firmwareInstallAccepted, setFirmwareInstallAccepted] = useState(false);
+    const [healthInstallAccepted, setHealthInstallAccepted] = useState(false);
     const custom = advanced && customMode;
     useEffect(() => {if (!advanced) {setCustomMode(false);setCustomImages({});setCustomAccepted(false);setPlan(undefined);}}, [advanced]);
     const savedPolicy = data ? JSON.stringify(data.state.policy) : undefined;
@@ -84,6 +85,7 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
     const flashPending = data?.state.job?.phase === 'succeeded' ? data.state.job.plan.firmware_protocol_change : undefined;
     const flashNeeded = !!flashPending && runningProtocol !== flashPending.to;
     useEffect(() => {setFirmwareChangeAccepted(false);}, [target?.id, custom]);
+    useEffect(() => {setHealthInstallAccepted(false);}, [plan?.id]);
     const canRestore = data?.state.history.some(j => j.phase === 'succeeded' && (data.state.active_job_id ? j.id === data.state.active_job_id : j.plan.target.id === data.state.active?.id));
     const date = (value?: string) => value && !value.startsWith('0001') && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : t('updates.unknown');
     const label = (deployment?: Deployment) => !deployment ? t('hostUpdater.customInstalled') : deployment.source.track === 'stable'
@@ -92,7 +94,7 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
     const datedLabel = (deployment: Deployment) => `${label(deployment)} · ${published(deployment)}`;
     const component = (service: string) => t(`updates.components.${service === 'mowgli' ? 'robot' : service}`, {defaultValue: service});
     const job = data?.state.job;
-    const jobDetails = advanced || !!(job?.error || job?.recovery_error || job?.recovery_warnings?.length || job?.phase === 'recovery_required');
+    const jobDetails = advanced || !!(job?.error || job?.recovery_error || job?.recovery_warnings?.length || job?.remaining_health_issues?.length || job?.phase === 'recovery_required');
     const agentRelease = versions.find(r => r.updater[data?.agent.platform ?? '']?.version === data?.agent.version);
     return <Card title={t('hostUpdater.softwareUpdates')} size="small" data-testid="host-updater" className={advanced ? undefined : "updates-simple"}>
         <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
@@ -108,12 +110,13 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
                 {!matched && active && <Typography.Text type="secondary">{t('hostUpdater.baseVersion')}: {label(active)}</Typography.Text>}
                 <Typography.Text type={runtime?.health === 'degraded' ? 'warning' : 'secondary'}>{t('hostUpdater.containerHealth')}: {t(`hostUpdater.health.${runtime?.health ?? 'unknown'}`)}</Typography.Text>
                 {['mixed', 'drifted'].includes(identity) && <Typography.Text type="secondary">{t('hostUpdater.mixedHelp')}</Typography.Text>}
-                {data.state.job && <Alert type={data.state.job.phase === 'recovery_required' ? 'error' : data.state.job.error || data.state.job.recovery_warnings?.length ? 'warning' : 'info'} showIcon message={t(`hostUpdater.phases.${data.state.job.phase}`, {defaultValue: data.state.job.phase})}
+                {data.state.job && <Alert type={data.state.job.phase === 'recovery_required' ? 'error' : data.state.job.error || data.state.job.recovery_warnings?.length || data.state.job.remaining_health_issues?.length ? 'warning' : 'info'} showIcon message={t(`hostUpdater.phases.${data.state.job.phase}`, {defaultValue: data.state.job.phase})}
                     data-testid="update-job" description={jobDetails ? <Space direction="vertical" size={4} style={{width:'100%'}}>
                         {advanced && <Typography.Text code>{data.state.job.id}</Typography.Text>}
                         {data.state.job.error && <div data-testid="update-failure"><Typography.Text strong>{t('hostUpdater.failureReason')}</Typography.Text><div>{data.state.job.error}</div></div>}
                         {data.state.job.recovery_error && <div data-testid="recovery-failure"><Typography.Text strong>{t('hostUpdater.recoveryFailureReason')}</Typography.Text><div>{data.state.job.recovery_error}</div></div>}
                         {!!data.state.job.recovery_warnings?.length && <div data-testid="recovery-warnings"><Typography.Text strong>{t('hostUpdater.recoveryWarnings')}</Typography.Text>{data.state.job.recovery_warnings.map(warning => <div key={warning}>{warning}</div>)}<Typography.Text type="secondary">{t('hostUpdater.recoveryWarningsHelp')}</Typography.Text></div>}
+                        {!!data.state.job.remaining_health_issues?.length && <div data-testid="remaining-health-issues"><Typography.Text strong>{t('hostUpdater.remainingHealthIssues')}</Typography.Text>{data.state.job.remaining_health_issues.map(issue => <div key={`${issue.service}:${issue.check}`}>{issue.message}</div>)}<Typography.Text type="secondary">{t('hostUpdater.remainingHealthIssuesHelp')}</Typography.Text></div>}
                         {data.state.job.phase === 'recovery_required' && <Typography.Text type="secondary">{t('hostUpdater.recoveryHelp')}</Typography.Text>}
                     </Space> : undefined}/>}
                 {data.state.job?.phase === 'recovery_required' && <Button loading={busy} onClick={() => void act(async () => {await updaterRequest('recover', {});})}>{t('hostUpdater.recover')}</Button>}
@@ -272,6 +275,8 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
                         {j.error && <div>{t('hostUpdater.failureReason')}: {j.error}</div>}
                         {j.recovery_error && <div>{t('hostUpdater.recoveryFailureReason')}: {j.recovery_error}</div>}
                         {!!j.recovery_warnings?.length && <div>{t('hostUpdater.recoveryWarnings')}: {j.recovery_warnings.join('; ')}</div>}
+                        {!!j.plan.preexisting_health_issues?.length && <div>{t('hostUpdater.forcedHealthBaseline')}: {j.plan.preexisting_health_issues.map(issue => issue.message).join('; ')}</div>}
+                        {!!j.remaining_health_issues?.length && <div>{t('hostUpdater.remainingHealthIssues')}: {j.remaining_health_issues.map(issue => issue.message).join('; ')}</div>}
                         {Object.entries(j.plan.custom_images ?? {}).map(([name,image]) => <div key={name}>{component(name)}: {image.requested}</div>)}
                         {Object.entries(j.plan.overrides ?? {}).map(([name,r]) => <div key={name}>{component(name)}: {label(r)}</div>)}
                     </div>)}
@@ -287,15 +292,21 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
             onOk={() => void act(async () => {await updaterRequest('rollback', {}); setRollbackOpen(false);})}>
             {t('hostUpdater.rollbackHelp')}
         </Modal>
-        <Modal title={t(plan?.custom_images ? 'hostUpdater.reviewCustom' : 'hostUpdater.review')} open={!!plan} onCancel={() => setPlan(undefined)} okText={t('hostUpdater.install')} confirmLoading={busy} okButtonProps={{disabled: (!!plan?.custom_images && !reviewAccepted) || (!!plan?.firmware_protocol_change && !firmwareInstallAccepted)}}
+        <Modal title={t(plan?.custom_images ? 'hostUpdater.reviewCustom' : 'hostUpdater.review')} open={!!plan} onCancel={() => setPlan(undefined)} okText={t('hostUpdater.install')} confirmLoading={busy} okButtonProps={{disabled: (!!plan?.custom_images && !reviewAccepted) || (!!plan?.firmware_protocol_change && !firmwareInstallAccepted) || (!!plan?.preexisting_health_issues?.length && !healthInstallAccepted)}}
             style={{top: 24, paddingBottom: 24}} styles={{body: {maxHeight: 'calc(100dvh - 180px)', overflowY: 'auto'}}}
-            onOk={() => void act(async () => {if (plan) {await updaterRequest('apply', {plan: plan.id, ...(plan.custom_images ? {custom_acknowledged:reviewAccepted} : {}), ...(plan.firmware_protocol_change ? {firmware_protocol_acknowledged:firmwareInstallAccepted} : {})}); setPlan(undefined);}})}>
+            onOk={() => void act(async () => {if (plan) {await updaterRequest('apply', {plan: plan.id, ...(plan.custom_images ? {custom_acknowledged:reviewAccepted} : {}), ...(plan.firmware_protocol_change ? {firmware_protocol_acknowledged:firmwareInstallAccepted} : {}), ...(plan.preexisting_health_issues?.length ? {preexisting_health_acknowledged:healthInstallAccepted} : {})}); setPlan(undefined);}})}>
             {plan && <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
                 <Typography.Text strong>{plan.custom_images ? t('hostUpdater.customMix') : label(plan.target)}</Typography.Text>
                 {plan.firmware_protocol_change && <Alert type="warning" showIcon data-testid="firmware-change-review" message={t('hostUpdater.firmwareInstallWarning', {...plan.firmware_protocol_change})}
                     description={<Space direction="vertical" size={4} style={{width:'100%'}}>
                         <span>{t('hostUpdater.firmwareInstallHelp')}</span>
                         <Checkbox checked={firmwareInstallAccepted} onChange={e => setFirmwareInstallAccepted(e.target.checked)}>{t('hostUpdater.firmwareInstallAccept')}</Checkbox>
+                    </Space>}/>}
+                {!!plan.preexisting_health_issues?.length && <Alert type="warning" showIcon data-testid="preexisting-health-review" message={t('hostUpdater.healthInstallWarning')}
+                    description={<Space direction="vertical" size={4} style={{width:'100%'}}>
+                        <span>{t('hostUpdater.healthInstallHelp')}</span>
+                        {plan.preexisting_health_issues.map(issue => <div key={`${issue.service}:${issue.check}`}>{issue.message}</div>)}
+                        <Checkbox checked={healthInstallAccepted} onChange={e => setHealthInstallAccepted(e.target.checked)}>{t('hostUpdater.healthInstallAccept')}</Checkbox>
                     </Space>}/>}
                 {plan.custom_images && <><Alert type="warning" showIcon message={t('hostUpdater.customWarning')} description={t('hostUpdater.customWarningHelp')}/>
                     {Object.entries(plan.images).map(([name]) => {const image=plan.custom_images?.[name];return <div key={name}><Typography.Text strong>{component(name)}</Typography.Text><div>{image ? image.requested : t('hostUpdater.keepImage')}</div>{image && <><div>{image.version} · {image.repository}</div><Typography.Text code>{image.reference}</Typography.Text><div>{t('hostUpdater.built')}: {date(image.built_at)}</div></>}</div>;})}

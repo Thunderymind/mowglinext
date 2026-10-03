@@ -79,6 +79,30 @@ describe("FlashBoardComponent model/default integration", () => {
         expect(screen.getByRole("button", {name: /flash firmware/i})).toBeEnabled();
     });
 
+    it("selects the native Biltema RM1000 target for the RM1000 mower model", async () => {
+        renderComponent("BiltemaRM1000");
+        await waitFor(() => {
+            expect(selectedLabel(0)).toBe("Mowgli - Biltema RM1000");
+            expect(selectedLabel(1)).toBe("YardForce 900 ECO");
+        });
+        expect(screen.getByRole("button", {name: /flash firmware/i})).toBeEnabled();
+
+        fireEvent.click(screen.getByRole("button", {name: /flash firmware/i}));
+        fireEvent.click(await screen.findByRole("button", {name: /^Flash$/}));
+        await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
+        const request = vi.mocked(fetchEventSource).mock.calls[0]?.[1] as {body?: string};
+        const payload = JSON.parse(request.body ?? "{}") as {
+            boardType?: string;
+            panelType?: string;
+            firmwareTarget?: string;
+            firmwareTargetOrigin?: string;
+        };
+        expect(payload.boardType).toBe("BOARD_YARDFORCE500B");
+        expect(payload.panelType).toBe("PANEL_TYPE_YARDFORCE_900_ECO");
+        expect(payload.firmwareTarget).toBe("BiltemaRM1000");
+        expect(payload.firmwareTargetOrigin).toBe("auto");
+    }, 45000);
+
     it("follows a model change while preserving an individual board override", async () => {
         const view = renderComponent("YardForce500");
         await waitFor(() => expect(selectedLabel(1)).toBe("YardForce 500 Classic"));
@@ -137,6 +161,18 @@ describe("FlashBoardComponent model/default integration", () => {
         expect(selectedLabel(1)).toBe("YardForce 500B Classic");
     });
 
+    it("migrates a targetless legacy config to the RM1000 board, SA900ECO panel, and target", async () => {
+        state.savedConfig = JSON.stringify({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+        });
+        renderComponent("BiltemaRM1000");
+        await waitFor(() => {
+            expect(selectedLabel(0)).toBe("Mowgli - Biltema RM1000");
+            expect(selectedLabel(1)).toBe("YardForce 900 ECO");
+        });
+    });
+
     it("restores a saved config when settings lookup fails", async () => {
         state.settingsError = true;
         state.settingsModel = undefined;
@@ -192,12 +228,16 @@ describe("FlashBoardComponent model/default integration", () => {
             panelType?: string;
             boardTypeOrigin?: string;
             panelTypeOrigin?: string;
+            firmwareTarget?: string;
+            firmwareTargetOrigin?: string;
             firmwareSelectionModel?: string;
         };
         expect(payload.boardType).toBe("BOARD_VERMUT_YARDFORCE500");
         expect(payload.panelType).toBe("PANEL_TYPE_YARDFORCE_500B_CLASSIC");
         expect(payload.boardTypeOrigin).toBe("manual");
         expect(payload.panelTypeOrigin).toBe("auto");
+        expect(payload.firmwareTarget).toBe("");
+        expect(payload.firmwareTargetOrigin).toBe("auto");
         expect(payload.firmwareSelectionModel).toBe("YardForce500B");
     });
 });

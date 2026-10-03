@@ -339,7 +339,10 @@
     "stateCoverageFailed": "Échec couverture"
   },
   "flashBoard": {
+    "boardBiltemaRM1000": "Mowgli - Biltema RM1000",
     "firmwareSourceTitle": "Source du firmware",
+    "firmwareTargetTitle": "Cible du firmware",
+    "firmwareTargetTooltip": "Avancé : choisir une cible de compilation précise. Le mode automatique utilise celle déduite du modèle de tondeuse.",
     "firmwareSourcePrebuilt": "Image précompilée (recommandé)",
     "firmwareSourceCustom": "Personnalisé — compiler depuis les sources (expert)",
     "firmwareSourceTooltip": "« Image précompilée » flashe le binaire testé et vérifié par somme de contrôle pour votre carte. « Personnalisé » compile le firmware depuis le dépôt/la branche ci-dessous avec les paramètres de la section experte et flashe ce build.",
@@ -2214,6 +2217,10 @@
       "label": "YardForce 500B",
       "description": "Variante 500 B avec un UART de moteur de lame et une disposition de panneau différents."
     },
+    "BiltemaRM1000": {
+      "label": "Biltema RM1000",
+      "description": "Robot tondeuse Biltema RM1000."
+    },
     "YardForceSA650": {
       "label": "YardForce SA650",
       "description": "Modèle plus grand (570x390 mm) avec une résolution d'encodeur supérieure."
@@ -3901,6 +3908,9 @@
     "recoveryHelp": "La maintenance reste active et le robot demeure inhibé. Corrigez le problème de restauration, de conteneur, de firmware ou de sécurité du robot indiqué ci-dessus, puis réessayez.",
     "recoveryWarnings": "Certains composants nécessitent encore votre attention",
     "recoveryWarningsHelp": "Le déploiement précédent a été restauré et le mode maintenance a été désactivé. Vérifiez les composants signalés avant de tondre.",
+    "forcedHealthBaseline": "État initial de la mise à jour forcée",
+    "remainingHealthIssues": "Des problèmes de composants préexistants nécessitent encore une intervention",
+    "remainingHealthIssuesHelp": "Ces contrôles précis échouaient déjà juste avant la maintenance et échouent encore après la mise à jour. Tout nouvel échec aurait restauré le déploiement précédent.",
     "softwareUpdates": "Mises à jour logicielles",
     "simple": "Simple",
     "advanced": "Avancé",
@@ -3926,6 +3936,9 @@
     "firmwareInstallWarning": "Le protocole firmware de la carte principale passe de {{from}} à {{to}}",
     "firmwareInstallHelp": "La tonte reste bloquée après l’installation jusqu’au flash de la carte principale. Gardez le ST-Link à portée de main.",
     "firmwareInstallAccept": "Installer puis flasher le firmware de la carte principale. Je comprends que le robot ne peut pas tondre d’ici là.",
+    "healthInstallWarning": "Certains composants installés sont déjà défaillants",
+    "healthInstallHelp": "Vous pouvez forcer cette mise à jour afin de remplacer les conteneurs concernés. Seuls les mêmes contrôles de composants encore en échec juste avant la maintenance peuvent rester défaillants ; tout nouvel échec arrête la mise à jour et restaure le déploiement précédent.",
+    "healthInstallAccept": "Forcer cette mise à jour avec les problèmes préexistants indiqués.",
     "firmwareFlashNeeded": "Flashez maintenant le firmware de la carte principale (protocole {{from}} → {{to}})",
     "firmwareFlashNeededHelp": "Le logiciel installé utilise un protocole plus récent que la carte principale. Le robot ne tondra pas tant que le firmware n’est pas flashé.",
     "unavailableHelp": "Les mises à jour automatiques nécessitent le service de mise à jour hôte. Le mode Avancé affiche les versions installées et les comparaisons manuelles."

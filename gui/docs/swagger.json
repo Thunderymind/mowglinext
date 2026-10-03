@@ -2498,6 +2498,13 @@
                     "description": "FirmwareSource is the GUI dropdown selector: \"custom\" compiles from\nsource (the expert path), \"prebuilt\" (or empty, for older payloads)\nflashes the tested prebuilt binary.",
                     "type": "string"
                 },
+                "firmwareTarget": {
+                    "description": "FirmwareTarget is an exact PlatformIO/release-manifest environment for\nboards with multiple firmware variants. Empty preserves legacy routing.",
+                    "type": "string"
+                },
+                "firmwareTargetOrigin": {
+                    "type": "string"
+                },
                 "imuOnboardInclinationThreshold": {
                     "type": "integer"
                 },
