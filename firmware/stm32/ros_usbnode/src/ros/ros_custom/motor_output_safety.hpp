@@ -10,6 +10,8 @@ struct LinkRearmState {
   std::uint32_t zero_phase_baseline = 0u;
   std::uint32_t drive_fault_sequence = 0u;
   std::uint32_t blade_fault_sequence = 0u;
+  // One-cycle event: the zero/off phase has just authorized inhibit clearing.
+  bool rearm_completed = false;
 };
 
 // A fault is sticky across a transient link recovery. Only a new, validated
@@ -20,6 +22,7 @@ inline bool update_link_rearm(LinkRearmState &state, bool links_healthy,
                               std::uint32_t drive_fault_sequence,
                               std::uint32_t blade_fault_sequence,
                               bool link_inhibited) {
+  state.rearm_completed = false;
   const bool new_fault =
       drive_fault_sequence != state.drive_fault_sequence ||
       blade_fault_sequence != state.blade_fault_sequence ||
@@ -33,6 +36,7 @@ inline bool update_link_rearm(LinkRearmState &state, bool links_healthy,
   } else if (state.required && host_zero_intent && blade_off &&
              zero_phase_sequence != state.zero_phase_baseline) {
     state.required = false;
+    state.rearm_completed = true;
   }
   return state.required;
 }
