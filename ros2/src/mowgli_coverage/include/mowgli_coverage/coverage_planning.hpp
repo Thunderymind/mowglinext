@@ -491,6 +491,20 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const std::vector<std::pair<double, double>>& swath_turn_boundary = {},
     const PivotJoinLimits& pivot_limits = {});
 
+// Reorders a set of FINISHED, hole-free sub-path polylines (as produced by
+// buildContinuousSubPaths above, which calls this internally) to minimize the
+// total blade-off Nav2 transit between them — trying every sub-path as the
+// starting point, not just the first, and entering every other sub-path from
+// whichever end is nearer. Pure function of the sub-path geometries alone (no
+// robot position), so it stays deterministic: a fixed input always returns
+// the same output, which is what lets the BT resume coverage by sub-path
+// index across re-plans of the same field. See its own doc comment
+// (coverage_planning.cpp) for the full rationale and the O(n^3)
+// kMaxSeedSearchSize bound. Returns the input unchanged (same order and
+// direction) when no reordering would shorten the total transit.
+std::vector<std::vector<std::pair<double, double>>> orderSubPathsForMinimalTransit(
+    std::vector<std::vector<std::pair<double, double>>> sub_paths);
+
 // 2-D point-in-polygon (ray casting) against `ring`, a list of (x, y)
 // vertices. Open or closed ring; winding-independent. Used by the server to
 // VERIFY the plan stays inside the recorded boundary (log-only — the planner
