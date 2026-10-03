@@ -19,7 +19,7 @@ import (
 // it reads the fleet snapshot, decides which areas this robot must leave to
 // the others, pushes that to the local BT, publishes the peers' poses into
 // the local ROS graph for the costmap, and applies the proximity yield rule.
-// docs/MULTI_ROBOT.md § 3b/3c. Inert while fleet.coordination.enabled is off.
+// docs/MULTI_ROBOT.md § 3b/3c. While disabled, only reconciles an empty assignment.
 
 const (
 	coordinationSettingsKey   = "fleet.coordination"
@@ -63,8 +63,8 @@ type FleetCoordinator struct {
 	yield      yieldState
 	wasEnabled bool
 	lastError  string
-	// A disabled transition is not finished until the BT accepts the empty
-	// assignment. Failed calls may have applied, so retain explicit intent.
+	// Disabled startup or transition is not finished until the BT accepts the
+	// empty assignment. Failed calls may have applied, so retain explicit intent.
 	clearPending     bool
 	nextClearAttempt time.Time
 
@@ -89,6 +89,10 @@ func newFleetCoordinator(db types.IDBProvider, ros types.IRosProvider, snapshot 
 		memory:   map[uint32]time.Time{},
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
+		// The BT can outlive the GUI process with an earlier assignment. On
+		// disabled startup, reconcile it until acknowledged; enabled startup
+		// supersedes this intent before computing its current assignment.
+		clearPending: true,
 	}
 	c.memory = c.loadMemory()
 	return c
