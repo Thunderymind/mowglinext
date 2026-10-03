@@ -268,6 +268,7 @@ export const SettingsPage = () => {
                             onChange={handleChange}
                             isOverridden={isOverridden}
                             hasDefault={hasDefault}
+                            defaults={defaults}
                             onReset={resetToDefault}
                         />
                         {renderFieldCards(REVERSE_ESCAPE_GROUP)}

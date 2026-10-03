@@ -225,6 +225,16 @@ export type ShapeType = 'square' | 'circle' | 'hexagon';
 // Hook interface
 // ---------------------------------------------------------------------------
 
+/// Where the outline an obstacle had BEFORE the recorded-obstacle shrink is
+/// remembered (rings in GeoJSON lng/lat). Backed by the persisted config store
+/// in MapPage, so converting a shrunk obstacle back into an area restores the
+/// recorded outline even after a reload or a backup restore.
+export interface ShrinkMemory {
+    find(shrunkRing: Position[]): Position[] | undefined;
+    remember(originalRing: Position[], shrunkRing: Position[]): void;
+    forget(shrunkRing: Position[]): void;
+}
+
 export interface UseMapEditingOptions {
     features: Record<string, MowingFeature>;
     setFeatures: React.Dispatch<React.SetStateAction<Record<string, MowingFeature>>>;
@@ -233,6 +243,7 @@ export interface UseMapEditingOptions {
     drawRef: React.RefObject<MapboxDraw | null>;
     notification: NotificationInstance;
     mapInstanceRef: React.RefObject<MapboxMap | null>;
+    shrinkMemory?: ShrinkMemory;
 }
 
 export interface UseMapEditingReturn {
@@ -279,7 +290,7 @@ export interface UseMapEditingReturn {
 
     // Modal action handlers
     handleSaveNewArea: () => void;
-    updateMowingArea: () => void;
+    updateMowingArea: (correctedGeometry?: Polygon) => void;
     cancelAreaModal: () => void;
     deleteFeature: () => void;
 }
@@ -296,6 +307,7 @@ export function useMapEditing({
     drawRef,
     notification,
     mapInstanceRef,
+    shrinkMemory,
 }: UseMapEditingOptions): UseMapEditingReturn {
     const {t} = useTranslation();
     const {modal} = App.useApp();
@@ -826,6 +838,7 @@ export function useMapEditing({
                 orig_mowing_order: props?.mowing_order ?? 9999,
                 feature_type: ftype,
                 orig_feature_type: ftype,
+                shrink_recorded: true,
             } as MowingAreaEdit);
             setAreaModelOpen(true);
         },
@@ -1102,7 +1115,7 @@ export function useMapEditing({
         setModalOpen(false);
     }, [currentFeature, setFeatures]);
 
-    const updateMowingArea = useCallback(() => {
+    const updateMowingArea = useCallback((correctedGeometry?: Polygon) => {
         if (!curMowingAreaFeature || !curMowingAreaFeature.id) return;
 
         setAreaModelOpen(false);
@@ -1115,9 +1128,23 @@ export function useMapEditing({
             curMowingAreaFeature.orig_feature_type;
 
         if (typeChanged) {
-            const geometry = oldFeature.geometry;
+            let geometry = oldFeature.geometry;
             let replacement: MowingFeatureBase;
             const newId = curMowingAreaFeature.id;
+
+            // An obstacle that the recorded-obstacle correction shrank goes back to
+            // the outline it was recorded with — only while it is still exactly the
+            // shrunk outline (a vertex the operator moved since wins).
+            if (oldFeature instanceof ObstacleFeature && shrinkMemory) {
+                const shrunkRing = geometry.coordinates[0] ?? [];
+                const original = shrinkMemory.find(shrunkRing);
+                if (original) {
+                    shrinkMemory.forget(shrunkRing);
+                    if (curMowingAreaFeature.feature_type !== "obstacle") {
+                        geometry = {type: "Polygon", coordinates: [original]};
+                    }
+                }
+            }
 
             switch (curMowingAreaFeature.feature_type) {
                 case "navigation":
@@ -1132,7 +1159,13 @@ export function useMapEditing({
                     const parentArea = findContainingArea(geometry.coordinates[0] ?? [], candidates);
                     if (!parentArea) return;
                     replacement = new ObstacleFeature(newId, parentArea);
-                    replacement.setGeometry(geometry);
+                    // Already shrunk by the caller (recorded outline → obstacle).
+                    if (correctedGeometry?.type === "Polygon") {
+                        shrinkMemory?.remember(geometry.coordinates[0] ?? [], correctedGeometry.coordinates[0] ?? []);
+                        replacement.setGeometry(correctedGeometry);
+                    } else {
+                        replacement.setGeometry(geometry);
+                    }
                     break;
                 }
                 default: // workarea
@@ -1159,7 +1192,7 @@ export function useMapEditing({
         }
 
         setFeatures(newFeatures);
-    }, [curMowingAreaFeature, features, setFeatures]);
+    }, [curMowingAreaFeature, features, setFeatures, shrinkMemory]);
 
     const cancelAreaModal = useCallback(() => {
         setAreaModelOpen(false);

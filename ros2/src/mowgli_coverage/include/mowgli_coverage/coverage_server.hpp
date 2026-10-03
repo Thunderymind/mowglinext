@@ -20,6 +20,8 @@
 #include <string>
 
 #include "mowgli_interfaces/action/plan_coverage.hpp"
+#include "mowgli_interfaces/srv/correct_recorded_obstacle.hpp"
+#include "mowgli_interfaces/srv/preview_obstacle_clearance.hpp"
 #include "nav2_ros_common/lifecycle_node.hpp"
 #include "nav2_ros_common/simple_action_server.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -48,7 +50,42 @@ private:
   // the plan to per-segment nav_msgs/Paths, and succeeds/terminates the goal.
   void planCoverage();
 
+  // Read-only utility service: buffers each input obstacle polygon outward by
+  // the live obstacle_margin, exactly as buildCellFromGoal does for a real
+  // plan (bufferRingOutward). Backs the GUI's "obstacle clearance preview"
+  // map overlay — never consumed by planning itself.
+  //
+  // nav2::LifecycleNode::create_service demands the 3-argument service
+  // callback signature (request_header, request, response) — the 2-argument
+  // form a plain rclcpp::Node::create_service accepts does not convert to
+  // its CallbackType (CI-caught, mowglinext#802 PR build failure). The
+  // header is unused here; every request is served the same way regardless
+  // of who's asking.
+  void previewObstacleClearance(
+      const std::shared_ptr<rmw_request_id_s> request_header,
+      const std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Request> request,
+      std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Response> response);
+
+  // Shrinks a just-recorded obstacle polygon inward by the raw chassis
+  // half-width (erodeRingInward) so RecordArea (mowgli_behavior) can save
+  // what the operator actually traced, not base_footprint's own trajectory
+  // offset by however close they drove to the object. Physical correction
+  // only — no obstacle_margin or footprint safety margin involved. See
+  // previewObstacleClearance's doc comment for why request_header exists.
+  void correctRecordedObstacle(
+      const std::shared_ptr<rmw_request_id_s> request_header,
+      const std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Request> request,
+      std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Response> response);
+
   std::unique_ptr<ActionServer> action_server_;
+  // nav2::LifecycleNode::create_service returns a nav2::ServiceServer<T>
+  // handle, NOT a plain rclcpp::Service<T> (CI-caught, mowglinext#802 PR
+  // build failure, second error uncovered once the callback signature
+  // itself was fixed).
+  nav2::ServiceServer<mowgli_interfaces::srv::PreviewObstacleClearance>::SharedPtr
+      preview_obstacle_clearance_service_;
+  nav2::ServiceServer<mowgli_interfaces::srv::CorrectRecordedObstacle>::SharedPtr
+      correct_recorded_obstacle_service_;
 
   // Static parameters (snapshot at on_configure). Geometry knobs that are
   // field-tuned (chassis_safety_inset) are read LIVE in planCoverage instead.

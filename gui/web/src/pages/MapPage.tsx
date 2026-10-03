@@ -9,7 +9,7 @@ import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
 import Map, {Layer, Source} from 'react-map-gl/mapbox';
 import type {Map as MapboxMap} from 'mapbox-gl';
-import type {Feature} from 'geojson';
+import type {Feature, Polygon} from 'geojson';
 import {FeatureCollection, Position} from "geojson";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {MapStyle} from "./MapStyle.tsx";
@@ -19,13 +19,15 @@ import {useSettings} from "../hooks/useSettings.ts";
 import {useConfig} from "../hooks/useConfig.tsx";
 import {useEnv} from "../hooks/useEnv.tsx";
 import {Spinner} from "../components/Spinner.tsx";
-import {MowingFeature, MowingAreaFeature, DockFeatureBase, LineFeatureBase, MowingFeatureBase, MowerFeatureBase, NavigationFeature, ObstacleFeature, ActivePathFeature, PathFeature} from "../types/map.ts";
+import {MowingFeature, MowingAreaFeature, DockFeatureBase, LineFeatureBase, MowingFeatureBase, MowerFeatureBase, NavigationFeature, ObstacleFeature, ActivePathFeature, PathFeature, closeRing} from "../types/map.ts";
 import {useMapEditHistory} from "./map/hooks/useMapEditHistory.ts";
 import {useMapOffset} from "./map/hooks/useMapOffset.ts";
 import {useMapBearing} from "./map/hooks/useMapBearing.ts";
 import {useMapBearingCamera} from "./map/hooks/useMapBearingCamera.ts";
 import {useManualMode} from "./map/hooks/useManualMode.ts";
-import {useMapEditing} from "./map/hooks/useMapEditing.ts";
+import {useMapEditing, type ShrinkMemory} from "./map/hooks/useMapEditing.ts";
+import {useObstacleOriginals} from "./map/hooks/useObstacleOriginals.ts";
+import {findOriginal, type XY as OutlineXY} from "./map/utils/obstacleOriginals.ts";
 import {useMapStreams} from "./map/hooks/useMapStreams.ts";
 import {useMapFiles, type ImportOpenMowerSummary} from "./map/hooks/useMapFiles.ts";
 import {useResetMowingProgress} from "./map/hooks/useResetMowingProgress.tsx";
@@ -35,6 +37,11 @@ import {EditAreaModal} from "./map/components/EditAreaModal.tsx";
 import {AreasListPanel} from "./map/components/AreasListPanel.tsx";
 import {TrackedObstaclesPanel} from "./map/components/TrackedObstaclesPanel.tsx";
 import {ObstacleProposalsPanel} from "./map/components/ObstacleProposalsPanel.tsx";
+import {useObstacleClearancePreview} from "./map/hooks/useObstacleClearancePreview.ts";
+
+// Distinct from the red drawn-obstacle fill, so the toggleable
+// clearance-preview outline is never mistaken for it.
+const OBSTACLE_CLEARANCE_PREVIEW_COLOR = '#faad14';
 import {extractObstacleProposals, isDigProposal} from "./map/utils/obstacleProposals.ts";
 import {MapOffsetPanel} from "./map/components/MapOffsetPanel.tsx";
 import {MapImageMarker} from "./map/components/MapImageMarker.tsx";
@@ -95,6 +102,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {config, setConfig} = useConfig(["gui.map.offset.x", "gui.map.offset.y", "gui.map.display.bearing", "gui.map.mower.appearance", "gui.map.dock.appearance"])
     const envs = useEnv()
     const guiApi = useApi()
+    const obstacleOriginals = useObstacleOriginals();
     const [tileUri, setTileUri] = useState<string | undefined>()
     const [editMap, setEditMap] = useState<boolean>(false)
     // Shared hover/selection link between the tracked-obstacles panel and the
@@ -346,6 +354,34 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         }
     }, [envs]);
 
+    // Outline an obstacle had before the recorded-obstacle shrink, kept in map-frame
+    // metres in the robot's config store (survives reloads and backups); the
+    // editor works in lng/lat, so convert at this boundary.
+    const {getRecords: getOutlineRecords, remember: rememberOutline, forget: forgetOutline} = obstacleOriginals;
+    const shrinkMemory = useMemo<ShrinkMemory>(() => {
+        const toXY = (ring: Position[]): OutlineXY[] => ring.map(([lng, lat]) => {
+            const [x, y] = itranspose(offsetX, offsetY, datum, lat, lng);
+            return {x, y};
+        });
+        const toRing = (xy: OutlineXY[]): Position[] =>
+            closeRing(xy.map((p) => transpose(offsetX, offsetY, datum, p.y, p.x)));
+        return {
+            find: (ring) => {
+                if (datum[0] === 0) return undefined;
+                const original = findOriginal(getOutlineRecords(), toXY(ring));
+                return original ? toRing(original) : undefined;
+            },
+            remember: (originalRing, shrunkRing) => {
+                if (datum[0] === 0) return;
+                void rememberOutline({original: toXY(originalRing), shrunk: toXY(shrunkRing)});
+            },
+            forget: (shrunkRing) => {
+                if (datum[0] === 0) return;
+                void forgetOutline(toXY(shrunkRing));
+            },
+        };
+    }, [offsetX, offsetY, datum, getOutlineRecords, rememberOutline, forgetOutline]);
+
     const {
         modalOpen,
         areaModelOpen,
@@ -367,7 +403,55 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         drawRef,
         notification,
         mapInstanceRef,
+        shrinkMemory,
     });
+
+    // A just-recorded area turned into an obstacle: the recording followed the
+    // robot's own centre, so driving the chassis edge along the object left the
+    // outline half a chassis too large. Shrink it ONCE here — the BT only ever
+    // records mowing areas, so this conversion is the only moment it can happen
+    // (coverage_server owns the geometry; nothing is reimplemented client-side).
+    // A failed correction aborts the conversion rather than saving the larger
+    // outline silently.
+    const handleSaveAreaModal = useCallback(async () => {
+        const converting = curMowingAreaFeature.feature_type === 'obstacle'
+            && curMowingAreaFeature.orig_feature_type !== 'obstacle';
+        if (!converting || !curMowingAreaFeature.shrink_recorded || !curMowingAreaFeature.id) {
+            updateMowingArea();
+            return;
+        }
+        const feature = features[curMowingAreaFeature.id];
+        const ring = feature && 'geometry' in feature ? (feature.geometry as Polygon).coordinates?.[0] : undefined;
+        if (!ring || ring.length < 3 || datum[0] === 0) {
+            updateMowingArea();
+            return;
+        }
+        try {
+            const res = await guiApi.mowglinext.callCreate("correct_recorded_obstacle", {
+                polygon: {
+                    points: ring.map((coord) => {
+                        const [lon, lat] = coord as [number, number];
+                        const [x, y] = itranspose(offsetX, offsetY, datum, lat, lon);
+                        return {x, y};
+                    }),
+                },
+            });
+            const data = res.data as unknown as {success?: boolean; message?: string; corrected?: {points?: {x?: number; y?: number}[]}};
+            const points = data?.corrected?.points ?? [];
+            if (res.error || !data?.success || points.length < 3) {
+                notification.error({
+                    message: t('mapEditArea.shrinkFailed'),
+                    description: data?.message ?? res.error?.error,
+                });
+                return;
+            }
+            const corrected = points.map((p) => transpose(offsetX, offsetY, datum, p.y ?? 0, p.x ?? 0));
+            updateMowingArea({type: "Polygon", coordinates: [closeRing(corrected)]});
+        } catch (e) {
+            notification.error({message: t('mapEditArea.shrinkFailed'), description: String(e)});
+        }
+    }, [curMowingAreaFeature, features, datum, offsetX, offsetY, guiApi, notification, t, updateMowingArea]);
+
     useEffect(() => {
         // Don't rebuild features from stream data while in edit mode —
         // path/plan becoming undefined when streams stop would wipe user edits.
@@ -736,6 +820,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         dockDirty,
         setDockDirty,
         buildFeaturesFromMap,
+        obstacleOriginals: obstacleOriginals.records,
+        restoreObstacleOriginals: obstacleOriginals.replaceAll,
     });
 
 
@@ -757,6 +843,14 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         return () => window.removeEventListener("keydown", onKeyDown);
     }, [dockPlacementMode]);
 
+    // All drawn obstacle polygons, for the toggleable clearance-preview
+    // overlay below. Memoised so useObstacleClearancePreview's own content
+    // signature stays stable across unrelated re-renders.
+    const obstacleFeaturesList = useMemo(
+        (): ObstacleFeature[] => Object.values(features).filter((f): f is ObstacleFeature => f instanceof ObstacleFeature),
+        [features],
+    );
+    const obstacleClearancePreview = useObstacleClearancePreview(obstacleFeaturesList, datum, offsetX, offsetY);
 
     const handleMapClick = useCallback((e: {lngLat: {lng: number; lat: number}}) => {
         if (!dockPlacementMode) return;
@@ -1035,7 +1129,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 open={areaModelOpen}
                 area={curMowingAreaFeature}
                 onChange={setCurMowingAreaFeature}
-                onSave={updateMowingArea}
+                onSave={() => void handleSaveAreaModal()}
                 onCancel={cancelAreaModal}
             />
 
@@ -1171,6 +1265,17 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     {dockForegroundMarker}
                     {/* PENDING obstacle proposals (dig reports): dashed, never a real keepout */}
                     {renderProposalLayers()}
+                    {/* Toggleable preview (off by default) of the LIVE obstacle_margin
+                        buffer coverage_server actually plans against — a distinct
+                        dashed amber outline so it is never mistaken for the drawn
+                        obstacle polygon itself. */}
+                    {obstacleClearancePreview.enabled && (
+                        <Source type={"geojson"} id={"obstacle-clearance-preview"} data={obstacleClearancePreview.features}>
+                            <Layer type={"line"} id={"obstacle-clearance-preview-line"}
+                                layout={{'line-cap': 'round', 'line-join': 'round'}}
+                                paint={{'line-color': OBSTACLE_CLEARANCE_PREVIEW_COLOR, 'line-width': 2, 'line-dasharray': [1, 1.5]}}/>
+                        </Source>
+                    )}
                     {/* fusion_graph's LiDAR anchor map (walls as ink, scanned ground as a faint wash). */}
                     {lidarMapImage && (
                         <Source type={"image"} id={"lidar-map"} url={lidarMapImage.url} coordinates={lidarMapImage.coordinates}>
@@ -1240,6 +1345,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onUndo={handleUndo}
                         onRedo={handleRedo}
                         onToggleSatellite={() => setUseSatellite(!useSatellite)}
+                        showObstacleClearance={obstacleClearancePreview.enabled}
+                        onToggleObstacleClearance={() => obstacleClearancePreview.setEnabled((v) => !v)}
                         mowerAppearanceId={mowerAppearance.id}
                         onMowerAppearanceChange={handleMowerAppearanceChange}
                         dockAppearanceId={dockAppearance.id}
@@ -1313,6 +1420,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             onTogglePitch={togglePitch}
                             onEditMap={handleEditMap}
                             onToggleSatellite={() => setUseSatellite(!useSatellite)}
+                            showObstacleClearance={obstacleClearancePreview.enabled}
+                            onToggleObstacleClearance={() => obstacleClearancePreview.setEnabled((v) => !v)}
                             onManualMode={handleManualMode}
                             onStopManualMode={handleStopManualMode}
                             onBackupMap={handleBackupMap}

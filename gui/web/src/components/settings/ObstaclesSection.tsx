@@ -3,6 +3,7 @@ import { Alert, Card, Col, Form, InputNumber, Row, Segmented, Switch, Typography
 import { useTranslation } from "react-i18next";
 import { parseBoolish } from "../../utils/settingsValues.ts";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
+import { besideBodyClearanceM, planningObstacleMarginFloorM } from "../../utils/obstacleMargin.ts";
 
 const { Paragraph } = Typography;
 
@@ -29,6 +30,9 @@ type Props = {
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
+    // Used only to fall back to the shipped chassis_width/obstacle_clearance_margin
+    // when a sparse (untouched) robot config omits them — see obstacleMargin.ts.
+    defaults?: Record<string, any>;
 };
 
 /**
@@ -49,8 +53,17 @@ export const ObstaclesSection: React.FC<Props> = ({
     isOverridden,
     hasDefault,
     onReset,
+    defaults,
 }) => {
     const { t } = useTranslation();
+
+    const chassisWidthM = values.chassis_width ?? defaults?.chassis_width;
+    const clearanceMarginM = values.obstacle_clearance_margin ?? defaults?.obstacle_clearance_margin;
+    const obstacleMarginFloorM = planningObstacleMarginFloorM(chassisWidthM, clearanceMarginM);
+    const requestedMarginM = values.obstacle_margin ?? defaults?.obstacle_margin ?? obstacleMarginFloorM;
+    const effectiveMarginM = Math.max(requestedMarginM, obstacleMarginFloorM);
+    const isBelowFloor = requestedMarginM < obstacleMarginFloorM;
+    const besideBodyCm = Math.round(besideBodyClearanceM(effectiveMarginM, chassisWidthM) * 100);
     const fieldLabel = (key: string, label: React.ReactNode) => (
         <SettingFieldLabel
             settingKey={key}
@@ -137,6 +150,11 @@ export const ObstaclesSection: React.FC<Props> = ({
                             <Form.Item
                                 label={fieldLabel("obstacle_margin", t("settingsObstacles.drawnObstacleMargin"))}
                                 tooltip={t("settingsObstacles.drawnObstacleMarginTooltip")}
+                                extra={
+                                    isBelowFloor
+                                        ? undefined
+                                        : t("settingsObstacles.drawnObstacleMarginBesideBody", { cm: besideBodyCm })
+                                }
                             >
                                 <InputNumber
                                     value={values.obstacle_margin}
@@ -145,6 +163,17 @@ export const ObstaclesSection: React.FC<Props> = ({
                                     style={{ width: "100%" }} addonAfter="m"
                                 />
                             </Form.Item>
+                            {isBelowFloor && (
+                                <Alert
+                                    type="warning"
+                                    showIcon
+                                    style={{ marginTop: -8, marginBottom: 12, fontSize: 12 }}
+                                    message={t("settingsObstacles.drawnObstacleMarginFlooredWarning", {
+                                        floorM: obstacleMarginFloorM.toFixed(3),
+                                        floorCm: besideBodyCm,
+                                    })}
+                                />
+                            )}
                         </Col>
                     </Row>
                     <Row gutter={[16, 0]}>

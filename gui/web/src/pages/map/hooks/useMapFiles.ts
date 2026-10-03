@@ -15,7 +15,8 @@ import {
     type SerializedMapFeature,
 } from "../../../types/map.ts";
 import type {Api, MowgliMapArea, MowgliReplaceMapReq} from "../../../api/Api.ts";
-import {parseMapBackup} from "../utils/mapBackup.ts";
+import {BACKUP_ORIGINALS_KEY, parseMapBackup} from "../utils/mapBackup.ts";
+import {originalsForObstacles, type ObstacleOriginal} from "../utils/obstacleOriginals.ts";
 import {dedupePoints, getQuaternionFromHeading, isRingInsidePolygon, itranspose} from "../../../utils/map.tsx";
 
 interface UseMapFilesOptions {
@@ -37,6 +38,10 @@ interface UseMapFilesOptions {
     // message. Needed by handleRestoreMap because the MapPage effect that
     // normally does this is intentionally skipped while editMap is true.
     buildFeaturesFromMap: (m: MapType) => Record<string, MowingFeature>;
+    // Outlines obstacles had before the recorded-obstacle shrink (kept in the
+    // GUI config store): without them a restored map could not undo a shrink.
+    obstacleOriginals: ObstacleOriginal[];
+    restoreObstacleOriginals: (next: ObstacleOriginal[]) => Promise<void>;
 }
 
 export function useMapFiles({
@@ -54,6 +59,8 @@ export function useMapFiles({
     dockDirty,
     setDockDirty,
     buildFeaturesFromMap,
+    obstacleOriginals,
+    restoreObstacleOriginals,
 }: UseMapFilesOptions) {
     const {t} = useTranslation();
 
@@ -231,7 +238,15 @@ export function useMapFiles({
         const a = document.createElement("a");
         document.body.appendChild(a);
         a.style.display = "none";
-        const json = JSON.stringify(map),
+        const json = JSON.stringify({
+                ...map,
+                // Only the records that still describe an obstacle on this map.
+                [BACKUP_ORIGINALS_KEY]: originalsForObstacles(
+                    obstacleOriginals,
+                    (map?.working_area ?? []).flatMap((a) => (a.obstacles ?? []).map(
+                        (o) => (o.points ?? []).map((p) => ({x: p.x ?? 0, y: p.y ?? 0})))),
+                ),
+            }),
             blob = new Blob([json], {type: "octet/stream"}),
             url = window.URL.createObjectURL(blob);
         a.href = url;
@@ -285,6 +300,16 @@ export function useMapFiles({
             setHasUnsavedChanges(true);
             if (parsed.hasDock) {
                 setDockDirty(true);
+            }
+            if (parsed.obstacleOriginals !== null) {
+                try {
+                    await restoreObstacleOriginals(parsed.obstacleOriginals);
+                } catch (e: unknown) {
+                    notification.error({
+                        message: t('mapFiles.restoreOriginalsFailed'),
+                        description: e instanceof Error ? e.message : String(e),
+                    });
+                }
             }
         });
         input.click();

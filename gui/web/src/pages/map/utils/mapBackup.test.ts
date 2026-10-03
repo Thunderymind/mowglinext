@@ -50,3 +50,29 @@ describe("parseMapBackup", () => {
         expect(parseMapBackup(text).ok).toBe(false);
     });
 });
+
+describe("parseMapBackup obstacle originals", () => {
+    const ring = [{x: 4.3, y: 4.3}, {x: 5.7, y: 4.3}, {x: 5.7, y: 5.7}, {x: 4.3, y: 5.7}];
+    const record = {shrunk: ring, original: [{x: 4, y: 4}, {x: 6, y: 4}, {x: 6, y: 6}, {x: 4, y: 6}]};
+
+    it("reads them and keeps them out of the map", () => {
+        const result = parseMapBackup(JSON.stringify(validMap({obstacle_originals: [record]})));
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.obstacleOriginals).toEqual([record]);
+        expect(result.map).not.toHaveProperty("obstacle_originals");
+    });
+
+    it("tells 'no field' (leave the stored ones) from an empty list (clear them)", () => {
+        const absent = parseMapBackup(JSON.stringify(validMap()));
+        const empty = parseMapBackup(JSON.stringify(validMap({obstacle_originals: []})));
+
+        expect(absent.ok && absent.obstacleOriginals).toBeNull();
+        expect(empty.ok && empty.obstacleOriginals).toEqual([]);
+    });
+
+    it("refuses a field that is not a list", () => {
+        expect(parseMapBackup(JSON.stringify(validMap({obstacle_originals: {}}))).ok).toBe(false);
+    });
+});

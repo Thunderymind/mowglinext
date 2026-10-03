@@ -130,6 +130,26 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
                                                   std::chrono::milliseconds(500),
                                                   true);
 
+  // Plain read-only utility service, not lifecycle-gated like the action
+  // server: it neither plans nor touches robot state, so it stays usable as
+  // soon as the node is configured.
+  preview_obstacle_clearance_service_ =
+      create_service<mowgli_interfaces::srv::PreviewObstacleClearance>(
+          "~/preview_obstacle_clearance",
+          std::bind(&CoverageServer::previewObstacleClearance,
+                    this,
+                    std::placeholders::_1,
+                    std::placeholders::_2,
+                    std::placeholders::_3));
+  correct_recorded_obstacle_service_ =
+      create_service<mowgli_interfaces::srv::CorrectRecordedObstacle>(
+          "~/correct_recorded_obstacle",
+          std::bind(&CoverageServer::correctRecordedObstacle,
+                    this,
+                    std::placeholders::_1,
+                    std::placeholders::_2,
+                    std::placeholders::_3));
+
   RCLCPP_INFO(get_logger(),
               "F2C v3 boustrophedon backend ready. robot_width=%.2fm "
               "op_width=%.2fm headland=%.2fm passes=%d",
@@ -160,6 +180,8 @@ nav2::CallbackReturn CoverageServer::on_cleanup(const rclcpp_lifecycle::State& /
 {
   RCLCPP_INFO(get_logger(), "Cleaning up %s", get_name());
   action_server_.reset();
+  preview_obstacle_clearance_service_.reset();
+  correct_recorded_obstacle_service_.reset();
   return nav2::CallbackReturn::SUCCESS;
 }
 
@@ -922,6 +944,85 @@ void CoverageServer::planCoverage()
     result->message = e.what();
     action_server_->terminate_current(result);
   }
+}
+
+void CoverageServer::previewObstacleClearance(
+    const std::shared_ptr<rmw_request_id_s> /*request_header*/,
+    const std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Request> request,
+    std::shared_ptr<mowgli_interfaces::srv::PreviewObstacleClearance::Response> response)
+{
+  // Same clamp as planCoverage's live read: a stray `ros2 param set` cannot
+  // make the preview claim a margin bigger than any real plan would ever use.
+  const double obstacle_margin = std::clamp(get_parameter("obstacle_margin").as_double(), 0.0, 1.0);
+  response->obstacle_margin_m = obstacle_margin;
+  response->buffered.reserve(request->obstacles.size());
+
+  for (const auto& obstacle : request->obstacles)
+  {
+    f2c::types::LinearRing ring;
+    for (const auto& p : obstacle.points)
+    {
+      ring.addPoint(f2c::types::Point(p.x, p.y));
+    }
+    // bufferRingOutward is the EXACT function buildCellFromGoal grows every
+    // drawn-obstacle hole with for a real plan — reused here, not
+    // reimplemented, so the preview can never drift from what planning
+    // actually does.
+    const f2c::types::LinearRing grown = bufferRingOutward(dedupClosedRing(ring), obstacle_margin);
+
+    geometry_msgs::msg::Polygon out;
+    out.points.reserve(grown.size());
+    for (std::size_t i = 0; i < grown.size(); ++i)
+    {
+      const auto p = grown.getGeometry(i);
+      geometry_msgs::msg::Point32 pt;
+      pt.x = static_cast<float>(p.getX());
+      pt.y = static_cast<float>(p.getY());
+      out.points.push_back(pt);
+    }
+    response->buffered.push_back(std::move(out));
+  }
+}
+
+void CoverageServer::correctRecordedObstacle(
+    const std::shared_ptr<rmw_request_id_s> /*request_header*/,
+    const std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Request> request,
+    std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Response> response)
+{
+  // Raw physical half-width ONLY — no +0.05 m footprint margin, no
+  // obstacle_margin. Those are planning clearances; this corrects a
+  // RECORDING for where the chassis edge actually was, so adding either
+  // would erode past the true physical surface the operator traced.
+  const double half_width = robot_width_ / 2.0;
+
+  f2c::types::LinearRing ring;
+  for (const auto& p : request->polygon.points)
+  {
+    ring.addPoint(f2c::types::Point(p.x, p.y));
+  }
+  const f2c::types::LinearRing corrected = erodeRingInward(dedupClosedRing(ring), half_width);
+
+  if (corrected.size() < 3)
+  {
+    response->success = false;
+    response->message = "Obstacle collapsed once corrected for the chassis half-width (" +
+                        std::to_string(half_width) +
+                        " m) — it was recorded too small/thin to exist once the extra "
+                        "recording margin is removed. Re-record it, driving a wider loop.";
+    RCLCPP_WARN(get_logger(), "correct_recorded_obstacle: %s", response->message.c_str());
+    return;
+  }
+
+  response->corrected.points.reserve(corrected.size());
+  for (std::size_t i = 0; i < corrected.size(); ++i)
+  {
+    const auto p = corrected.getGeometry(i);
+    geometry_msgs::msg::Point32 pt;
+    pt.x = static_cast<float>(p.getX());
+    pt.y = static_cast<float>(p.getY());
+    response->corrected.points.push_back(pt);
+  }
+  response->success = true;
 }
 
 }  // namespace mowgli_coverage

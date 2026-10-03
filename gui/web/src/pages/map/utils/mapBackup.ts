@@ -1,10 +1,14 @@
 import type {Map as MapType} from "../../../types/ros.ts";
+import {parseOriginals, type ObstacleOriginal} from "./obstacleOriginals.ts";
 
 const MIN_POLYGON_POINTS = 3;
 
 export type MapBackupParseResult =
-    | {ok: true; map: MapType; hasDock: boolean}
+    | {ok: true; map: MapType; hasDock: boolean; obstacleOriginals: ObstacleOriginal[] | null}
     | {ok: false; reason: string};
+
+/** The outlines obstacles had before the recorded-obstacle shrink (null = field absent). */
+export const BACKUP_ORIGINALS_KEY = "obstacle_originals";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
@@ -76,5 +80,11 @@ export function parseMapBackup(text: string): MapBackupParseResult {
         return {ok: false, reason: "the backup contains no area"};
     }
     const hasDock = [parsed.dock_x, parsed.dock_y, parsed.dock_heading].every(isFiniteNumber);
-    return {ok: true, map: parsed as MapType, hasDock};
+    if (parsed[BACKUP_ORIGINALS_KEY] !== undefined && !Array.isArray(parsed[BACKUP_ORIGINALS_KEY])) {
+        return {ok: false, reason: `${BACKUP_ORIGINALS_KEY} is not a list`};
+    }
+    const obstacleOriginals = parseOriginals(parsed[BACKUP_ORIGINALS_KEY]);
+    const mapOnly = {...parsed};
+    delete mapOnly[BACKUP_ORIGINALS_KEY];
+    return {ok: true, map: mapOnly as MapType, hasDock, obstacleOriginals};
 }
