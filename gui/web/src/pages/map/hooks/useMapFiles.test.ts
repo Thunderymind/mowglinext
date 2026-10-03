@@ -62,6 +62,8 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
             dockDirty: false,
             setDockDirty: vi.fn(),
             buildFeaturesFromMap: vi.fn(),
+            obstacleOriginals: [],
+            restoreObstacleOriginals: vi.fn(),
             corridors: [],
             restoreCorridors: vi.fn(),
         }));
@@ -84,6 +86,65 @@ describe('useMapFiles handleSaveMap id round-trip', () => {
     });
 });
 
+// Everything handleBackupMap does NOT care about. Shared by the two backup
+// tests below so the untyped antd `notification` stub is cast once.
+type BackupOverrides = Partial<Parameters<typeof useMapFiles>[0]>;
+function backupOptions(overrides: BackupOverrides): Parameters<typeof useMapFiles>[0] {
+    return {
+        features: {},
+        setFeatures: vi.fn(),
+        map: {working_area: [], navigation_areas: []},
+        setMap: vi.fn(),
+        editMap: false,
+        setEditMap: vi.fn(),
+        setHasUnsavedChanges: vi.fn(),
+        offsetX: 0,
+        offsetY: 0,
+        datum: [0, 0, 0],
+        notification: {success: vi.fn(), warning: vi.fn(), error: vi.fn()} as unknown as
+            Parameters<typeof useMapFiles>[0]['notification'],
+        guiApi: {} as unknown as Api<unknown>,
+        dockDirty: false,
+        setDockDirty: vi.fn(),
+        buildFeaturesFromMap: vi.fn(),
+        obstacleOriginals: [],
+        restoreObstacleOriginals: vi.fn(),
+        corridors: [],
+        restoreCorridors: vi.fn(),
+        ...overrides,
+    };
+}
+
+// The pre-shrink obstacle outlines live in the GUI config store, not in the Map
+// message, so a backup that only stringified `map` silently lost them.
+describe('useMapFiles backup carries the pre-shrink obstacle outlines', () => {
+    it('writes the records that still match an obstacle into map.json', async () => {
+        const ring = (x0: number, y0: number, x1: number, y1: number) =>
+            [{x: x0, y: y0}, {x: x1, y: y0}, {x: x1, y: y1}, {x: x0, y: y1}];
+        const kept = {shrunk: ring(4.3, 4.3, 5.7, 5.7), original: ring(4, 4, 6, 6)};
+        const stale = {shrunk: ring(9, 9, 10, 10), original: ring(8, 8, 11, 11)};
+        let blob: Blob | undefined;
+        Object.assign(window.URL, {createObjectURL: vi.fn((b: Blob) => { blob = b; return 'blob:x'; }), revokeObjectURL: vi.fn()});
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        const hook = renderHook(() => useMapFiles(backupOptions({
+            map: {
+                working_area: [{
+                    name: 'A', area: {points: []}, is_navigation_area: false,
+                    obstacles: [{points: [{x: 4.3, y: 4.3, z: 0}, {x: 5.7, y: 4.3, z: 0}, {x: 5.7, y: 5.7, z: 0}, {x: 4.3, y: 5.7, z: 0}]}],
+                }],
+                navigation_areas: [],
+            },
+            obstacleOriginals: [kept, stale],
+        })));
+
+        hook.result.current.handleBackupMap();
+
+        const saved = JSON.parse(await blob!.text()) as {obstacle_originals: unknown};
+        expect(saved.obstacle_originals).toEqual([kept]);
+    });
+});
+
 // The LiDAR-ignore lines are map_server state, not part of the Map message, so
 // a backup that only stringified `map` silently lost them.
 describe('useMapFiles backup carries the ignore lines', () => {
@@ -94,29 +155,13 @@ describe('useMapFiles backup carries the ignore lines', () => {
         Object.assign(window.URL, {createObjectURL, revokeObjectURL: vi.fn()});
         vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 
-        const hook = renderHook(() => useMapFiles({
-            features: {},
-            setFeatures: vi.fn(),
-            map: {working_area: [], navigation_areas: []},
-            setMap: vi.fn(),
-            editMap: false,
-            setEditMap: vi.fn(),
-            setHasUnsavedChanges: vi.fn(),
-            offsetX: 0,
-            offsetY: 0,
-            datum: [0, 0, 0],
-            notification: {success: vi.fn(), warning: vi.fn(), error: vi.fn()} as any,
-            guiApi: {} as unknown as Api<unknown>,
-            dockDirty: false,
-            setDockDirty: vi.fn(),
-            buildFeaturesFromMap: vi.fn(),
-            corridors: [line],
-            restoreCorridors: vi.fn(),
-        }));
+        const hook = renderHook(() => useMapFiles(backupOptions({corridors: [line]})));
 
         hook.result.current.handleBackupMap();
 
-        const saved = JSON.parse(await blob!.text());
+        const saved = JSON.parse(await blob!.text()) as {
+            lidar_ignore_corridors: unknown; working_area: unknown;
+        };
         expect(saved.lidar_ignore_corridors).toEqual([
             {name: 'Hedge', polyline: line.polyline, width_m: 0.4},
         ]);

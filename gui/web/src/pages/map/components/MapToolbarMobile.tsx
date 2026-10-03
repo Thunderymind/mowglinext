@@ -33,6 +33,7 @@ import {
     ThunderboltOutlined,
     ImportOutlined,
     CheckOutlined,
+    ExpandOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import AsyncButton from "../../../components/AsyncButton.tsx";
@@ -61,6 +62,8 @@ interface MapToolbarMobileProps {
     onUndo: () => void;
     onRedo: () => void;
     onToggleSatellite: () => void;
+    showObstacleClearance?: boolean;
+    onToggleObstacleClearance?: () => void;
     onManualMode: () => Promise<void>;
     onStopManualMode: () => Promise<void>;
     onBackupMap: () => void;
@@ -116,6 +119,7 @@ export const MapToolbarMobile = ({
     editMap, hasUnsavedChanges, manualMode, useSatellite,
     historyIndex, editHistoryLength, mowingAreas,
     onEditMap, onSaveMap, onUndo, onRedo, onToggleSatellite,
+    showObstacleClearance = false, onToggleObstacleClearance,
     onManualMode, onStopManualMode,
     onBackupMap, onRestoreMap, onDownloadGeoJSON, onUploadGeoJSON, onImportOpenMower, onResetMowingProgress,
     onMowArea, selectedFeatureCount = 0, onEditSelectedFeature,
@@ -211,6 +215,13 @@ export const MapToolbarMobile = ({
 
     const dataMenuItems: MenuProps["items"] = [
         {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? t("mapToolbarMobile.darkMap") : t("mapToolbarMobile.satellite")},
+        ...(onToggleObstacleClearance
+            ? [{
+                key: "obstacleClearance",
+                icon: <ExpandOutlined />,
+                label: showObstacleClearance ? t("mapToolbarMobile.hideObstacleClearance") : t("mapToolbarMobile.showObstacleClearance"),
+            } satisfies NonNullable<MenuProps["items"]>[number]]
+            : []),
         {
             key: "mowerAppearance",
             label: t("mapToolbar.mowerAppearance"),
@@ -269,6 +280,7 @@ export const MapToolbarMobile = ({
 
         switch (key) {
             case "satellite": onToggleSatellite(); break;
+            case "obstacleClearance": onToggleObstacleClearance?.(); break;
             case "areaRecording": safeCall(onAreaRecording); break;
             case "mowNext": safeCall(onMowNextArea); break;
             case "continueOrPause": safeCall(onContinueOrPause); break;

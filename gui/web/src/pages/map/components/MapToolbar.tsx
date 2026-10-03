@@ -21,6 +21,7 @@ import {
     CloseOutlined,
     ImportOutlined,
     DeleteOutlined,
+    ExpandOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import {useTranslation} from "react-i18next";
@@ -48,6 +49,8 @@ interface MapToolbarProps {
     onDockAppearanceChange?: (id: DockAppearanceId) => void;
     onEditMap: () => void;
     onToggleSatellite: () => void;
+    showObstacleClearance?: boolean;
+    onToggleObstacleClearance?: () => void;
     onManualMode: () => Promise<void>;
     onStopManualMode: () => Promise<void>;
     onBackupMap: () => void;
@@ -77,6 +80,7 @@ export const MapToolbar = ({
     mowerAppearanceId = "urdf", onMowerAppearanceChange = () => {},
     dockAppearanceId = "marker", onDockAppearanceChange = () => {},
     onEditMap, onToggleSatellite,
+    showObstacleClearance = false, onToggleObstacleClearance,
     onManualMode, onStopManualMode,
     onBackupMap, onRestoreMap, onDownloadGeoJSON, onImportOpenMower, onResetMowingProgress,
     onMowArea, pitched, onTogglePitch,
@@ -110,6 +114,13 @@ export const MapToolbar = ({
 
     const moreMenuItems: MenuProps["items"] = [
         {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? t("mapToolbar.darkMap") : t("mapToolbar.satellite")},
+        ...(onToggleObstacleClearance
+            ? [{
+                key: "obstacleClearance",
+                icon: <ExpandOutlined />,
+                label: showObstacleClearance ? t("mapToolbar.hideObstacleClearance") : t("mapToolbar.showObstacleClearance"),
+            } satisfies NonNullable<MenuProps["items"]>[number]]
+            : []),
         ...(onTogglePitch
             ? [{key: "pitch", icon: <GlobalOutlined />, label: pitched ? t("mapToolbar.flattenMap") : t("mapToolbar.tilt3dView")} satisfies NonNullable<MenuProps["items"]>[number]]
             : []),
@@ -173,6 +184,7 @@ export const MapToolbar = ({
 
         switch (key) {
             case "satellite": onToggleSatellite(); break;
+            case "obstacleClearance": onToggleObstacleClearance?.(); break;
             case "pitch": onTogglePitch?.(); break;
             case "manual": safeCall(() => onManualMode()); break;
             case "stopManual": safeCall(() => onStopManualMode()); break;

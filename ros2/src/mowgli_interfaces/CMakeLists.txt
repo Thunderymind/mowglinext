@@ -58,6 +58,8 @@ set(srv_files
   "srv/CoverageOrientation.srv"
   "srv/SetFleetAssignment.srv"
   "srv/PromoteObstacle.srv"
+  "srv/PreviewObstacleClearance.srv"
+  "srv/CorrectRecordedObstacle.srv"
   "srv/AddLidarIgnoreCorridor.srv"
   "srv/GetLidarIgnoreCorridors.srv"
   "srv/ClearLidarIgnoreCorridors.srv"

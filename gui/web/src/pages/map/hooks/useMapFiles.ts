@@ -15,7 +15,8 @@ import {
     type SerializedMapFeature,
 } from "../../../types/map.ts";
 import type {Api, MowgliMapArea, MowgliReplaceMapReq} from "../../../api/Api.ts";
-import {BACKUP_CORRIDORS_KEY, parseMapBackup} from "../utils/mapBackup.ts";
+import {BACKUP_CORRIDORS_KEY, BACKUP_ORIGINALS_KEY, parseMapBackup} from "../utils/mapBackup.ts";
+import {originalsForObstacles, type ObstacleOriginal} from "../utils/obstacleOriginals.ts";
 import {dedupePoints, getQuaternionFromHeading, isRingInsidePolygon, itranspose} from "../../../utils/map.tsx";
 
 interface UseMapFilesOptions {
@@ -37,6 +38,10 @@ interface UseMapFilesOptions {
     // message. Needed by handleRestoreMap because the MapPage effect that
     // normally does this is intentionally skipped while editMap is true.
     buildFeaturesFromMap: (m: MapType) => Record<string, MowingFeature>;
+    // Outlines obstacles had before the recorded-obstacle shrink (kept in the
+    // GUI config store): without them a restored map could not undo a shrink.
+    obstacleOriginals: ObstacleOriginal[];
+    restoreObstacleOriginals: (next: ObstacleOriginal[]) => Promise<void>;
     // The operator-drawn LiDAR-ignore lines. They live in map_server, not in the
     // Map message, so the backup file carries them separately and a restore
     // writes them back through restoreCorridors (applied immediately, like every
@@ -60,6 +65,8 @@ export function useMapFiles({
     dockDirty,
     setDockDirty,
     buildFeaturesFromMap,
+    obstacleOriginals,
+    restoreObstacleOriginals,
     corridors,
     restoreCorridors,
 }: UseMapFilesOptions) {
@@ -241,6 +248,12 @@ export function useMapFiles({
         a.style.display = "none";
         const json = JSON.stringify({
                 ...map,
+                // Only the records that still describe an obstacle on this map.
+                [BACKUP_ORIGINALS_KEY]: originalsForObstacles(
+                    obstacleOriginals,
+                    (map?.working_area ?? []).flatMap((a) => (a.obstacles ?? []).map(
+                        (o) => (o.points ?? []).map((p) => ({x: p.x ?? 0, y: p.y ?? 0})))),
+                ),
                 [BACKUP_CORRIDORS_KEY]: corridors.map(({name, polyline, width_m}) => ({name, polyline, width_m})),
             }),
             blob = new Blob([json], {type: "octet/stream"}),
@@ -296,6 +309,16 @@ export function useMapFiles({
             setHasUnsavedChanges(true);
             if (parsed.hasDock) {
                 setDockDirty(true);
+            }
+            if (parsed.obstacleOriginals !== null) {
+                try {
+                    await restoreObstacleOriginals(parsed.obstacleOriginals);
+                } catch (e: unknown) {
+                    notification.error({
+                        message: t('mapFiles.restoreOriginalsFailed'),
+                        description: e instanceof Error ? e.message : String(e),
+                    });
+                }
             }
             // A backup from before the ignore lines were included has no
             // field: leave the current lines alone rather than wiping them.

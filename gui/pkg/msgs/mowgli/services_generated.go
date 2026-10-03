@@ -110,6 +110,18 @@ type ClearObstacleRes struct {
 	Message                   string                         `json:"message"`
 }
 
+// CorrectRecordedObstacleReq for mowgli_interfaces/srv/CorrectRecordedObstacle request.
+type CorrectRecordedObstacleReq struct {
+	Polygon                   geometry.Polygon               `json:"polygon"`
+}
+
+// CorrectRecordedObstacleRes for mowgli_interfaces/srv/CorrectRecordedObstacle response.
+type CorrectRecordedObstacleRes struct {
+	Corrected                 geometry.Polygon               `json:"corrected"`
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+}
+
 // CoverageOrientationReq for mowgli_interfaces/srv/CoverageOrientation request.
 type CoverageOrientationReq struct {
 	AreaIndex                 uint32                         `json:"area_index"`
@@ -188,6 +200,17 @@ type MowerControlReq struct {
 // MowerControlRes for mowgli_interfaces/srv/MowerControl response.
 type MowerControlRes struct {
 	Success                   bool                           `json:"success"`
+}
+
+// PreviewObstacleClearanceReq for mowgli_interfaces/srv/PreviewObstacleClearance request.
+type PreviewObstacleClearanceReq struct {
+	Obstacles                 []geometry.Polygon             `json:"obstacles"`
+}
+
+// PreviewObstacleClearanceRes for mowgli_interfaces/srv/PreviewObstacleClearance response.
+type PreviewObstacleClearanceRes struct {
+	Buffered                  []geometry.Polygon             `json:"buffered"`
+	ObstacleMarginM           float64                        `json:"obstacle_margin_m"`
 }
 
 // PromoteObstacleReq for mowgli_interfaces/srv/PromoteObstacle request.

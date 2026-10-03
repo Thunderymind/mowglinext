@@ -534,6 +534,14 @@ f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in);
 // obstacle is never dropped, only the extra margin. Pure function — testable.
 f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, double margin);
 
+// Shrink a ring inward by `distance` metres (GDAL Buffer with a negated
+// distance, rounded joins) and return it dedup-closed. Unlike
+// bufferRingOutward, erosion can legitimately collapse a small or thin
+// polygon to nothing — that is reported by returning an EMPTY ring (size 0),
+// which the caller MUST treat as failure, never as "no correction needed".
+// distance <= 0 returns dedupClosedRing(in) unchanged. Pure function.
+f2c::types::LinearRing erodeRingInward(const f2c::types::LinearRing& in, double distance);
+
 }  // namespace mowgli_coverage
 
 #endif  // MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_
