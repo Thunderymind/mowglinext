@@ -31,8 +31,8 @@ var topicMap = map[string]topicDef{
 	// One-click dock calibration live status (the GUI's foxglove-friendly
 	// window into the CalibrateDock action — foxglove_bridge has no action op).
 	"dockCalibrationStatus": {"/calibrate_imu_yaw_node/dock_calibration/status", "mowgli_interfaces/msg/DockCalibrationStatus"},
-	"gps":             {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
-	"gnssStatus":      {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
+	"gps":                   {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
+	"gnssStatus":            {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
 	// The robot's global pose comes from fusion_graph_node, the sole
 	// map-frame localizer. "pose" and "fusionRaw" both point at
 	// /odometry/filtered_map; the duplicate key is kept for backwards
@@ -178,6 +178,7 @@ type RosProvider struct {
 	cmdVelRelay *cmdVelRelayClient
 
 	mtx                sync.Mutex
+	subscriptionOpMu   sync.Mutex                           // serializes Foxglove subscribe/unsubscribe calls, never state access
 	subscribers        map[string]map[string]*RosSubscriber // logicalKey -> id -> subscriber
 	lastMessage        map[string][]byte                    // logicalKey -> last JSON bytes
 	foxgloveSubscribed map[string]bool                      // logicalKey -> upstream-subscribed?
@@ -257,16 +258,13 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 	return r
 }
 
-// ensureFoxgloveSubscribed subscribes the foxglove client to the ROS2 topic
-// backing logicalKey if it isn't already. No-op for virtual keys (empty
-// MsgType) or unknown keys. Caller must hold r.mtx.
-func (r *RosProvider) ensureFoxgloveSubscribed(logicalKey string) {
-	if r.foxgloveSubscribed[logicalKey] {
-		return
-	}
+// subscribeFoxglove performs only the potentially blocking network operation.
+// It must never be called while r.mtx is held: a stalled Foxglove connection
+// must not freeze cached messages, service calls, or unrelated GUI streams.
+func (r *RosProvider) subscribeFoxglove(logicalKey string) error {
 	def, ok := topicMap[logicalKey]
 	if !ok || def.MsgType == "" {
-		return
+		return nil
 	}
 
 	key := logicalKey // capture for closure
@@ -293,30 +291,57 @@ func (r *RosProvider) ensureFoxgloveSubscribed(logicalKey string) {
 	}
 	if err := r.client.Subscribe(def.ROS2Topic, def.MsgType, "gui-"+key, cb, subOpts...); err != nil {
 		logrus.Errorf("RosProvider: subscribe %s (%s): %v", def.ROS2Topic, key, err)
-		return
+		return err
 	}
-	r.foxgloveSubscribed[key] = true
 	logrus.Infof("RosProvider: subscribed to %s as '%s'", def.ROS2Topic, key)
+	return nil
 }
 
-// maybeUnsubscribeFoxglove drops the upstream foxglove subscription for
-// logicalKey if no downstream listeners remain. Caller must hold r.mtx.
-func (r *RosProvider) maybeUnsubscribeFoxglove(logicalKey string) {
-	if !r.foxgloveSubscribed[logicalKey] {
-		return
-	}
-	if subs := r.subscribers[logicalKey]; len(subs) > 0 {
-		return
-	}
+// reconcileFoxgloveSubscription makes the upstream subscription match whether
+// downstream listeners exist. Network calls are serialized separately from
+// r.mtx, and state is rechecked after each call so subscribe/unsubscribe races
+// converge to the latest desired state.
+func (r *RosProvider) reconcileFoxgloveSubscription(logicalKey string) error {
 	def, ok := topicMap[logicalKey]
 	if !ok || def.MsgType == "" {
-		return
+		return nil
 	}
-	r.client.Unsubscribe(def.ROS2Topic, "gui-"+logicalKey)
-	delete(r.foxgloveSubscribed, logicalKey)
-	// Drop the cached last-message — stale once we stop receiving updates.
-	delete(r.lastMessage, logicalKey)
-	logrus.Infof("RosProvider: unsubscribed from %s (no listeners)", def.ROS2Topic)
+
+	r.mtx.Lock()
+	desired := len(r.subscribers[logicalKey]) > 0
+	actual := r.foxgloveSubscribed[logicalKey]
+	r.mtx.Unlock()
+	if desired == actual {
+		return nil
+	}
+
+	r.subscriptionOpMu.Lock()
+	defer r.subscriptionOpMu.Unlock()
+	for {
+		r.mtx.Lock()
+		desired = len(r.subscribers[logicalKey]) > 0
+		actual = r.foxgloveSubscribed[logicalKey]
+		r.mtx.Unlock()
+		if desired == actual {
+			return nil
+		}
+
+		if desired {
+			if err := r.subscribeFoxglove(logicalKey); err != nil {
+				return err
+			}
+			r.mtx.Lock()
+			r.foxgloveSubscribed[logicalKey] = true
+			r.mtx.Unlock()
+			continue
+		}
+
+		r.client.Unsubscribe(def.ROS2Topic, "gui-"+logicalKey)
+		r.mtx.Lock()
+		delete(r.foxgloveSubscribed, logicalKey)
+		r.mtx.Unlock()
+		logrus.Infof("RosProvider: unsubscribed from %s (no listeners)", def.ROS2Topic)
+	}
 }
 
 // fanOut stores msg as the latest value for logicalKey and delivers it to all
@@ -494,7 +519,6 @@ func (r *RosProvider) CallService(ctx context.Context, service string, req any, 
 // topic also triggers the upstream foxglove_bridge subscription.
 func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func(msg []byte)) error {
 	r.mtx.Lock()
-	defer r.mtx.Unlock()
 
 	if r.subscribers[topic] == nil {
 		r.subscribers[topic] = make(map[string]*RosSubscriber)
@@ -504,15 +528,13 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 		r.subscribers[topic][id] = NewRosSubscriber(topic, id, interval, cb)
 	}
 
-	// Subscribe upstream on first listener for this logical key. Safe to call
-	// repeatedly — ensureFoxgloveSubscribed short-circuits on the second hit.
-	r.ensureFoxgloveSubscribed(topic)
-
 	// Replay the most recent message so the subscriber is immediately usable.
 	if last, ok := r.lastMessage[topic]; ok {
 		r.subscribers[topic][id].Publish(last)
 	}
-	return nil
+	r.mtx.Unlock()
+
+	return r.reconcileFoxgloveSubscription(topic)
 }
 
 // UnSubscribe stops and removes the subscriber identified by (topic, id).
@@ -520,22 +542,27 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 // foxglove_bridge subscription is dropped too.
 func (r *RosProvider) UnSubscribe(topic string, id string) {
 	r.mtx.Lock()
-	defer r.mtx.Unlock()
 
 	subs, ok := r.subscribers[topic]
 	if !ok {
+		r.mtx.Unlock()
 		return
 	}
 	sub, exists := subs[id]
 	if !exists {
+		r.mtx.Unlock()
 		return
 	}
 	sub.Close()
 	delete(subs, id)
 	if len(subs) == 0 {
 		delete(r.subscribers, topic)
-		r.maybeUnsubscribeFoxglove(topic)
 	}
+	r.mtx.Unlock()
+
+	// Cleanup may wait for Foxglove, but never while holding the provider's
+	// state mutex. A broken bridge can delay this handler, not the whole GUI.
+	_ = r.reconcileFoxgloveSubscription(topic)
 }
 
 // Publish sends msg to the named ROS2 topic. For /cmd_vel_teleop the relay
