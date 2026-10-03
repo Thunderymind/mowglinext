@@ -928,8 +928,11 @@ extern "C" void motors_handler() {
         blade_fault_sequence, link_inhibited);
     if (motor_link_rearm_required != 0u) {
       MOTORLINK_ForceInhibit();
-    } else {
-      /* Close the race with a UART fault or a host update between the snapshot
+    } else if (motor_link_rearm_state.rearm_completed) {
+      /* Revalidate only the zero/off -> armed transition. Requiring zero/off
+       * again during ordinary motion would inhibit every nonzero drive/blade
+       * request. Live link health and final output checks still run each cycle.
+       * Close the race with a UART fault or a host update between the snapshot
        * and inhibit clear. The source links must still be healthy and no newer
        * zero/off intent may have arrived. */
       const uint32_t primask = __get_PRIMASK();

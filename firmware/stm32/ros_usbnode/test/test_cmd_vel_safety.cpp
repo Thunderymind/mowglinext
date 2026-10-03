@@ -116,6 +116,42 @@ static void test_motor_link_fault_requires_new_zero_and_blade_off()
       state, true, 7u, true, true, 3u, 9u, true));
 }
 
+static void test_motor_link_zero_rearm_does_not_require_zero_during_motion()
+{
+  mowgli_motor_safety::LinkRearmState state{};
+  TEST_ASSERT_TRUE(mowgli_motor_safety::update_link_rearm(
+      state, false, 4u, true, true, 0u, 0u, true));
+  TEST_ASSERT_FALSE(state.rearm_completed);
+  TEST_ASSERT_TRUE(mowgli_motor_safety::update_link_rearm(
+      state, true, 4u, true, true, 0u, 0u, true));
+  TEST_ASSERT_FALSE(state.rearm_completed);
+  TEST_ASSERT_FALSE(mowgli_motor_safety::update_link_rearm(
+      state, true, 5u, true, true, 0u, 0u, true));
+  TEST_ASSERT_TRUE(state.rearm_completed);
+
+  // After the zero/off revalidation clears the physical inhibit, ordinary
+  // motion (including blade ON) must not repeat that zero/off-only check.
+  for (int cycle = 0; cycle < 10; ++cycle) {
+    TEST_ASSERT_FALSE(mowgli_motor_safety::update_link_rearm(
+        state, true, 5u, false, false, 0u, 0u, false));
+    TEST_ASSERT_FALSE(state.rearm_completed);
+  }
+
+  // A new fault still inhibits immediately and requires another fresh zero.
+  TEST_ASSERT_TRUE(mowgli_motor_safety::update_link_rearm(
+      state, true, 5u, false, false, 1u, 0u, true));
+  TEST_ASSERT_FALSE(state.rearm_completed);
+  TEST_ASSERT_TRUE(mowgli_motor_safety::update_link_rearm(
+      state, true, 5u, true, true, 1u, 0u, true));
+  TEST_ASSERT_FALSE(state.rearm_completed);
+  TEST_ASSERT_FALSE(mowgli_motor_safety::update_link_rearm(
+      state, true, 6u, true, true, 1u, 0u, true));
+  TEST_ASSERT_TRUE(state.rearm_completed);
+  TEST_ASSERT_FALSE(mowgli_motor_safety::update_link_rearm(
+      state, true, 6u, true, true, 1u, 0u, false));
+  TEST_ASSERT_FALSE(state.rearm_completed);
+}
+
 static void test_zero_host_intent_suppresses_yaw_invented_targets()
 {
   // These candidate trims represent gyro offset, retained integral, and turn
@@ -483,6 +519,7 @@ int main()
   RUN_TEST(test_blade_on_during_link_rearm_is_not_deferred);
   RUN_TEST(test_motor_link_requires_fresh_zero_after_recovery);
   RUN_TEST(test_idle_zero_can_complete_safe_motor_link_rearm);
+  RUN_TEST(test_motor_link_zero_rearm_does_not_require_zero_during_motion);
   RUN_TEST(test_motor_link_fault_requires_new_zero_and_blade_off);
   RUN_TEST(test_zero_host_intent_suppresses_yaw_invented_targets);
   RUN_TEST(test_zero_host_intent_preserves_braking_but_not_stationary_pwm);
