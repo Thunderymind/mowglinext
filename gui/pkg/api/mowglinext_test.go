@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -340,6 +341,67 @@ func TestSubscriberRoute_RejectsUnknownTopic(t *testing.T) {
 	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	_, _, err := conn.ReadMessage()
 	assert.Error(t, err, "connection should close without ever subscribing")
+}
+
+func dialPublisher(t *testing.T, server *httptest.Server, topic string) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/mowglinext/publish/" + topic
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	return conn
+}
+
+func TestPublisherRoute_HeartbeatReportsRoundTripToken(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialPublisher(t, server, "joy")
+	defer conn.Close()
+
+	require.NoError(t, conn.WriteJSON(map[string]any{
+		"op":         "ping",
+		"sent_at_ms": int64(123456),
+	}))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	require.NoError(t, err)
+	decoded, err := base64.StdEncoding.DecodeString(string(raw))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"op":"pong","sent_at_ms":123456}`, string(decoded))
+}
+
+func TestPublisherRoute_DisconnectStopsManualMowing(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialPublisher(t, server, "joy")
+
+	// Let the handler install its status subscription, then make the cached/live
+	// state explicit before dropping the operator channel.
+	time.Sleep(50 * time.Millisecond)
+	mock.Dispatch("highLevelStatus", []byte(`{"state":4,"state_name":"MANUAL_MOWING"}`))
+	require.NoError(t, conn.Close())
+	time.Sleep(100 * time.Millisecond)
+
+	require.Len(t, mock.ServiceCalls, 1)
+	assert.Equal(t, "/behavior_tree_node/high_level_control", mock.ServiceCalls[0].Service)
+	req, ok := mock.ServiceCalls[0].Req.(*mowgli.HighLevelControlReq)
+	require.True(t, ok)
+	assert.Equal(t, uint8(8), req.Command)
+}
+
+func TestPublisherRoute_DisconnectDoesNotStopRecording(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialPublisher(t, server, "joy")
+
+	time.Sleep(50 * time.Millisecond)
+	mock.Dispatch("highLevelStatus", []byte(`{"state":3,"state_name":"RECORDING"}`))
+	require.NoError(t, conn.Close())
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Empty(t, mock.ServiceCalls)
 }
 
 func TestMapWriteBudget(t *testing.T) {

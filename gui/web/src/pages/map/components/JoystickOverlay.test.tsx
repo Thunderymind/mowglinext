@@ -43,4 +43,16 @@ describe('JoystickOverlay', () => {
         );
         expect(container.firstChild).not.toBeNull();
     });
+
+    it('shows joystick latency and warns when the link is lost', () => {
+        const {rerender} = render(
+            <JoystickOverlay visible={true} latencyMs={87} onMove={noop} onStop={noop}/>,
+        );
+        expect(screen.getByText('Joystick 87 ms')).toBeTruthy();
+
+        rerender(
+            <JoystickOverlay visible={true} latencyMs={87} linkStale onMove={noop} onStop={noop}/>,
+        );
+        expect(screen.getByText(en.mapJoystick.linkLost)).toBeTruthy();
+    });
 });

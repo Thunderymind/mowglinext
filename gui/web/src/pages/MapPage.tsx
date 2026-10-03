@@ -1059,6 +1059,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
                     mobile={isMobile}
+                    latencyMs={joyStream.latencyMs}
+                    linkStale={joyStream.heartbeatStale}
                     onMove={handleJoyMove}
                     onStop={handleJoyStop}
                     onFinishRecording={mowerActions.onRecordFinish}

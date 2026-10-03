@@ -12,18 +12,31 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
-	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/docker/distribution/uuid"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-// wsWriteTimeout bounds a single WebSocket write. A frozen/slow client must not
-// block a delivery goroutine forever; on timeout the connection is closed.
-const wsWriteTimeout = 5 * time.Second
+const (
+	// wsWriteTimeout bounds a single WebSocket write. A frozen/slow client must
+	// not block a delivery goroutine forever; on timeout the connection is closed.
+	wsWriteTimeout = 5 * time.Second
+	// The browser handles protocol-level ping/pong automatically. Missing three
+	// pings marks a half-open Wi-Fi connection dead so the frontend's existing
+	// onclose reconnect path can take over.
+	wsPingPeriod = 15 * time.Second
+	wsPongWait   = 3 * wsPingPeriod
+	// Manual control needs a much tighter liveness bound than read-only map
+	// streams. The relay stops the wheels after 350 ms; these values ensure a
+	// half-open browser link also exits MANUAL_MOWING (and therefore stops the
+	// blade) within a few seconds instead of waiting for the kernel TCP timeout.
+	joyPingPeriod = 1 * time.Second
+	joyPongWait   = 3 * joyPingPeriod
+)
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize: 1024,
@@ -315,18 +328,126 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Router /mowglinext/publish/{topic} [get]
 func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.GET("/publish/:topic", func(c *gin.Context) {
-		var err error
+		topic := c.Param("topic")
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
+
+		// The publish route currently has one supported logical stream. Rejecting
+		// invented names avoids making the safety cleanup below look broader than
+		// it really is.
+		if topic != "joy" {
+			log.Printf("PublisherRoute: unknown topic %q", topic)
+			return
+		}
+
+		var stateMu sync.RWMutex
+		manualActive := false
+		statusSubID := "joy-deadman-" + uuid.Generate().String()
+		statusSubscribed := false
+		if err := provider.Subscribe("highLevelStatus", statusSubID, -1, func(msg []byte) {
+			var status mowgli.HighLevelStatus
+			if err := json.Unmarshal(msg, &status); err != nil {
+				log.Printf("PublisherRoute: high-level status decode: %v", err)
+				return
+			}
+			stateMu.Lock()
+			manualActive = status.State == 4 || status.StateName == "MANUAL_MOWING"
+			stateMu.Unlock()
+		}); err != nil {
+			log.Printf("PublisherRoute: high-level status subscribe: %v", err)
+		} else {
+			statusSubscribed = true
+		}
+
+		// Losing the operator control channel while manual mowing must not leave
+		// the BT re-enabling the blade. A fresh connection does not auto-resume
+		// motion; the operator deliberately starts manual mode again after STOP.
+		defer func() {
+			if statusSubscribed {
+				provider.UnSubscribe("highLevelStatus", statusSubID)
+			}
+			stateMu.RLock()
+			shouldStop := manualActive
+			stateMu.RUnlock()
+			if !shouldStop {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			req := &mowgli.HighLevelControlReq{Command: 8}
+			if err := provider.CallService(ctx, "/behavior_tree_node/high_level_control", req,
+				&mowgli.HighLevelControlRes{}, "mowgli_interfaces/srv/HighLevelControl"); err != nil {
+				log.Printf("PublisherRoute: joystick lost; COMMAND_STOP failed: %v", err)
+				return
+			}
+			log.Printf("PublisherRoute: joystick lost during MANUAL_MOWING; sent COMMAND_STOP")
+		}()
+
+		_ = conn.SetReadDeadline(time.Now().Add(joyPongWait))
+		conn.SetPongHandler(func(string) error {
+			return conn.SetReadDeadline(time.Now().Add(joyPongWait))
+		})
+
+		var writeMu sync.Mutex
+		heartbeatDone := make(chan struct{})
+		defer close(heartbeatDone)
+		go func() {
+			ticker := time.NewTicker(joyPingPeriod)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatDone:
+					return
+				case <-ticker.C:
+					writeMu.Lock()
+					deadline := time.Now().Add(wsWriteTimeout)
+					_ = conn.SetWriteDeadline(deadline)
+					err := conn.WriteControl(websocket.PingMessage, nil, deadline)
+					writeMu.Unlock()
+					if err != nil {
+						_ = conn.Close()
+						return
+					}
+				}
+			}
+		}()
+
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				c.Error(err)
 				break
 			}
+
+			// Application heartbeat for a user-visible joystick RTT. Protocol-level
+			// ping/pong above owns liveness; this echo only carries the browser's
+			// timestamp back so the UI can display latency.
+			var heartbeat struct {
+				Op       string `json:"op"`
+				SentAtMs int64  `json:"sent_at_ms"`
+			}
+			if err := json.Unmarshal(msg, &heartbeat); err == nil && heartbeat.Op == "ping" {
+				heartbeat.Op = "pong"
+				payload, marshalErr := json.Marshal(&heartbeat)
+				if marshalErr != nil {
+					continue
+				}
+				encoded := make([]byte, base64.StdEncoding.EncodedLen(len(payload)))
+				base64.StdEncoding.Encode(encoded, payload)
+				writeMu.Lock()
+				_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+				writeErr := conn.WriteMessage(websocket.TextMessage, encoded)
+				writeMu.Unlock()
+				if writeErr != nil {
+					_ = conn.Close()
+					break
+				}
+				continue
+			}
+
 			var msgObj geometry.TwistStamped
 			err = json.Unmarshal(msg, &msgObj)
 			if err != nil {
@@ -365,6 +486,11 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		}
 		defer conn.Close()
 
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		conn.SetPongHandler(func(string) error {
+			return conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		})
+
 		type subState struct {
 			id string
 		}
@@ -372,6 +498,29 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		state := map[string]*subState{}
 
 		var writeMu sync.Mutex
+		heartbeatDone := make(chan struct{})
+		defer close(heartbeatDone)
+		go func() {
+			ticker := time.NewTicker(wsPingPeriod)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatDone:
+					return
+				case <-ticker.C:
+					writeMu.Lock()
+					deadline := time.Now().Add(wsWriteTimeout)
+					_ = conn.SetWriteDeadline(deadline)
+					err := conn.WriteControl(websocket.PingMessage, nil, deadline)
+					writeMu.Unlock()
+					if err != nil {
+						_ = conn.Close()
+						return
+					}
+				}
+			}
+		}()
+
 		writeFrame := func(topic string, data []byte) {
 			// Re-encode the frame as MessagePack and send it as a BINARY frame.
 			// `data` is the per-message snake_case JSON produced upstream; we

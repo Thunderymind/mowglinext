@@ -1611,7 +1611,10 @@
   "mapJoystick": {
     "finish": "Finish",
     "cancel": "Cancel",
-    "home": "Home"
+    "home": "Home",
+    "latency": "Joystick {{latency}} ms",
+    "measuringLatency": "Measuring joystick…",
+    "linkLost": "Joystick link lost"
   },
   "mapManualMode": {},
   "mapBearing": {

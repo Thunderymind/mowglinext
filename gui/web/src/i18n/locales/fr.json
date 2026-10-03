@@ -1607,7 +1607,10 @@
   "mapJoystick": {
     "finish": "Terminer",
     "cancel": "Annuler",
-    "home": "Retour base"
+    "home": "Retour base",
+    "latency": "Joystick {{latency}} ms",
+    "measuringLatency": "Mesure du joystick…",
+    "linkLost": "Connexion joystick perdue"
   },
   "mapManualMode": {},
   "mapBearing": {

@@ -10,6 +10,8 @@ interface JoystickOverlayProps {
     visible: boolean;
     isRecording?: boolean;
     mobile?: boolean;
+    latencyMs?: number | null;
+    linkStale?: boolean;
     onMove: (event: IJoystickUpdateEvent) => void;
     onStop: () => void;
     onFinishRecording?: () => Promise<void>;
@@ -19,6 +21,7 @@ interface JoystickOverlayProps {
 
 export const JoystickOverlay = ({
     visible, isRecording, mobile,
+    latencyMs, linkStale,
     onMove, onStop, onFinishRecording, onCancelRecording, onHome,
 }: JoystickOverlayProps) => {
     const {colors, displayMode} = useThemeMode();
@@ -45,6 +48,16 @@ export const JoystickOverlay = ({
     // A single flex "control stack" so the Finish/Cancel/Home buttons derive
     // their position from the joystick row instead of their own magic offsets.
     const actionButtonStyle: React.CSSProperties = {height: 44, minWidth: 44, borderRadius: 10, fontWeight: 600};
+    const latencyTone = linkStale || (latencyMs !== null && latencyMs !== undefined && latencyMs >= 1000)
+        ? colors.danger
+        : latencyMs !== null && latencyMs !== undefined && latencyMs >= 250
+            ? colors.warning
+            : colors.success;
+    const latencyText = linkStale
+        ? t('mapJoystick.linkLost')
+        : latencyMs === null || latencyMs === undefined
+            ? t('mapJoystick.measuringLatency')
+            : t('mapJoystick.latency', {latency: latencyMs});
 
     return (
         <div style={{
@@ -69,6 +82,29 @@ export const JoystickOverlay = ({
                 backdropFilter: displayMode === 'visual' ? 'blur(8px)' : undefined,
                 WebkitBackdropFilter: displayMode === 'visual' ? 'blur(8px)' : undefined,
             }}>
+                {!isRecording && (
+                    <div
+                        role="status"
+                        aria-live="polite"
+                        style={{
+                            position: "absolute",
+                            left: "50%",
+                            bottom: "calc(100% + 7px)",
+                            transform: "translateX(-50%)",
+                            whiteSpace: "nowrap",
+                            padding: "3px 8px",
+                            borderRadius: 999,
+                            background: colors.bgElevated,
+                            border: `1px solid ${latencyTone}`,
+                            color: latencyTone,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
+                        }}
+                    >
+                        {latencyText}
+                    </div>
+                )}
                 <Joystick
                     size={size}
                     baseColor={baseColor}

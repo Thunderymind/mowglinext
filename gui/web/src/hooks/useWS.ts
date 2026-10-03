@@ -40,6 +40,39 @@ export const useWS = <T>(
     onInfo: (msg: string) => void,
     onData: (data: T, first?: boolean) => void,
 ) => {
+    const [latencyMs, setLatencyMs] = useState<number | null>(null);
+    const [heartbeatStale, setHeartbeatStale] = useState(false);
+    const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const lastHeartbeatRef = useRef(0);
+    const sendJsonRef = useRef<(message: unknown) => void>(() => {});
+    const recyclePublishSocketRef = useRef<() => void>(() => {});
+
+    const stopPublishHeartbeat = () => {
+        if (heartbeatTimerRef.current !== null) {
+            clearInterval(heartbeatTimerRef.current);
+            heartbeatTimerRef.current = null;
+        }
+    };
+
+    const startPublishHeartbeat = () => {
+        stopPublishHeartbeat();
+        if (!pubUriRef.current?.endsWith("/api/mowglinext/publish/joy")) return;
+        lastHeartbeatRef.current = Date.now();
+        setHeartbeatStale(false);
+        const sendHeartbeat = () => {
+            const now = Date.now();
+            if (now - lastHeartbeatRef.current > 3000) {
+                setHeartbeatStale(true);
+                stopPublishHeartbeat();
+                recyclePublishSocketRef.current();
+                return;
+            }
+            sendJsonRef.current({op: "ping", sent_at_ms: now});
+        };
+        sendHeartbeat();
+        heartbeatTimerRef.current = setInterval(sendHeartbeat, 1000);
+    };
+
     // Refs to always invoke the latest callbacks, avoiding stale closures.
     const onDataRef = useRef(onData);
     onDataRef.current = onData;
@@ -61,17 +94,24 @@ export const useWS = <T>(
     const pubFirstRef = useRef(true);
     const pubDecodeWarnedRef = useRef(false);
     const ws = useWebSocket(pubUri, {
-        share: true,
+        // This is an operator-control channel, not a shared read stream. A
+        // dedicated socket lets the application heartbeat tear it down and
+        // create a fresh connection when browser-level ping/pong looks alive
+        // but application frames have stopped flowing.
+        share: false,
         shouldReconnect: () => true,
         reconnectAttempts: Infinity,
         reconnectInterval: (attempt: number) => Math.min(1000 * Math.pow(2, attempt), 30000),
         onOpen: () => {
+            startPublishHeartbeat();
             onInfoRef.current("Stream connected");
         },
         onError: () => {
             onErrorRef.current(new Error("Stream error"));
         },
         onClose: () => {
+            stopPublishHeartbeat();
+            setHeartbeatStale(true);
             onErrorRef.current(new Error("Stream closed"));
         },
         onMessage: (e: MessageEvent) => {
@@ -85,13 +125,36 @@ export const useWS = <T>(
                 }
                 return;
             }
+
+            try {
+                const heartbeat = JSON.parse(decoded) as {op?: string; sent_at_ms?: number};
+                if (heartbeat.op === "pong" && typeof heartbeat.sent_at_ms === "number") {
+                    const now = Date.now();
+                    lastHeartbeatRef.current = now;
+                    setLatencyMs(Math.max(0, now - heartbeat.sent_at_ms));
+                    setHeartbeatStale(false);
+                    return;
+                }
+            } catch {
+                // Normal subscribe/publish payload; deliver it unchanged.
+            }
             const isFirst = pubFirstRef.current;
             if (isFirst) pubFirstRef.current = false;
             onDataRef.current(decoded as T, isFirst);
         },
     });
+    sendJsonRef.current = ws.sendJsonMessage;
+    recyclePublishSocketRef.current = () => {
+        const uri = pubUriRef.current;
+        if (uri === null) return;
+        setPubUri(null);
+        window.setTimeout(() => {
+            if (pubUriRef.current === uri) setPubUri(uri);
+        }, 50);
+    };
 
     const teardown = () => {
+        stopPublishHeartbeat();
         if (muxUnsubscribeRef.current) {
             muxUnsubscribeRef.current();
             muxUnsubscribeRef.current = null;
@@ -105,6 +168,8 @@ export const useWS = <T>(
             setPubUri(null);
             pubFirstRef.current = false;
         }
+        setLatencyMs(null);
+        setHeartbeatStale(false);
     };
 
     const start = (uri: string) => {
@@ -149,5 +214,12 @@ export const useWS = <T>(
         teardown();
     };
 
-    return {start, stop, sendJsonMessage: ws.sendJsonMessage};
+    return {
+        start,
+        stop,
+        sendJsonMessage: ws.sendJsonMessage,
+        latencyMs,
+        heartbeatStale,
+        readyState: ws.readyState,
+    };
 };
