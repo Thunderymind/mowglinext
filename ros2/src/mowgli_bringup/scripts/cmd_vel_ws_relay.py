@@ -33,8 +33,13 @@ _RELAY_PORT = 8766
 # malformed or hostile frame can't command extreme motor speeds.
 _MAX_LINEAR_MPS = 2.0
 _MAX_ANGULAR_RAD_S = 5.0
-_MANUAL_IDLE_PERIOD_S = 0.1
-_JOYSTICK_ACTIVE_S = 0.15
+_MANUAL_IDLE_PERIOD_S = 0.05
+# The browser repeats a held joystick command every 100 ms. 150 ms was too
+# tight for normal Wi-Fi jitter and made this timer inject a zero between two
+# valid commands, producing stop/start motion. Hold two missed repeats at full
+# speed, then ramp stale commands smoothly to zero at the existing hard limit.
+_JOYSTICK_RAMP_START_S = 0.2
+_JOYSTICK_ACTIVE_S = 0.35
 
 
 class CmdVelRelayNode(Node):
@@ -48,6 +53,7 @@ class CmdVelRelayNode(Node):
         self._pub = self.create_publisher(TwistStamped, "/cmd_vel_teleop", qos)
         self._manual_mowing = False
         self._last_joystick_command = 0.0
+        self._last_joystick_twist = None
         self._mode_sub = self.create_subscription(
             HighLevelStatus,
             "/behavior_tree_node/high_level_status",
@@ -55,7 +61,7 @@ class CmdVelRelayNode(Node):
             10,
         )
         self._manual_idle_timer = self.create_timer(
-            _MANUAL_IDLE_PERIOD_S, self._publish_manual_idle
+            _MANUAL_IDLE_PERIOD_S, self._publish_manual_command
         )
         self.get_logger().info("cmd_vel_ws_relay: publisher ready on /cmd_vel_teleop")
 
@@ -65,13 +71,38 @@ class CmdVelRelayNode(Node):
         msg.header.frame_id = "base_footprint"
         return msg
 
+    def _scaled_twist(self, source: TwistStamped, scale: float) -> TwistStamped:
+        msg = self._zero_twist()
+        msg.twist.linear.x = source.twist.linear.x * scale
+        msg.twist.linear.y = source.twist.linear.y * scale
+        msg.twist.linear.z = source.twist.linear.z * scale
+        msg.twist.angular.x = source.twist.angular.x * scale
+        msg.twist.angular.y = source.twist.angular.y * scale
+        msg.twist.angular.z = source.twist.angular.z * scale
+        return msg
+
     def _on_high_level_status(self, msg: HighLevelStatus) -> None:
         self._manual_mowing = msg.state == HighLevelStatus.HIGH_LEVEL_STATE_MANUAL_MOWING
+        if not self._manual_mowing:
+            # Never carry a movement command into a later manual session.
+            self._last_joystick_command = 0.0
+            self._last_joystick_twist = None
 
-    def _publish_manual_idle(self) -> None:
+    def _publish_manual_command(self) -> None:
         if not self._manual_mowing:
             return
-        if time.monotonic() - self._last_joystick_command <= _JOYSTICK_ACTIVE_S:
+
+        command_age = time.monotonic() - self._last_joystick_command
+        if self._last_joystick_twist is not None and command_age <= _JOYSTICK_ACTIVE_S:
+            # Bridge short browser/Wi-Fi scheduling gaps locally. This keeps
+            # the firmware's 200 ms cmd_vel watchdog fed without extending the
+            # accepted browser-command age beyond _JOYSTICK_ACTIVE_S.
+            if command_age <= _JOYSTICK_RAMP_START_S:
+                self._pub.publish(self._last_joystick_twist)
+            else:
+                ramp_duration = _JOYSTICK_ACTIVE_S - _JOYSTICK_RAMP_START_S
+                scale = (_JOYSTICK_ACTIVE_S - command_age) / ramp_duration
+                self._pub.publish(self._scaled_twist(self._last_joystick_twist, scale))
             return
 
         # The STM32 deliberately requires a fresh velocity authorization before
@@ -98,6 +129,7 @@ class CmdVelRelayNode(Node):
         msg.twist.angular.y = clamp(float(ang.get("y", 0.0)), _MAX_ANGULAR_RAD_S)
         msg.twist.angular.z = clamp(float(ang.get("z", 0.0)), _MAX_ANGULAR_RAD_S)
         self._last_joystick_command = time.monotonic()
+        self._last_joystick_twist = msg
         self._pub.publish(msg)
 
 
