@@ -270,10 +270,14 @@ func (m *Manager) MakeCustomPlan(ctx context.Context, requested map[string]strin
 		}
 		images[name] = image.Reference
 	}
+	healthIssues, err := m.preexistingHealthIssues(ctx, retainedHealthScope(previous, images))
+	if err != nil {
+		return Plan{}, err
+	}
 	m.mu.Lock()
 	locked = true
 	target := Deployment{ID: fmt.Sprintf("custom-%d", m.now().UnixNano()), FirmwareProtocol: protocol}
-	p := Plan{ID: fmt.Sprintf("plan-%d", m.now().UnixNano()), Target: target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous, CustomImages: custom}
+	p := Plan{ID: fmt.Sprintf("plan-%d", m.now().UnixNano()), Target: target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous, CustomImages: custom, PreexistingHealthIssues: healthIssues}
 	m.state.Plans = []Plan{p}
 	return p, m.save()
 }
