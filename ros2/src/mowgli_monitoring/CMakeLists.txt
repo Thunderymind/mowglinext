@@ -225,6 +225,11 @@ if(BUILD_TESTING)
     ${geometry_msgs_TARGETS}
     ${mowgli_interfaces_TARGETS}
   )
+
+  ament_add_ros_isolated_gtest(test_retained_map_publication
+    test/test_retained_map_publication.cpp
+  )
+  target_link_libraries(test_retained_map_publication mowgli_monitoring_core)
 endif()
 
 # ---------------------------------------------------------------------------

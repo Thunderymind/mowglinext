@@ -495,6 +495,8 @@ public:
 private:
   // ---- Initialisation -------------------------------------------------------
 
+  friend class RetainedMapPublicationTest;
+
   void declare_parameters();
   void create_mqtt_client();
   void create_subscriptions();
@@ -552,6 +554,11 @@ private:
   // ---- Timers: rate-limited publishes (on_timer) + network loop (net_timer_) -----
 
   void on_timer();
+
+  /// Keep a failed retained publication pending until the client accepts it.
+  void publish_pending_retained(const char* suffix,
+                                std::optional<std::string>& pending,
+                                std::string& last_accepted);
 
   // ---- Helpers --------------------------------------------------------------
 
@@ -649,6 +656,7 @@ private:
   rclcpp::Time last_areas_poll_{0, 0, RCL_ROS_TIME};
   bool areas_poll_in_flight_{false};
   std::string last_areas_json_{};
+  std::optional<std::string> pending_areas_json_;
   std::vector<AreaSummary> last_areas_{};
 
   // ---- Area boundary polling state -------------------------------------------
@@ -659,10 +667,12 @@ private:
   rclcpp::Time last_area_poll_{0, 0, RCL_ROS_TIME};
   bool area_poll_in_progress_{false};
   std::string last_area_boundary_json_{};
+  std::optional<std::string> pending_area_boundary_json_;
 
   // ---- Coverage path state --------------------------------------------------
 
   std::string last_coverage_path_json_{};
+  std::optional<std::string> pending_coverage_path_json_;
 };
 
 }  // namespace mowgli_monitoring
