@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
@@ -323,14 +324,14 @@ func TestWorkerDowngradeCannotDiscardComponentProvenance(t *testing.T) {
 		`{"version":"candidate","api":1,"state_schema":1}`,
 		`{"version":"candidate","api":1,"state_schema":3}`,
 		`{"version":"candidate","api":1,"state_schema":4}`,
-		`{"version":"wrong","api":1,"state_schema":5}`,
-		`{"version":"candidate","api":2,"state_schema":5}`,
+		fmt.Sprintf(`{"version":"wrong","api":1,"state_schema":%d}`, StateSchema),
+		fmt.Sprintf(`{"version":"candidate","api":2,"state_schema":%d}`, StateSchema),
 	} {
 		if validateWorkerProbe([]byte(probe), "candidate") == nil {
 			t.Fatal("accepted incompatible worker", probe)
 		}
 	}
-	if err := validateWorkerProbe([]byte(`{"version":"candidate","api":1,"state_schema":5}`), "candidate"); err != nil {
+	if err := validateWorkerProbe([]byte(fmt.Sprintf(`{"version":"candidate","api":1,"state_schema":%d}`, StateSchema)), "candidate"); err != nil {
 		t.Fatal(err)
 	}
 }

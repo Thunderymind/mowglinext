@@ -132,6 +132,14 @@ shown for review; a date alone never proves that source code is newer.
 
 Verification reports the failing component or check, such as an unhealthy GPS
 container, missing LiDAR scans, an unexpected image, or incompatible firmware.
+When only an optional component is already unhealthy, review shows its exact
+service/check identity and offers an explicit forced installation. The updater
+samples those checks again immediately before maintenance and accepts after the
+update only the same failures which still existed at that point. A recovered
+check loses its exception; a new failure on another component, or a different
+failure on the same component, still triggers rollback. Core GUI/ROS runtime,
+image identity, mower readiness, maintenance and firmware checks are never
+forceable through this path.
 If activation fails, that reason remains in the job/history after rollback.
 Rollback still verifies the restored Compose definition, images, containers,
 application data, firmware compatibility, and core mower safety before releasing
@@ -710,7 +718,7 @@ complete published ARM64 deployment remain required before field rollout.
 ### Journal compatibility
 
 The HTTP API remains version 1 with explicit feature capabilities (`release-compose`
-adds topology planning; `custom-images` adds explicit image selection; `external-images` supports release-approved upstream images; `firmware-protocol-change` accepts `allow_firmware_protocol_change` on plans and `firmware_protocol_acknowledged` on apply). Journal schema 5 preserves external-image type and approved upstream version alongside custom-image provenance and topology recovery payloads; a plan's optional `firmware_protocol_change` is an additive field older workers ignore.
+adds topology planning; `custom-images` adds explicit image selection; `external-images` supports release-approved upstream images; `firmware-protocol-change` accepts `allow_firmware_protocol_change` on plans and `firmware_protocol_acknowledged` on apply; `preexisting-health` adds reviewed optional-component health exceptions). Journal schema 5 preserves external-image type and approved upstream version alongside custom-image provenance and topology recovery payloads. The optional health fields are additive: older workers ignore them and retain strict verification rather than accepting an exception.
 This worker reads schema 1/2/3/4 journals and writes schema 5 on mutation, preserving
 history. Older workers reject schema 5. Self-update probes require schema 5 and
 refuse unsafe worker downgrades. Existing workers using earlier journal schemas require an installer/bootstrap upgrade before using this extension. Deployment schemas 2 and 3 require the Compose bundle; schema 3 adds managed external images and is rejected by older workers.
