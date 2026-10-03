@@ -155,6 +155,41 @@ seen, so that particular capture mechanism must not be treated as proof that
 the relay was idle. Prefer the persistent session monitor or an unbuffered
 subscriber for the next quantitative test.
 
+### Local-only manual command isolation
+
+Use this to distinguish browser/Wi-Fi delivery faults from Pi/USB/STM32 or
+drivetrain faults. The command client runs inside `mowgli-ros2` and connects
+directly to the relay on `ws://127.0.0.1:8766`; Wi-Fi is not in the command
+path. The wrapper uses blade-off `RECORDING`, captures a session timeline,
+sends zero frames, cancels the recording, and always issues high-level STOP.
+
+Install the two scripts from `ros2/scripts/diagnostics/` together on the robot.
+The prepared field copy is:
+
+```text
+/home/mower/hil-evidence/tools/local-manual-drive/
+```
+
+While docked, only run the non-moving gate check. A refusal because charging
+is true is the expected result:
+
+```bash
+./run_local_manual_drive_test.sh --preflight-only
+```
+
+After the operator has moved the robot clear of the dock and confirmed that it
+is on the mowing surface, an explicitly armed straight test is:
+
+```bash
+./run_local_manual_drive_test.sh --armed --linear 0.08 --angular 0 --duration 15
+```
+
+The wrapper refuses unless the robot is `IDLE`, not charging, blade/ESC off,
+blade rpm zero, no emergency, and no boundary violation. It limits duration to
+30 seconds, linear speed to 0.20 m/s and angular speed to 1.0 rad/s. Evidence
+is retained in `/home/mower/hil-evidence/local-manual-drive/`; the full monitor
+JSONL is copied out of the container during cleanup.
+
 ## GUI map and reconnect checks
 
 The important logical GUI state topics are `path`, `plan`, `map`,
