@@ -216,6 +216,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_mqtt_map_poll mowgli_monitoring_core)
 
+  ament_add_ros_isolated_gtest(test_configured_battery
+    test/test_configured_battery.cpp
+  )
+  target_link_libraries(test_configured_battery mowgli_monitoring_core)
+
   target_link_libraries(test_mqtt_bridge
     mowgli_monitoring_core
   )
@@ -229,6 +234,11 @@ if(BUILD_TESTING)
     ${geometry_msgs_TARGETS}
     ${mowgli_interfaces_TARGETS}
   )
+
+  ament_add_ros_isolated_gtest(test_retained_map_publication
+    test/test_retained_map_publication.cpp
+  )
+  target_link_libraries(test_retained_map_publication mowgli_monitoring_core)
 endif()
 
 # ---------------------------------------------------------------------------

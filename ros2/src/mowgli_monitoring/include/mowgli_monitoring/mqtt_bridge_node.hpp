@@ -345,7 +345,9 @@ public:
   // DiagnosticsNode's check_*() methods (diagnostics_node.hpp).
 
   static std::string serialise_status(const mowgli_interfaces::msg::Status& msg);
-  static std::string serialise_power(const mowgli_interfaces::msg::Power& msg);
+  static std::string serialise_power(const mowgli_interfaces::msg::Power& msg,
+                                     double empty_voltage = 24.0,
+                                     double full_voltage = 28.0);
   static std::string serialise_emergency(const mowgli_interfaces::msg::Emergency& msg);
   static std::string serialise_position(const nav_msgs::msg::Odometry& msg);
 
@@ -497,6 +499,7 @@ private:
   // ---- Initialisation -------------------------------------------------------
 
   friend class MqttMapPollTest;
+  friend class RetainedMapPublicationTest;
   using AreaClient = rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>;
   struct MapPollState
   {
@@ -581,6 +584,11 @@ private:
 
   void on_timer();
 
+  /// Keep a failed retained publication pending until the client accepts it.
+  void publish_pending_retained(const char* suffix,
+                                std::optional<std::string>& pending,
+                                std::string& last_accepted);
+
   // ---- Helpers --------------------------------------------------------------
 
   /// Construct the full MQTT topic: "<prefix>/<suffix>".
@@ -632,6 +640,8 @@ private:
   double dock_pose_x_{0.0};
   double dock_pose_y_{0.0};
   double dock_pose_yaw_{0.0};
+  double battery_empty_voltage_{24.0};
+  double battery_full_voltage_{28.0};
 
   // Tracks MQTT connection edges so discovery is refreshed after reconnect.
   bool mqtt_was_connected_{false};
@@ -678,6 +688,7 @@ private:
   bool areas_poll_in_flight_{false};
   MapPollState areas_poll_;
   std::string last_areas_json_{};
+  std::optional<std::string> pending_areas_json_;
   std::vector<AreaSummary> last_areas_{};
 
   // ---- Area boundary polling state -------------------------------------------
@@ -694,10 +705,12 @@ private:
   std::function<std::chrono::steady_clock::time_point()> map_poll_now_{
       std::chrono::steady_clock::now};
   std::string last_area_boundary_json_{};
+  std::optional<std::string> pending_area_boundary_json_;
 
   // ---- Coverage path state --------------------------------------------------
 
   std::string last_coverage_path_json_{};
+  std::optional<std::string> pending_coverage_path_json_;
 };
 
 }  // namespace mowgli_monitoring

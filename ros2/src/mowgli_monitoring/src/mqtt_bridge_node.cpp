@@ -34,6 +34,7 @@
 #include <string>
 #include <utility>
 
+#include "mowgli_monitoring/battery_percentage.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -559,6 +560,8 @@ void MqttBridgeNode::declare_parameters()
   mqtt_client_id_ = declare_parameter<std::string>("mqtt_client_id", "mowgli_ros2");
   topic_prefix_ = declare_parameter<std::string>("mqtt_topic_prefix", "mowgli");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
+  battery_empty_voltage_ = declare_parameter<double>("battery_empty_voltage", 24.0);
+  battery_full_voltage_ = declare_parameter<double>("battery_full_voltage", 28.0);
   use_ssl_ = declare_parameter<bool>("use_ssl", false);
   home_assistant_discovery_enabled_ =
       declare_parameter<bool>("home_assistant_discovery_enabled", false);
@@ -845,12 +848,8 @@ void MqttBridgeNode::on_coverage_path(nav_msgs::msg::Path::ConstSharedPtr msg)
   // no rate limiting needed. Only republish (retained) when the plan actually changed,
   // matching <prefix>/area_boundary's own poll-but-only-republish-on-change pattern.
   const std::string json = serialise_coverage_path(*msg);
-  if (json == last_coverage_path_json_)
-  {
-    return;
-  }
-  last_coverage_path_json_ = json;
-  mqtt_client_->publish(full_topic("coverage_path"), json, /*retain=*/true);
+  pending_coverage_path_json_ = json;
+  publish_pending_retained("coverage_path", pending_coverage_path_json_, last_coverage_path_json_);
 }
 
 void MqttBridgeNode::on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -1105,14 +1104,14 @@ void MqttBridgeNode::on_areas_response(uint32_t index,
 void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& areas)
 {
   const std::string json = serialise_areas(areas);
-  if (json == last_areas_json_)
-  {
-    return;
-  }
-  last_areas_json_ = json;
+  // Discovery describes the latest desired map, independently of whether
+  // the retained /areas submission succeeded. A -> failed B -> A must also
+  // restore discovery's buttons to A after discovery B was accepted.
+  const bool changed = json != serialise_areas(last_areas_);
   last_areas_ = areas;
-  mqtt_client_->publish(full_topic("areas"), json, /*retain=*/true);
-  if (home_assistant_discovery_enabled_)
+  pending_areas_json_ = json;
+  publish_pending_retained("areas", pending_areas_json_, last_areas_json_);
+  if (home_assistant_discovery_enabled_ && changed)
   {
     // Area buttons are part of the same device-discovery document. Refresh it
     // when the map's mowable area list changes so Home Assistant adds, renames
@@ -1124,6 +1123,22 @@ void MqttBridgeNode::publish_areas_if_changed(const std::vector<AreaSummary>& ar
 // ---------------------------------------------------------------------------
 // Timers: rate-limited publishes (on_timer) + network loop (net_timer_)
 // ---------------------------------------------------------------------------
+
+void MqttBridgeNode::publish_pending_retained(const char* suffix,
+                                              std::optional<std::string>& pending,
+                                              std::string& last_accepted)
+{
+  if (!pending.has_value())
+  {
+    return;
+  }
+  if (*pending == last_accepted ||
+      mqtt_client_->publish(full_topic(suffix), *pending, /*retain=*/true))
+  {
+    last_accepted = *pending;
+    pending.reset();
+  }
+}
 
 bool MqttBridgeNode::expire_map_poll(bool& active,
                                      MapPollState& poll,
@@ -1179,6 +1194,12 @@ void MqttBridgeNode::on_timer()
     }
   }
 
+  // Map snapshots can arrive only once (notably the latched coverage plan).
+  // Retry failed submissions without needing another ROS message or map poll.
+  publish_pending_retained("coverage_path", pending_coverage_path_json_, last_coverage_path_json_);
+  publish_pending_retained("areas", pending_areas_json_, last_areas_json_);
+  publish_pending_retained("area_boundary", pending_area_boundary_json_, last_area_boundary_json_);
+
   // A Home Assistant birth message is received while spin_once() is driving
   // the MQTT client. Publish only after spin_once() has returned completely,
   // then let the next timer tick flush the queued QoS message. The same path
@@ -1230,7 +1251,15 @@ void MqttBridgeNode::on_timer()
   flush(pending_odom_, last_odom_publish_, "position", serialise_position, /*retain=*/false);
   flush(pending_gps_, last_gps_publish_, "gps", serialise_gps, /*retain=*/false);
   flush(pending_status_, last_status_publish_, "status", serialise_status, /*retain=*/true);
-  flush(pending_power_, last_power_publish_, "power", serialise_power, /*retain=*/true);
+  flush(
+      pending_power_,
+      last_power_publish_,
+      "power",
+      [this](const mowgli_interfaces::msg::Power& power)
+      {
+        return serialise_power(power, battery_empty_voltage_, battery_full_voltage_);
+      },
+      /*retain=*/true);
   flush(pending_pose_, last_pose_publish_, "pose", serialise_pose, /*retain=*/false);
   flush(pending_gnss_status_,
         last_gnss_status_publish_,
@@ -1368,14 +1397,8 @@ void MqttBridgeNode::finish_area_boundary_poll(
                                 datum_lat_,
                                 datum_lon_,
                                 make_dock_pose(dock_pose_x_, dock_pose_y_, dock_pose_yaw_));
-  if (json == last_area_boundary_json_)
-  {
-    // Retained topic: republish only when the geometry actually changed,
-    // not every ~10s poll tick.
-    return;
-  }
-  last_area_boundary_json_ = json;
-  mqtt_client_->publish(full_topic("area_boundary"), json, /*retain=*/true);
+  pending_area_boundary_json_ = json;
+  publish_pending_retained("area_boundary", pending_area_boundary_json_, last_area_boundary_json_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1420,14 +1443,12 @@ std::string MqttBridgeNode::serialise_status(const mowgli_interfaces::msg::Statu
   return std::string{buf};
 }
 
-std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg)
+std::string MqttBridgeNode::serialise_power(const mowgli_interfaces::msg::Power& msg,
+                                            double empty_voltage,
+                                            double full_voltage)
 {
-  // Derive battery percentage same as diagnostics (4S LiPo 12.0–16.8V range).
-  constexpr double kVFull = 16.8;
-  constexpr double kVEmpty = 12.0;
   const double voltage = static_cast<double>(msg.v_battery);
-  double pct = 100.0 * (voltage - kVEmpty) / (kVFull - kVEmpty);
-  pct = std::max(0.0, std::min(100.0, pct));
+  const double pct = battery_percentage(voltage, empty_voltage, full_voltage);
 
   char buf[256];
   std::snprintf(buf,
