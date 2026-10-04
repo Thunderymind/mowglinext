@@ -56,10 +56,16 @@ export async function installMockBackend(page: Page, scenario: Scenario, options
 
     // ---- Multiplex WebSocket (msgpack binary frames) ------------------------
     const topics = scenario.topics ?? {};
+    const topicSequences = scenario.topicSequences ?? {};
     await page.routeWebSocket(/\/api\/mowglinext\/multiplex/, (ws) => {
         let statusTimer: ReturnType<typeof setInterval> | undefined;
+        const topicTimers = new Map<string, ReturnType<typeof setInterval>>();
         let sequence = 1;
-        ws.onClose(() => { clearInterval(statusTimer); ws.close(); });
+        ws.onClose(() => {
+            clearInterval(statusTimer);
+            topicTimers.forEach(clearInterval);
+            ws.close();
+        });
         // Mock mode: no upstream server. We answer subscribe ops directly.
         ws.onMessage((message) => {
             if (scenario.silentSocket) return;
@@ -70,10 +76,18 @@ export async function installMockBackend(page: Page, scenario: Scenario, options
                 return;
             }
             if (op.op !== "subscribe" || !op.topic) return;
-            const data = topics[op.topic];
+            const values = topicSequences[op.topic];
+            const data = values?.[0] ?? topics[op.topic];
             if (data === undefined) return;
             // Wire format matches MultiplexRoute: msgpack({topic, data}).
             ws.send(pack({topic: op.topic, data}));
+            if (values && values.length > 1 && options && !topicTimers.has(op.topic)) {
+                let index = 1;
+                topicTimers.set(op.topic, setInterval(() => {
+                    ws.send(pack({topic: op.topic, data: values[index % values.length]}));
+                    index++;
+                }, options.liveStatusIntervalMs));
+            }
             if (op.topic === 'status' && options && !statusTimer) {
                 statusTimer = setInterval(() => ws.send(pack({topic: 'status', data: {...data as object, stamp: {sec: ++sequence, nanosec: 0}}})), options.liveStatusIntervalMs);
             }
