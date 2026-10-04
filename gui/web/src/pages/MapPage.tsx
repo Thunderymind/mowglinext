@@ -534,48 +534,24 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 newFeatures["dock"] = new DockFeatureBase(dock_lonlat, map.dock_heading);
             }
         }
-        if (path?.poses) {
-            // Coverage plan: the full F2C route (headland rings + every swath)
-            // for the current area (/coverage/full_plan, a nav_msgs/Path).
-            // Execution is swath-by-swath, but this shows the whole plan.
-            // Rendered green so it reads distinctly from the transit plan below.
-            //
-            // full_path is the CONCATENATION of the drivable sub-paths; the
-            // jump between two sub-paths is never driven directly (the BT
-            // bridges it with an obstacle-avoiding Nav2 transit), so break the
-            // polyline at large gaps — drawing them as one line paints fake
-            // straight "routes" through the very obstacles the sub-path split
-            // exists to avoid.
-            const SUBPATH_GAP_M = 0.75;
-            let segment: Position[] = [];
-            let segmentIdx = 0;
-            let prev: { x: number; y: number } | null = null;
-            const flushSegment = () => {
+        if (path?.xy && path.subpath_offsets?.length) {
+            // The backend sends interleaved float32 XY and exact point-index
+            // boundaries, so no giant Path/pose objects or gap heuristics.
+            const offsets = path.subpath_offsets;
+            for (let segmentIdx = 0; segmentIdx + 1 < offsets.length; segmentIdx++) {
+                const start = offsets[segmentIdx], end = offsets[segmentIdx + 1];
+                if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > path.xy.length / 2 || end - start < 2) continue;
+                const segment: Position[] = [];
+                for (let i = start; i < end; i++) {
+                    const x = path.xy[i * 2], y = path.xy[i * 2 + 1];
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+                    segment.push(transpose(offsetX, offsetY, datum, y, x));
+                }
                 if (segment.length > 1) {
-                    const feature = new PathFeature(
-                        `coverage-path-${segmentIdx}`, segment, LAYER_COLORS.coveragePath, 2);
-                    newFeatures[feature.id] = feature
-                    segmentIdx += 1;
+                    const feature = new PathFeature(`coverage-path-${segmentIdx}`, segment, LAYER_COLORS.coveragePath, 2);
+                    newFeatures[feature.id] = feature;
                 }
-                segment = [];
-            };
-            for (const pose of path.poses) {
-                const x = pose.pose?.position?.x;
-                const y = pose.pose?.position?.y;
-                // A pose without coordinates cannot be drawn — break the
-                // polyline there rather than feeding NaN into transpose().
-                if (x === undefined || y === undefined) {
-                    flushSegment();
-                    prev = null;
-                    continue;
-                }
-                if (prev && Math.hypot(x - prev.x, y - prev.y) > SUBPATH_GAP_M) {
-                    flushSegment();
-                }
-                segment.push(transpose(offsetX, offsetY, datum, y, x));
-                prev = { x, y };
             }
-            flushSegment();
         }
         if (plan?.poses) {
             const coordinates = plan.poses.flatMap((pose) => {

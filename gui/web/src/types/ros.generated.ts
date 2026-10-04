@@ -159,6 +159,12 @@ export type CoveragePath = {
   path?: Path;
 };
 
+export type CoveragePlanPreview = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  xy?: number[];
+  subpath_offsets?: number[];
+};
+
 export type CoverageSession = {
   session_active?: boolean;
   current_area?: number;
