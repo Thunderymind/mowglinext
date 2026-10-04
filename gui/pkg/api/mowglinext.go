@@ -27,6 +27,26 @@ import (
 // block a delivery goroutine forever; on timeout the connection is closed.
 const wsWriteTimeout = 5 * time.Second
 
+func compactCoveragePreview(obj interface{}) {
+	message, ok := obj.(map[string]interface{})
+	if !ok {
+		return
+	}
+	coordinates, ok := message["xy"].([]interface{})
+	if !ok {
+		return
+	}
+	compact := make([]float32, len(coordinates))
+	for i, coordinate := range coordinates {
+		value, ok := coordinate.(float64)
+		if !ok {
+			return
+		}
+		compact[i] = float32(value)
+	}
+	message["xy"] = compact
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize: 1024,
 	// Larger write buffer so big frames (OccupancyGrid, /scan) aren't chopped
@@ -383,6 +403,11 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// JSON numbers arrive as float64, including each OccupancyGrid
 			// cell. Only compact numbers that the browser decodes as Number:
 			// MessagePack int64/uint64 decode as BigInt in msgpackr.
+			// Keep the compact plan's coordinate array as MessagePack float32
+			// (generic JSON decoding otherwise widens every number to float64).
+			if topic == "path" {
+				compactCoveragePreview(obj)
+			}
 			var payload bytes.Buffer
 			encoder := msgpack.NewEncoder(&payload)
 			encoder.UseCompactInts(true)

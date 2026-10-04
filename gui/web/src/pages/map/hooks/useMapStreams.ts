@@ -4,6 +4,7 @@ import { useWS } from "../../../hooks/useWS.ts";
 import { useHighLevelStatus } from "../../../hooks/useHighLevelStatus.ts";
 import {
     AbsolutePose,
+    CoveragePlanPreview,
     LaserScan,
     Map as MapType,
     ObstacleArray,
@@ -60,7 +61,7 @@ export function useMapStreams({
     robotPoseRef,
 }: UseMapStreamsOptions) {
     const [map, setMap] = useState<MapType | undefined>(undefined);
-    const [path, setPath] = useState<Path | undefined>(undefined);
+    const [path, setPath] = useState<CoveragePlanPreview | undefined>(undefined);
     const [plan, setPlan] = useState<Path | undefined>(undefined);
     const [lidarCollection, setLidarCollection] = useState<GeoJSON.FeatureCollection>({
         type: "FeatureCollection",
@@ -154,7 +155,7 @@ export function useMapStreams({
         () => {
         },
         (e) => {
-            const parse = (e as any) as Path;
+            const parse = (e as any) as CoveragePlanPreview;
             setPath(parse);
         }
     );
