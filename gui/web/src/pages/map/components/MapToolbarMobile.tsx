@@ -23,11 +23,9 @@ import {
     MinusSquareOutlined,
     PlayCircleOutlined,
     HomeOutlined,
-    WarningOutlined,
     PlusOutlined,
     BorderOutlined,
     AimOutlined,
-    ForwardOutlined,
     CaretRightOutlined,
     PauseOutlined,
     ThunderboltOutlined,
@@ -106,7 +104,6 @@ interface MapToolbarMobileProps {
     onEmergencyOn?: () => Promise<void>;
     onEmergencyOff?: () => Promise<void>;
     onAreaRecording?: () => Promise<void>;
-    onMowNextArea?: () => Promise<void>;
     onContinueOrPause?: () => Promise<void>;
     onBladeForward?: () => Promise<void>;
     onBladeBackward?: () => Promise<void>;
@@ -131,7 +128,7 @@ export const MapToolbarMobile = ({
     mowerAppearanceId = "urdf", onMowerAppearanceChange = () => {},
     dockAppearanceId = "marker", onDockAppearanceChange = () => {},
     onStart, onHome, onEmergencyOn, onEmergencyOff,
-    onAreaRecording, onMowNextArea, onContinueOrPause,
+    onAreaRecording, onContinueOrPause,
     onBladeForward, onBladeBackward, onBladeOff,
 }: MapToolbarMobileProps) => {
     const {colors, displayMode} = useThemeMode();
@@ -190,9 +187,9 @@ export const MapToolbarMobile = ({
         height: 60,
         borderRadius: 18,
         fontWeight: 700,
-        background: emergency ? colors.bgElevated : colors.danger,
+        background: colors.danger,
         borderColor: colors.danger,
-        color: emergency ? colors.danger : colors.text,
+        color: colors.bgBase,
         boxShadow: colors.glassShadow,
     };
 
@@ -214,56 +211,61 @@ export const MapToolbarMobile = ({
     };
 
     const dataMenuItems: MenuProps["items"] = [
-        {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? t("mapToolbarMobile.darkMap") : t("mapToolbarMobile.satellite")},
-        ...(onToggleObstacleClearance
-            ? [{
-                key: "obstacleClearance",
-                icon: <ExpandOutlined />,
-                label: showObstacleClearance ? t("mapToolbarMobile.hideObstacleClearance") : t("mapToolbarMobile.showObstacleClearance"),
-            } satisfies NonNullable<MenuProps["items"]>[number]]
-            : []),
-        {
-            key: "mowerAppearance",
-            label: t("mapToolbar.mowerAppearance"),
-            children: Object.values(MOWER_APPEARANCES).map((appearance) => ({
-                key: `mowerAppearance:${appearance.id}`,
-                icon: appearance.id === mowerAppearanceId ? <CheckOutlined /> : undefined,
-                label: t(appearance.labelKey),
-            })),
-        },
-        {
-            key: "dockAppearance",
-            label: t("mapToolbar.dockAppearance"),
-            children: getAvailableDockAppearances(mowerAppearanceId).map((appearance) => ({
-                    key: `dockAppearance:${appearance.id}`,
-                    icon: appearance.id === dockAppearanceId ? <CheckOutlined /> : undefined,
+        ...(emergency ? [{key: "emergencyOff", label: t("mapToolbarMobile.emergencyOff")}]: []),
+        {type: "group", label: t("mapToolbar.displayGroup"), children: [
+            {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? t("mapToolbarMobile.darkMap") : t("mapToolbarMobile.satellite")},
+            ...(onToggleObstacleClearance
+                ? [{
+                    key: "obstacleClearance",
+                    icon: <ExpandOutlined />,
+                    label: showObstacleClearance ? t("mapToolbarMobile.hideObstacleClearance") : t("mapToolbarMobile.showObstacleClearance"),
+                } satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
+            {
+                key: "mowerAppearance",
+                label: t("mapToolbar.mowerAppearance"),
+                children: Object.values(MOWER_APPEARANCES).map((appearance) => ({
+                    key: `mowerAppearance:${appearance.id}`,
+                    icon: appearance.id === mowerAppearanceId ? <CheckOutlined /> : undefined,
                     label: t(appearance.labelKey),
                 })),
-        },
-        {type: "divider"},
-        {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbarMobile.areaRecording")},
-        {key: "mowNext", icon: <ForwardOutlined />, label: t("mapToolbarMobile.mowNextArea")},
-        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
-        {type: "divider"},
-        {key: "bladeForward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeForward")},
-        {key: "bladeBackward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeBackward")},
-        {key: "bladeOff", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeOff"), danger: true},
-        {type: "divider"},
-        {key: "backup", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.backupMap")},
-        {key: "restore", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.restoreMap")},
-        {key: "importOpenMower", icon: <ImportOutlined />, label: t("mapToolbarMobile.importFromOpenMower")},
-        {
-            key: "resetMowingProgress",
-            icon: <DeleteOutlined />,
-            label: t("resetMowingProgress.action"),
-            danger: true,
-            disabled: resetDisabled,
-        },
-        {type: "divider"},
-        {key: "download", icon: <DownloadOutlined />, label: t("mapToolbarMobile.downloadGeojson")},
-        ...(editMap
-            ? [{key: "upload", icon: <UploadOutlined />, label: t("mapToolbarMobile.uploadGeojson")} satisfies NonNullable<MenuProps["items"]>[number]]
-            : []),
+            },
+            {
+                key: "dockAppearance",
+                label: t("mapToolbar.dockAppearance"),
+                children: getAvailableDockAppearances(mowerAppearanceId).map((appearance) => ({
+                        key: `dockAppearance:${appearance.id}`,
+                        icon: appearance.id === dockAppearanceId ? <CheckOutlined /> : undefined,
+                        label: t(appearance.labelKey),
+                    })),
+            },
+        ]},
+        {type: "group", label: t("mapToolbar.motionGroup"), children: [
+            {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbarMobile.areaRecording")},
+            {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
+        ]},
+        {type: "group", label: t("mapToolbar.bladeGroup"), children: [
+            {key: "bladeForward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeForward")},
+            {key: "bladeBackward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeBackward")},
+            {key: "bladeOff", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeOff"), danger: true},
+        ]},
+        {type: "group", label: t("mapToolbar.filesGroup"), children: [
+            {key: "backup", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.backupMap")},
+            {key: "restore", icon: <DatabaseOutlined />, label: t("mapToolbarMobile.restoreMap")},
+            {key: "importOpenMower", icon: <ImportOutlined />, label: t("mapToolbarMobile.importFromOpenMower")},
+            {
+                key: "resetMowingProgress",
+                icon: <DeleteOutlined />,
+                label: t("resetMowingProgress.action"),
+                danger: true,
+                disabled: resetDisabled,
+            },
+            {type: "divider"},
+            {key: "download", icon: <DownloadOutlined />, label: t("mapToolbarMobile.downloadGeojson")},
+            ...(editMap
+                ? [{key: "upload", icon: <UploadOutlined />, label: t("mapToolbarMobile.uploadGeojson")} satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
+        ]},
     ];
 
     const handleMoreClick: MenuProps["onClick"] = ({key}: MenuInfo) => {
@@ -279,10 +281,10 @@ export const MapToolbarMobile = ({
         }
 
         switch (key) {
+            case "emergencyOff": safeCall(onEmergencyOff); break;
             case "satellite": onToggleSatellite(); break;
             case "obstacleClearance": onToggleObstacleClearance?.(); break;
             case "areaRecording": safeCall(onAreaRecording); break;
-            case "mowNext": safeCall(onMowNextArea); break;
             case "continueOrPause": safeCall(onContinueOrPause); break;
             case "bladeForward": safeCall(onBladeForward); break;
             case "bladeBackward": safeCall(onBladeBackward); break;
@@ -321,16 +323,15 @@ export const MapToolbarMobile = ({
     };
 
     // Always-present, dominant, separated emergency control. Rendered outside
-    // the scrolling cluster in its own fixed corner. Keeps the exact emergency
-    // on/off commands — only the styling/label/placement changed.
+    // the scrolling cluster in its own fixed corner. Always issues the stop command; release is a separate named menu item.
     const stopButton = (
         <AsyncButton
             danger
-            type={emergency ? "default" : "primary"}
-            icon={<WarningOutlined />}
-            onAsyncClick={(emergency ? onEmergencyOff : onEmergencyOn)!}
-            aria-label={emergency ? t("mapToolbarMobile.emergencyOff") : t("mapToolbarMobile.emergencyOn")}
-            style={stopButtonStyle}
+            type="primary"
+            className="emergency-stop"
+            onAsyncClick={onEmergencyOn!}
+            aria-label={t("mapToolbarMobile.emergencyOn")}
+            style={{...stopButtonStyle, padding: 0}}
         >
             {t("mapToolbarMobile.stop")}
         </AsyncButton>
@@ -552,7 +553,7 @@ export const MapToolbarMobile = ({
                 />
 
                 <Dropdown
-                    menu={{items: dataMenuItems, onClick: handleMoreClick}}
+                    menu={{items: dataMenuItems, onClick: handleMoreClick, style: {maxHeight: "70dvh", overflowY: "auto"}}}
                     trigger={["click"]}
                     placement="topRight"
                 >

@@ -1,3 +1,4 @@
+import {liveAreaLabel} from "../utils/areaLabel.ts";
 import type {ReactNode} from "react";
 import {useMemo} from "react";
 import {App, Button} from "antd";
@@ -59,6 +60,7 @@ function useMowerData() {
   const gnss = useGnssStatus();
   const emergency = useEmergency();
   const {settings} = useSettings();
+  const areaMap = useMowingMap();
 
   const isCharging = highLevelStatus.is_charging ?? status.is_charging ?? false;
   const isEmergency = highLevelStatus.emergency ?? emergency.active_emergency ?? false;
@@ -106,7 +108,7 @@ function useMowerData() {
     coverageSessionActive: coverageSession.session_active ?? false,
     currentAreaIndex: highLevelStatus.current_area ?? null,
     currentArea: highLevelStatus.current_area != null
-      ? t('mowgliNextPage.areaN', {number: highLevelStatus.current_area + 1})
+      ? liveAreaLabel(t, areaMap, highLevelStatus.current_area)
       : undefined,
     // Firmware <-> image compatibility (from the hardware_bridge handshake).
     // null until the first Status arrives, so the health card stays quiet

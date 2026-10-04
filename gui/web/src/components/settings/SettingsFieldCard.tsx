@@ -98,7 +98,7 @@ export const SettingsFieldCard: React.FC<SettingsFieldCardProps> = ({
                 <Row gutter={[16, 0]}>
                     {group.fields.map((field) => (
                         <Col xs={24} sm={12} md={8} key={field.key}>
-                            <Form.Item
+                            <Form.Item data-setting-key={field.key}
                                 label={
                                     <SettingFieldLabel
                                         settingKey={field.key}

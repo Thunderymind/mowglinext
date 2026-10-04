@@ -23,6 +23,8 @@ const DEFAULT_REST: Record<string, unknown> = {
     "/api/containers": {containers: []},
     "/api/system/updates": {channel: 'dev', state: 'not_checked', components: []},
     "/api/system/updates/changelog": {features: [], fixes: [], other: 0, total: 0, truncated: false, url: "https://github.com/mowglinext/mowglinext/compare"},
+    "/api/notifications/settings": {enabled: false, channel: "ntfy", language: "en", events: {}, eventKinds: [], channels: ["ntfy"]},
+    "/api/notifications/status": {enabled: false, configured: false, channel: "ntfy", sentCount: 0, failedCount: 0},
     "/api/params": {parameters: []},
     "/api/settings/gnss/runtime-config": {device: "", baud: 0},
 };

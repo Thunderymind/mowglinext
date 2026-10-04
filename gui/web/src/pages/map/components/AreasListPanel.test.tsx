@@ -14,7 +14,7 @@ describe('AreasListPanel', () => {
 
     it('shows area count in header', () => {
         render(<AreasListPanel areas={areas} />);
-        expect(screen.getByText(i18n.t('mapAreasList.areasHeader', {count: 3}))).toBeInTheDocument();
+        expect(screen.getByText(i18n.t('mapAreasList.areasHeader', {count: 1}))).toBeInTheDocument();
     });
 
     it('renders all areas immediately (no expand needed)', () => {

@@ -53,7 +53,7 @@ const NAV: NavItem[] = [
   {key: '/fleet',       labelKey: 'nav.fleet',                                        icon: Users,    showInBottom: false},
   {key: '/settings',    labelKey: 'nav.settings',                                     icon: Settings, showInBottom: false},
   {key: '/logs',        labelKey: 'nav.logs',                                         icon: Terminal, showInBottom: false},
-  {key: '/onboarding',  labelKey: 'nav.onboarding',                                   icon: Rocket,   showInBottom: false},
+  {key: '/onboarding',  labelKey: 'nav.onboarding', shortLabelKey: 'nav.setupShort',                                   icon: Rocket,   showInBottom: false},
 ];
 
 // Title falls back to the nav label key where they coincide; statistics has a
@@ -350,7 +350,7 @@ function DesktopSideRail({items, activePath, onNavigate}: RailProps) {
 
       <LayoutGroup>
         <nav style={{display: 'flex', flexDirection: 'column', gap: 4, padding: '0 12px', flex: 1, overflowY: 'auto'}}>
-          {items.map(({key, labelKey, icon: Icon}) => {
+          {items.map(({key, labelKey, shortLabelKey, icon: Icon}) => {
             const isActive = key === activePath;
             return (
               <button
@@ -387,7 +387,7 @@ function DesktopSideRail({items, activePath, onNavigate}: RailProps) {
                   />
                 )}
                 <Icon size={18} strokeWidth={isActive ? 2.4 : 2}/>
-                <span>{t(labelKey)}</span>
+                <span title={t(labelKey)} style={{maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>{t(shortLabelKey ?? labelKey)}</span>
               </button>
             );
           })}
@@ -412,8 +412,8 @@ function RunningVersionSummary({onClick, mobile = false}: {onClick: () => void; 
     display:'flex', flexDirection:mobile ? 'row' : 'column', alignItems:'center', justifyContent:'center', gap:5,
     margin:mobile ? 0 : '12px 8px 0', padding:'12px 2px', minHeight:48, gridColumn:'1 / -1',
     background:'transparent', border:'none', borderTop:'1px solid rgba(236,255,244,0.1)',
-    color:'#7CFFB2', cursor:'pointer', overflowWrap:'anywhere',
-  }}><span style={{fontSize:12, fontWeight:700}}>{version}</span><span style={{fontSize:10, color:'rgba(236,255,244,0.62)'}}>{track}</span></button>;
+    color:'#7CFFB2', cursor:'pointer', minWidth:0,
+  }}><span style={{fontSize:12, fontWeight:700}}>{version}</span><span style={{fontSize:10, color:'rgba(236,255,244,0.75)', maxWidth:'100%', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{track}</span></button>;
 }
 
 // ─── Mobile bottom nav ───
@@ -550,7 +550,7 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
               </button>
             </div>
             <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10}}>
-              {items.map(({key, labelKey, icon: Icon}) => {
+              {items.map(({key, labelKey, shortLabelKey, icon: Icon}) => {
                 const isActive = key === activePath;
                 return (
                   <button key={key} onClick={() => onNavigate(key)} style={{
@@ -562,7 +562,7 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
                     fontSize: 14, fontWeight: 600,
                   }}>
                     <Icon size={20}/>
-                    <span>{t(labelKey)}</span>
+                    <span title={t(labelKey)} style={{maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"}}>{t(shortLabelKey ?? labelKey)}</span>
                   </button>
                 );
               })}

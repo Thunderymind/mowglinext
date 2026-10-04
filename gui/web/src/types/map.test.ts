@@ -167,10 +167,10 @@ describe('MowingAreaFeature', () => {
         expect(f.getIndex()).toBe(2);
     });
 
-    it('getLabel returns name with order when named', () => {
+    it('getLabel preserves the user name without appending an inconsistent ordinal', () => {
         const f = new MowingAreaFeature('area-0-area-0', 2);
         f.setName('Garden');
-        expect(f.getLabel()).toBe('Garden (2)');
+        expect(f.getLabel()).toBe('Garden');
     });
 
     it('getLabel returns "Area N" when unnamed', () => {
