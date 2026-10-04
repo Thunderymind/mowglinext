@@ -142,7 +142,8 @@ Blackboard: `"context"` = `std::shared_ptr<BTContext>`; keys seeded at startup (
 | `~/high_level_status` → `/behavior_tree_node/high_level_status` | `mowgli_interfaces/msg/HighLevelStatus` | pub | 10 | `PublishHighLevelStatus` on transitions + 1 Hz republish with live fields (:694-721); GUI `gui/pkg/providers/ros.go` :30 |
 | `~/coverage_resume_available` | `std_msgs/msg/Bool` | pub | transient_local(1) | GUI "Resume vs Start fresh" (`ros.go` :63) (:642) |
 | `~/recording_trajectory` | `nav_msgs/msg/Path` | pub | transient_local(1) | `RecordArea` preview (`recording_nodes.cpp` :81); GUI `ros.go` :59 |
-| `/coverage/full_plan` | `nav_msgs/msg/Path` | pub | transient_local(1) | `PlanCoverageArea` (`coverage_nodes.cpp` :2097) |
+| `/coverage/full_plan` | `nav_msgs/msg/Path` | pub | transient_local(1) | `PlanCoverageArea` full-precision plan for non-GUI consumers (`coverage_nodes.cpp`) |
+| `/coverage/plan_preview` | `mowgli_interfaces/msg/CoveragePlanPreview` | pub | transient_local(1) | `PlanCoverageArea` simplified display-only GUI preview (`coverage_nodes.cpp`) |
 | `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/msg/Path` | pub | transient_local(1) | `FollowStrip` (`coverage_nodes.cpp` :390) |
 | `/fusion_graph_node/set_pose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | pub | transient_local(1) reliable | `fusion_graph_node` `~/set_pose`; `CalibrateHeadingFromUndock` (:202), `SeedYawFromMotion` (:315) |
 | `/cmd_vel_teleop` | `geometry_msgs/msg/TwistStamped` | pub | 10 | `SeedYawFromMotion` forward drive (`calibration_nodes.cpp` :305) |

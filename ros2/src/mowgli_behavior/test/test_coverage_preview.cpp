@@ -13,16 +13,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include <gtest/gtest.h>
-
 #include "mowgli_behavior/coverage_preview.hpp"
+#include <gtest/gtest.h>
 
 namespace
 {
 nav_msgs::msg::Path path(std::initializer_list<std::pair<double, double>> points)
 {
   nav_msgs::msg::Path result;
-  for (const auto & [x, y] : points) {
+  for (const auto& [x, y] : points)
+  {
     geometry_msgs::msg::PoseStamped pose;
     pose.pose.position.x = x;
     pose.pose.position.y = y;
@@ -48,7 +48,7 @@ TEST(CoveragePreview, SimplifiesWithinToleranceAndPreservesEndpoints)
 TEST(CoveragePreview, KeepsSubpathsSeparateAndUsesFloat32Coordinates)
 {
   const auto preview = mowgli_behavior::makeCoveragePreview(
-    {path({{0.123456789, 0}, {1, 0}}), path({{10, 5}, {11, 5}})});
+      {path({{0.123456789, 0}, {1, 0}}), path({{10, 5}, {11, 5}})});
   EXPECT_EQ(preview.subpath_offsets, (std::vector<std::uint32_t>{0, 2, 4}));
   EXPECT_EQ(preview.xy.size(), 8u);
   EXPECT_FLOAT_EQ(preview.xy.front(), static_cast<float>(0.123456789));
@@ -57,7 +57,7 @@ TEST(CoveragePreview, KeepsSubpathsSeparateAndUsesFloat32Coordinates)
 
 TEST(CoveragePreview, RetainsVerticesBeyondTolerance)
 {
-  const auto preview = mowgli_behavior::makeCoveragePreview(
-    {path({{0, 0}, {0.5, 0.02}, {1, 0}})}, 0.01);
+  const auto preview =
+      mowgli_behavior::makeCoveragePreview({path({{0, 0}, {0.5, 0.02}, {1, 0}})}, 0.01);
   EXPECT_EQ(preview.subpath_offsets, (std::vector<std::uint32_t>{0, 3}));
 }
