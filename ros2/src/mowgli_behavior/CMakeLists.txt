@@ -981,6 +981,13 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  ament_add_gtest(test_coverage_preview test/test_coverage_preview.cpp)
+  target_include_directories(test_coverage_preview PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  target_link_libraries(test_coverage_preview ${mowgli_interfaces_TARGETS} ${nav_msgs_TARGETS})
+
   # ---- test_dock_motion_gate ----
   # Structural guard over the real main_tree.xml: a DockRobot must never be
   # entered while the last published high-level state is IDLE. The firmware

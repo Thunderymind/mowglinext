@@ -37,6 +37,7 @@ set(msg_files
   "msg/LidarIgnoreCorridorArray.msg"
   "msg/RecordedAreaPolygon.msg"
   "msg/RecordedAreaPolygonArray.msg"
+  "msg/CoveragePlanPreview.msg"
 )
 
 # Declare service files

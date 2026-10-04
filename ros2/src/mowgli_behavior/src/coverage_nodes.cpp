@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mowgli_behavior/coverage_nodes.hpp"
+#include "mowgli_behavior/coverage_preview.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -3348,8 +3349,8 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     ctx->current_area_polygon = area_.area;
     ctx->current_area_obstacles = area_.obstacles;
 
-    // Publish the full plan for the GUI/Foxglove (latched). The per-segment
-    // FollowCoveragePath/global_plan (goal checker) is a separate topic.
+    // Preserve the full plan for consumers that need planner precision. The
+    // per-segment FollowCoveragePath/global_plan (goal checker) is separate.
     if (!full_plan_pub_)
     {
       full_plan_pub_ =
@@ -3357,6 +3358,11 @@ BT::NodeStatus PlanCoverageArea::onRunning()
                                                            rclcpp::QoS(1).transient_local());
     }
     full_plan_pub_->publish(ctx->current_strip_path);
+    if (!plan_preview_pub_) {
+      plan_preview_pub_ = ctx->node->create_publisher<mowgli_interfaces::msg::CoveragePlanPreview>(
+        "/coverage/plan_preview", rclcpp::QoS(1).transient_local());
+    }
+    plan_preview_pub_->publish(mowgli_behavior::makeCoveragePreview(wrapped.result->drivable_subpaths));
 
     // Transit goal = the pose FollowStrip will ACTUALLY start driving from.
     // TransitToStrip (Nav2 Smac, obstacle/boundary-aware) drives the robot there
