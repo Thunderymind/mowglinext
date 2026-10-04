@@ -43,6 +43,7 @@ import {EditLidarCorridorModal} from "./map/components/EditLidarCorridorModal.ts
 import {DEFAULT_CORRIDOR_WIDTH_M, useLidarCorridors} from "./map/hooks/useLidarCorridors.ts";
 import {buildCorridorSideRuns, dropLiveVertex, simplifyPolyline, smoothPolyline, type XY} from "./map/utils/corridorGeometry.ts";
 import {useObstacleClearancePreview} from "./map/hooks/useObstacleClearancePreview.ts";
+import {calculateMapViewportBounds} from "./map/utils/mapViewport.ts";
 
 // Distinct from the red drawn-obstacle fill, so the toggleable
 // clearance-preview outline is never mistaken for it.
@@ -389,18 +390,18 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         />
         : null;
 
-    // Compute map bounds for the Mapbox viewport — depends on map data for centering
+    // Fit every configured area. The helper also expands the metric extents for
+    // the saved bearing because Mapbox fits north-up before onMapLoad restores
+    // rotation; without that compensation, rotated gardens can be clipped.
     const [map_ne, map_sw] = useMemo<[[number, number], [number, number]]>(() => {
         if (_datumLon == 0 || _datumLat == 0) {
             return [[0, 0], [0, 0]]
         }
-        const map_center = (map && map.map_center_y && map.map_center_x) ? transpose(offsetX, offsetY, datum, map.map_center_y, map.map_center_x) : [_datumLon, _datumLat]
-        // Use map center as datum for bounds calculation
-        const centerDatum: [number, number, number] = [map_center[1], map_center[0], 0]
-        const map_sw = transpose(0, 0, centerDatum, -((map?.map_height ?? 10) / 2), -((map?.map_width ?? 10) / 2))
-        const map_ne = transpose(0, 0, centerDatum, ((map?.map_height ?? 10) / 2), ((map?.map_width ?? 10) / 2))
+        const bounds = calculateMapViewportBounds(map, bearing);
+        const map_sw = transpose(offsetX, offsetY, datum, bounds.minY, bounds.minX)
+        const map_ne = transpose(offsetX, offsetY, datum, bounds.maxY, bounds.maxX)
         return [map_ne, map_sw]
-    }, [_datumLat, _datumLon, map, offsetX, offsetY, datum])
+    }, [_datumLat, _datumLon, map, offsetX, offsetY, datum, bearing])
 
     const {
         hasUnsavedChanges, setHasUnsavedChanges, handleEditMap,
@@ -1340,6 +1341,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          initialViewState={{
                                                              bounds: [{lng: map_sw[0], lat: map_sw[1]}, {lng: map_ne[0], lat: map_ne[1]}],
                                                              bearing,
+                                                             fitBoundsOptions: {padding: 16},
                                                          }}
                                                          style={{width: '100%', height: '100%'}}
                                                          mapStyle={useSatellite ? "mapbox://styles/mapbox/satellite-streets-v12" : "mapbox://styles/mapbox/dark-v11"}
@@ -1511,6 +1513,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          initialViewState={{
                                                              bounds: [{lng: map_sw[0], lat: map_sw[1]}, {lng: map_ne[0], lat: map_ne[1]}],
                                                              bearing,
+                                                             fitBoundsOptions: {padding: 24},
                                                          }}
                                                          style={{width: '100%', height: '100%'}}
                                                          mapStyle={useSatellite ? "mapbox://styles/mapbox/satellite-streets-v12" : "mapbox://styles/mapbox/dark-v11"}
