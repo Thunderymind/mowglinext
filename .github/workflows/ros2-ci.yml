@@ -437,8 +437,6 @@ jobs:
           set -eo pipefail
           pwd
           ls -la
-          find / -name setup.bash 2>/dev/null | grep install || true
-          find / -type d -name install 2>/dev/null | head -50 || true
           set +u
           source /opt/ros/${{ env.ROS_DISTRO }}/setup.bash
           source /opt/lyrical_vendor/local_setup.bash
