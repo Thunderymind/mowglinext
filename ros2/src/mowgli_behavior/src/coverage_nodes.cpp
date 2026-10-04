@@ -14,7 +14,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "mowgli_behavior/coverage_nodes.hpp"
-#include "mowgli_behavior/coverage_preview.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -26,6 +25,7 @@
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_behavior/coverage_preview.hpp"
 #include "mowgli_behavior/mow_coverage_plausibility.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
 #include "mowgli_behavior/strip_progress.hpp"
@@ -3360,9 +3360,8 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     full_plan_pub_->publish(ctx->current_strip_path);
     if (!plan_preview_pub_)
     {
-      plan_preview_pub_ =
-          ctx->node->create_publisher<mowgli_interfaces::msg::CoveragePlanPreview>(
-              "/coverage/plan_preview", rclcpp::QoS(1).transient_local());
+      plan_preview_pub_ = ctx->node->create_publisher<mowgli_interfaces::msg::CoveragePlanPreview>(
+          "/coverage/plan_preview", rclcpp::QoS(1).transient_local());
     }
     plan_preview_pub_->publish(
         mowgli_behavior::makeCoveragePreview(wrapped.result->drivable_subpaths));
