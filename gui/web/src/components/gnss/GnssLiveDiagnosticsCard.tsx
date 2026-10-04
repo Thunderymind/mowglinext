@@ -201,6 +201,7 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                     <Row gutter={[12, 12]}>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-coordinate-value"
                                 title={t("diagnosticsPage.latitude")}
                                 value={latitude ?? "-"}
                                 precision={latitude !== undefined ? 9 : undefined}
@@ -208,6 +209,7 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                         </Col>
                         <Col span={12}>
                             <Statistic
+                                className="diagnostics-coordinate-value"
                                 title={t("diagnosticsPage.longitude")}
                                 value={longitude ?? "-"}
                                 precision={longitude !== undefined ? 9 : undefined}

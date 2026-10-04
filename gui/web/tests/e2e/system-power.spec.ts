@@ -71,6 +71,25 @@ test("desktop shortcut uses the existing confirmation and reboot reconnect flow"
     expect(requests).toBe(1);
 });
 
+test("diagnostics reserves stable space and uses tabular numerals page-wide", async ({page}) => {
+    await page.setViewportSize({width: 1440, height: 1000});
+    await openSystem(page);
+
+    const diagnostics = page.locator(".diagnostics-page");
+    await expect(diagnostics).toHaveCount(1);
+    await expect(diagnostics).toHaveCSS("font-variant-numeric", /tabular-nums/);
+
+    const statistic = diagnostics.locator(".ant-statistic-content:has(.ant-statistic-content-suffix)").first();
+    await expect(statistic).toBeVisible();
+    expect(await statistic.evaluate(element => getComputedStyle(element).minInlineSize)).not.toBe("0px");
+
+    const valueBox = await statistic.locator(".ant-statistic-content-value").boundingBox();
+    const suffixBox = await statistic.locator(".ant-statistic-content-suffix").boundingBox();
+    expect(valueBox).not.toBeNull();
+    expect(suffixBox).not.toBeNull();
+    expect(suffixBox!.x - (valueBox!.x + valueBox!.width)).toBeLessThan(12);
+});
+
 test("mobile shortcut uses the existing shutdown confirmation", async ({page}) => {
     await page.setViewportSize({width: 390, height: 844});
     await openSystem(page, true);

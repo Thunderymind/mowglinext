@@ -88,6 +88,7 @@ import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
 import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
 import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
+import "./DiagnosticsPage.css";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -1447,6 +1448,7 @@ export const DiagnosticsPage = () => {
                             </Col>
                             <Col span={12}>
                                 <Statistic
+                                    className="diagnostics-coordinate-value"
                                     title={t('diagnosticsPage.datumLat')}
                                     value={crossChecks.dock_pose.datum_lat}
                                     precision={9}
@@ -1454,6 +1456,7 @@ export const DiagnosticsPage = () => {
                             </Col>
                             <Col span={12}>
                                 <Statistic
+                                    className="diagnostics-coordinate-value"
                                     title={t('diagnosticsPage.datumLon')}
                                     value={crossChecks.dock_pose.datum_lon}
                                     precision={9}
@@ -1800,7 +1803,7 @@ export const DiagnosticsPage = () => {
                                                    Math.abs(w.rpm) > 5 ? colors.success : undefined,
                                         }}
                                     />
-                                    <Typography.Text type="secondary" style={{fontSize: 11}}>
+                                    <Typography.Text className="diagnostics-live-value" type="secondary" style={{fontSize: 11}}>
                                         {valid ? (
                                             <>
                                                 {t('diagnosticsPage.ticksWithDirection', {ticks: (w.ticks ?? 0).toLocaleString(), direction: w.dir === 1 ? t('diagnosticsPage.directionForward') : t('diagnosticsPage.directionReverse')})}
@@ -1969,7 +1972,7 @@ export const DiagnosticsPage = () => {
 
     if (isMobile) {
         return (
-            <div style={{display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8}}>
+            <div className="diagnostics-page" style={{display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8}}>
                 {healthHero}
                 {healthBar}
                 {sectionAlerts}
@@ -2085,7 +2088,7 @@ export const DiagnosticsPage = () => {
     ];
 
     return (
-        <Space direction="vertical" size="middle" style={{width: "100%"}}>
+        <Space className="diagnostics-page" direction="vertical" size="middle" style={{width: "100%"}}>
             {healthHero}
             {healthBar}
             {sectionAlerts}

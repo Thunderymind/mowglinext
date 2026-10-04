@@ -1,0 +1,24 @@
+.diagnostics-page {
+    --diagnostics-value-width: 7ch;
+
+    /* Cover every live number, including nested diagnostics components. */
+    font-variant-numeric: tabular-nums;
+}
+
+.diagnostics-page .ant-statistic-content,
+.diagnostics-page .diagnostics-live-value {
+    display: inline-block;
+    min-inline-size: min(100%, var(--diagnostics-value-width));
+}
+
+.diagnostics-page .diagnostics-coordinate-value {
+    --diagnostics-value-width: 14ch;
+}
+
+.diagnostics-page .diagnostics-live-value-wide {
+    --diagnostics-value-width: 10ch;
+}
+
+.diagnostics-page .ant-progress-text {
+    min-inline-size: 4ch;
+}
