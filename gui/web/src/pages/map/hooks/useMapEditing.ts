@@ -1,3 +1,4 @@
+import {formatArea, areaLabel} from "../../../utils/areaLabel.ts";
 import {useCallback, useRef, useState} from "react";
 import {App} from "antd";
 import {useTranslation} from "react-i18next";
@@ -309,7 +310,7 @@ export function useMapEditing({
     mapInstanceRef,
     shrinkMemory,
 }: UseMapEditingOptions): UseMapEditingReturn {
-    const {t} = useTranslation();
+    const {t, i18n} = useTranslation();
     const {modal} = App.useApp();
 
     // -----------------------------------------------------------------------
@@ -342,12 +343,9 @@ export function useMapEditing({
             const centroidPt = centroid(feature);
             if (centroidPt.properties != null) {
                 const areaSqm = turfArea(feature);
-                const areaLabel =
-                    areaSqm >= 10000
-                        ? `${(areaSqm / 10000).toFixed(2)} ha`
-                        : `${areaSqm.toFixed(0)} m²`;
+                const sizeLabel = formatArea(areaSqm, i18n.language);
                 centroidPt.properties.title =
-                    feature.getLabel() + `\n${areaLabel}`;
+                    areaLabel(t, feature.getMowingOrder(), feature.getName()) + `\n${sizeLabel}`;
                 centroidPt.properties.index = feature.properties.source_working_area_index;
                 // Stable id (mowglinext#637) — see MowingFeatureBase.properties
                 // in types/map.ts for why callers should prefer this over index.

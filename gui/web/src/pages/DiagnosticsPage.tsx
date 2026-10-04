@@ -926,8 +926,14 @@ export const DiagnosticsPage = () => {
         });
     };
 
-    const fusionAgeS = fusionStats ? Math.floor((nowMs - fusionStats.receivedAt) / 1000) : null;
-    const fusionStale = fusionAgeS === null || fusionAgeS > 5;
+    // Sample after the callback that supplied stats, in the same monotonic clock.
+    // The one-second wall-clock render ticker can precede a newer callback.
+    const fusionNow = performance.now();
+    const fusionAgeS = fusionStats?.receivedMonotonic === undefined ? null
+        : Math.floor((fusionNow - fusionStats.receivedMonotonic) / 1000);
+    const sourceAgeS = fusionStats?.sourceIdentity && fusionStats.distinctMonotonic !== undefined
+        ? Math.floor((fusionNow - fusionStats.distinctMonotonic) / 1000) : null;
+    const fusionStale = fusionAgeS === null || fusionAgeS > 5 || (sourceAgeS !== null && sourceAgeS > 5);
     const fv = fusionStats?.values ?? {};
     const num = (k: string) => {
         const raw = fv[k];
@@ -1062,8 +1068,8 @@ export const DiagnosticsPage = () => {
                                 <TelemetryStat
                                     xs={12} md={6} large
                                     title={t('diagnosticsPage.lidarAnchorVerdict')}
-                                    value={lidarAnchor.verdictKey !== null ? t(LIDAR_ANCHOR_VERDICT_LABEL[lidarAnchor.verdictKey]) : null}
-                                    tone={lidarAnchor.verdictKey === null ? "default" : lidarAnchor.verdictKey === "accepted" ? "ok" : "warn"}
+                                    value={lidarAnchor.verdictKey !== null ? t(LIDAR_ANCHOR_VERDICT_LABEL[lidarAnchor.verdictKey]) : t("diagnosticsPage.lidarNoEstimate")}
+                                    tone={lidarAnchor.verdictKey === null ? "default" : fusionStale ? "warn" : lidarAnchor.verdictKey === "accepted" ? "ok" : "warn"}
                                     hint={lidarAnchor.hitRatioPct !== null ? t('diagnosticsPage.lidarAnchorHitRatio', {pct: lidarAnchor.hitRatioPct}) : ""}
                                 />
                                 <TelemetryStat
@@ -1107,6 +1113,11 @@ export const DiagnosticsPage = () => {
                         {t('diagnosticsPage.fusionGraphDescPart2')}
                         {t('diagnosticsPage.fusionGraphTopicLabel')} <Typography.Text code>/fusion_graph/diagnostics</Typography.Text>{" "}
                         {fusionAgeS !== null && <span>{t('diagnosticsPage.lastUpdateAgo', {seconds: fusionAgeS})}</span>}
+                        <br />
+                        {fusionStats?.sourceStamp
+                            ? t('diagnosticsPage.sourcePublication', {stamp: fusionStats.sourceStamp})
+                            : t('diagnosticsPage.sourceIdentityUnknown')}
+                        {sourceAgeS !== null && sourceAgeS > 5 && <span> · {t('diagnosticsPage.sourceUnchanged', {seconds: sourceAgeS})}</span>}
                     </Typography.Paragraph>
                 </Card>
             </Col>

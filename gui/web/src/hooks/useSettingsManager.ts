@@ -6,6 +6,7 @@ import { dirtyKeysRequireGpsRestart, restartGps } from "../utils/containers.ts";
 import { useContainerRestart } from "./useContainerRestart.ts";
 import { getQuaternionFromHeading } from "../utils/map.tsx";
 import { ContentType } from "../api/Api.ts";
+import {matchesSettingSearch, settingSearchText} from "../utils/settingsSearch.ts";
 import { valuesMatch } from "../utils/settingsValues.ts";
 import {
     AREA_RECORDING_GROUP,
@@ -332,7 +333,18 @@ export const useSettingsManager = () => {
     const [defaults, setDefaults] = useState<Record<string, any>>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [restartRequired, setRestartRequired] = useState(false);
+    const [restartRequired, setRestartRequired] = useState(() => {
+        try { return sessionStorage.getItem('mowgli.pendingRosRestart') === 'true'; }
+        catch { return false; }
+    });
+    useEffect(() => {
+        try { sessionStorage.setItem('mowgli.pendingRosRestart', String(restartRequired)); }
+        catch { /* Storage can be disabled in embedded browsers. */ }
+    }, [restartRequired]);
+    const acknowledgeRestart = useCallback(() => {
+        try { sessionStorage.removeItem('mowgli.pendingRosRestart'); } catch { /* optional storage */ }
+        setRestartRequired(false);
+    }, []);
     // GPS restart skips the rosbridge readiness probe (ROS2 is unaffected).
     const gpsRestart = useContainerRestart({
         pendingLabel: t("settingsManager.gpsRestartPending"),
@@ -505,6 +517,7 @@ export const useSettingsManager = () => {
             ];
             const liveHardwareKeys = ["ticks_per_meter", ...driveKeys];
             const liveHardwareDirty = liveHardwareKeys.some((k) => dirtyKeys.has(k));
+            const requiresRosRestart = [...dirtyKeys].some(key => !liveHardwareKeys.includes(key));
             const hasDirtyChanges = dirtyKeys.size > 0;
             const externalSavers = Object.values(externalSaversRef.current).filter((x) => x.dirtyCount > 0);
             if (!hasDirtyChanges && !shouldRestartGps && externalSavers.length === 0) {
@@ -538,12 +551,12 @@ export const useSettingsManager = () => {
                 }
                 setSavedValues(pruned);
                 setLocalValues(pruned);
-                setRestartRequired(true);
+                if (requiresRosRestart) setRestartRequired(true);
                 notification.success({
                     message: t("settingsSections.toasts.saved"),
                     description: shouldRestartGps
                         ? t("settingsSections.toasts.savedGpsRestartDescription")
-                        : t("settingsSections.toasts.savedDescription"),
+                        : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : "settingsSections.toasts.savedApplyingLive"),
                 });
             } else if (shouldRestartGps) {
                 notification.info({
@@ -617,6 +630,7 @@ export const useSettingsManager = () => {
                             body: { parameters },
                         });
                     } catch (e: any) {
+                        setRestartRequired(true);
                         notification.warning({
                             message: t("settingsSections.toasts.drivePidUpdateFailed"),
                             description: e?.message ??
@@ -758,13 +772,9 @@ export const useSettingsManager = () => {
     const matchesSearch = useCallback(
         (key: string, label?: string): boolean => {
             if (!searchQuery) return true;
-            const q = searchQuery.toLowerCase();
-            return (
-                key.toLowerCase().includes(q) ||
-                (label?.toLowerCase().includes(q) ?? false)
-            );
+            return matchesSettingSearch(searchQuery, key, label ?? '', ...settingSearchText(key, t));
         },
-        [searchQuery]
+        [searchQuery, t]
     );
 
     return {
@@ -781,6 +791,7 @@ export const useSettingsManager = () => {
         registerExternalSaver,
         unregisterExternalSaver,
         restartRequired,
+        acknowledgeRestart,
         searchQuery,
         advancedKeys,
         setSearchQuery,

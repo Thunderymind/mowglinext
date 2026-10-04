@@ -317,7 +317,7 @@ export class MowingAreaFeature extends MapAreaFeature {
      */
     getLabel(unnamedLabel?: string) : string {
         const name = this.getName();
-        if (name) return name + " (" + this.getMowingOrder().toString() + ")";
+        if (name.trim()) return name.trim();
         return unnamedLabel ?? "Area " + this.getMowingOrder().toString();
     }
 

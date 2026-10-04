@@ -110,9 +110,35 @@
     "built": "Built at (UTC)",
     "architecture": "Architecture",
     "metadataUnavailable": "Image metadata is unavailable; the reference and state are still shown.",
-    "components": {"robot": "Robot software", "gui": "Web interface", "gps": "GPS", "lidar": "LiDAR", "mqtt": "MQTT", "watchtower": "Watchtower", "mavros": "MAVROS", "ntrip": "NTRIP", "vesc": "VESC", "tfluna-front": "Front TF-Luna", "tfluna-edge": "Edge TF-Luna"},
-    "containerStates": {"running": "Running", "exited": "Stopped", "created": "Created", "restarting": "Restarting", "paused": "Paused", "dead": "Dead", "removing": "Removing"},
-    "firmwareStates": {"waiting": "Waiting for live status", "disconnected": "Disconnected", "stale": "Status is stale", "compatible": "Protocol compatible", "incompatible": "Protocol incompatible"}
+    "components": {
+      "robot": "Robot software",
+      "gui": "Web interface",
+      "gps": "GPS",
+      "lidar": "LiDAR",
+      "mqtt": "MQTT",
+      "watchtower": "Watchtower",
+      "mavros": "MAVROS",
+      "ntrip": "NTRIP",
+      "vesc": "VESC",
+      "tfluna-front": "Front TF-Luna",
+      "tfluna-edge": "Edge TF-Luna"
+    },
+    "containerStates": {
+      "running": "Running",
+      "exited": "Stopped",
+      "created": "Created",
+      "restarting": "Restarting",
+      "paused": "Paused",
+      "dead": "Dead",
+      "removing": "Removing"
+    },
+    "firmwareStates": {
+      "waiting": "Waiting for live status",
+      "disconnected": "Disconnected",
+      "stale": "Status is stale",
+      "compatible": "Protocol compatible",
+      "incompatible": "Protocol incompatible"
+    }
   },
   "systemPower": {
     "title": "Host",
@@ -137,7 +163,8 @@
     "logs": "Logs",
     "onboarding": "Onboarding",
     "more": "More",
-    "close": "Close"
+    "close": "Close",
+    "setupShort": "Setup"
   },
   "pageMeta": {
     "home": {
@@ -284,15 +311,15 @@
     "returnToDock": "Return to dock",
     "cancel": "Cancel",
     "recordZone": "Record a zone",
-    "mowNextZone": "Resume / Mow",
-    "continue": "Resume",
+    "mowNextZone": "Resume mowing",
+    "continue": "Resume mowing",
     "pause": "Pause",
-    "disableEmergency": "Disable emergency stop",
-    "bladeForward": "Blade forward",
-    "bladeBackward": "Blade backward",
-    "bladeOff": "Blade stopped",
-    "start": "Start",
-    "resume": "Resume",
+    "disableEmergency": "Release emergency stop",
+    "bladeForward": "Start blade — forward",
+    "bladeBackward": "Start blade — reverse",
+    "bladeOff": "Stop blade",
+    "start": "Start mowing",
+    "resume": "Resume mowing",
     "resumeNow": "Resume now (skip charge)",
     "startFresh": "Start fresh",
     "emergencyStop": "Emergency stop",
@@ -620,7 +647,7 @@
     "fusionGraphDescPart1": "GTSAM iSAM2 factor graph. Save persists nodes + scans to",
     "fusionGraphDescPart2": "Clear wipes the graph and waits for the next GPS fix or set_pose to re-initialize.",
     "fusionGraphTopicLabel": "Topic:",
-    "lastUpdateAgo": "· last update {{seconds}}s ago",
+    "lastUpdateAgo": "· message received {{seconds}} s ago",
     "headingSources": "Heading sources (fused by fusion_graph)",
     "filter": "Filter",
     "referenceSignal": "Reference signal for deltas below.",
@@ -797,7 +824,11 @@
     "rosbagDeleteFailed": "Could not delete recording",
     "rosbagDeleteConfirmTitle": "Delete recording?",
     "rosbagDeleteConfirmBody": "This permanently deletes the recording {{name}} from the robot. This cannot be undone.",
-    "gpsWrongfix": "GPS wrong-fix rejects: {{count}}"
+    "gpsWrongfix": "GPS wrong-fix rejects: {{count}}",
+    "sourcePublication": "Producer publication (ROS clock): {{stamp}}. Receipt age is not sensor acquisition age.",
+    "sourceIdentityUnknown": "No producer timestamp. Sensor acquisition age is unknown.",
+    "sourceUnchanged": "Publication unchanged for {{seconds}} s",
+    "lidarNoEstimate": "No estimate yet"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Just ",
@@ -1084,7 +1115,9 @@
     "revert": "Revert",
     "saveWithCount": "Save ({{count}} changes)",
     "saved": "Saved",
-    "unsavedChanges": "unsaved changes"
+    "unsavedChanges": "unsaved changes",
+    "searchResults": "Matching settings",
+    "technicalDetails": "Technical details"
   },
   "schedulePage": {
     "planning": "Planning",
@@ -1128,10 +1161,10 @@
     "cancel": "Cancel",
     "lastRun": "Last: {{value}}",
     "never": "Never",
-    "newRun": "New run",
+    "newRun": "Add disabled schedule",
     "pickAStarter": "Pick a starter",
-    "pickAStarterDescTap": "One tap to create a schedule. Tune the days, time and area afterwards.",
-    "pickAStarterDescClick": "One click to create a schedule. Tune the days, time and area afterwards.",
+    "pickAStarterDescTap": "Create a disabled schedule, review the days and time, then enable it.",
+    "pickAStarterDescClick": "Create a disabled schedule, review the days and time, then enable it.",
     "thisWeek": "This week",
     "activeSchedules": "active schedules",
     "schedules": "Schedules",
@@ -1146,13 +1179,18 @@
     "areaLabel": "Area {{index}}",
     "schedulesConfigured": "{{count}} schedules configured.",
     "rules": "Rules",
-    "rulesDescription": "Built-in safety behaviors — always active.",
+    "rulesDescription": "Saved robot settings. Restart-dependent changes may not yet be active on the robot.",
     "ruleRainAware": "Rain-aware",
     "ruleRainAwareHint": "pause if rain detected",
     "ruleAutoDockLow": "Auto-dock low",
-    "ruleAutoDockLowHint": "return at <20% battery",
+    "ruleAutoDockLowHint": "return below {{percent}}% battery",
     "on": "On",
-    "off": "Off"
+    "off": "Off",
+    "enableSchedule": "Enable schedule {{index}}",
+    "inactive": "Inactive",
+    "autoSaveHint": "Changes are saved automatically. Inactive schedules cannot start mowing.",
+    "startTime": "Scheduled start time",
+    "unknown": "Unknown"
   },
   "liveMapMini": {
     "noAreaYet": "No area recorded yet",
@@ -1171,7 +1209,7 @@
     "colCoverage": "Coverage",
     "colStatus": "Status",
     "rechargeTag": "{{count}}× recharge",
-    "heroTotalDistance": "Total distance",
+    "heroTotalDistance": "Recorded distance",
     "heroSinceInstall": "since install",
     "heroHoursActive": "Hours active",
     "heroSessionsCount_one": "{{count}} session",
@@ -1182,7 +1220,7 @@
     "heroRunsCompleted": "Runs completed",
     "heroAvgCoverage": "avg {{pct}}% coverage",
     "distancePerWeek": "Distance per week",
-    "last12Weeks": "Last 12 weeks (km)",
+    "last12Weeks": "Last 12 weeks (h)",
     "weekTooltip": "Week {{week}}: {{km}} km",
     "zoneCoverage": "Zone coverage",
     "areaLabel": "Area {{index}}",
@@ -1197,7 +1235,16 @@
     "noSessionsRecorded": "No mowing sessions recorded yet.",
     "heroSessionsCount": "{{count}} sessions",
     "heroCompletedCount": "{{count}} completed",
-    "sessionsRecorded": "{{count}} sessions recorded"
+    "sessionsRecorded": "{{count}} sessions recorded",
+    "recordedDistanceHint": "Recorded odometry; older sessions may be incomplete",
+    "noDistanceRecorded": "No distance recorded for these sessions",
+    "durationPerWeek": "Mowing time per week",
+    "weekDurationTooltip": "Week {{week}}: {{hours}} h",
+    "status": {
+      "completed": "Completed",
+      "aborted": "Interrupted",
+      "error": "Error"
+    }
   },
   "dashboardHome": {
     "statusMowing": "Mowing",
@@ -1577,14 +1624,14 @@
     "flattenMap": "Flatten map",
     "tilt3dView": "Tilt 3D view",
     "areaRecording": "Area Recording",
-    "mowNextArea": "Resume / Mow",
-    "continue": "Resume",
-    "pause": "Pause",
+    "mowNextArea": "Resume mowing",
+    "continue": "Resume mowing",
+    "pause": "Pause mowing",
     "stopManualMowing": "Stop",
     "manualMowing": "Manual Mowing",
-    "bladeForward": "Blade Forward",
-    "bladeBackward": "Blade Backward",
-    "bladeOff": "Blade Off",
+    "bladeForward": "Start blade — forward",
+    "bladeBackward": "Start blade — reverse",
+    "bladeOff": "Stop blade",
     "backupMap": "Backup Map",
     "restoreMap": "Restore Map",
     "importFromOpenMower": "Import from OpenMower",
@@ -1592,14 +1639,19 @@
     "editMap": "Edit Map",
     "finishRecording": "Finish Recording",
     "cancelRecording": "Cancel Recording",
-    "start": "Start",
-    "home": "Home",
-    "emergencyOn": "Emergency On",
-    "emergencyOff": "Emergency Off",
+    "start": "Start mowing",
+    "home": "Return to dock",
+    "emergencyOn": "Emergency stop",
+    "emergencyOff": "Release emergency stop",
     "mowArea": "Mow area",
     "stopManual": "Stop",
     "manualMow": "Manual Mow",
-    "more": "More"
+    "more": "More",
+    "displayGroup": "Map display",
+    "motionGroup": "Robot movement",
+    "bladeGroup": "Blade controls",
+    "filesGroup": "Map files",
+    "emergencyActive": "Emergency stop active"
   },
   "resetMowingProgress": {
     "action": "Reset mowing progress",
@@ -1619,12 +1671,12 @@
     "showObstacleClearance": "Show obstacle clearance preview",
     "hideObstacleClearance": "Hide obstacle clearance preview",
     "areaRecording": "Area Recording",
-    "mowNextArea": "Resume / Mow",
-    "continue": "Resume",
-    "pause": "Pause",
-    "bladeForward": "Blade Forward",
-    "bladeBackward": "Blade Backward",
-    "bladeOff": "Blade Off",
+    "mowNextArea": "Resume mowing",
+    "continue": "Resume mowing",
+    "pause": "Pause mowing",
+    "bladeForward": "Start blade — forward",
+    "bladeBackward": "Start blade — reverse",
+    "bladeOff": "Stop blade",
     "backupMap": "Backup Map",
     "restoreMap": "Restore Map",
     "importFromOpenMower": "Import from OpenMower",
@@ -1634,8 +1686,8 @@
     "combine": "Combine",
     "subtract": "Subtract",
     "splitDrawLine": "Split (draw line)",
-    "emergencyOff": "Emergency Off",
-    "emergencyOn": "Emergency On",
+    "emergencyOff": "Release emergency stop",
+    "emergencyOn": "Emergency stop",
     "stop": "STOP",
     "save": "Save",
     "cancel": "Cancel",
@@ -1646,8 +1698,8 @@
     "delete": "Delete",
     "placeDock": "Place dock",
     "more": "More",
-    "start": "Start",
-    "home": "Home",
+    "start": "Start mowing",
+    "home": "Return to dock",
     "editMap": "Edit Map",
     "mowArea": "Mow area",
     "mow": "Mow",
@@ -1752,12 +1804,13 @@
     "typeWorkArea": "Work Area",
     "typeNavigation": "Navigation",
     "typeObstacle": "Obstacle",
-    "areasHeader": "Areas ({{count}})",
+    "areasHeader": "Mowing areas ({{count}})",
     "moveUp": "Move up",
     "moveDown": "Move down",
     "navigationArea": "Navigation {{index}}",
     "obstacleArea": "Obstacle {{index}}",
-    "unnamedArea": "Area {{index}}"
+    "unnamedArea": "Area {{index}}",
+    "otherFeatures": "{{navigation}} navigation · {{obstacles}} obstacles"
   },
   "mapTrackedObstacles": {
     "ignore": "Ignore",
@@ -2641,7 +2694,8 @@
           "validated": "Validated PID step response with max overshoot {{overshootPct}}%."
         }
       }
-    }
+    },
+    "assistantSummary": "These assistants move the robot through straight test passes to tune wheel response. Use a clear, level area and keep emergency stop within reach. Review the test distance and whether to apply the results before starting."
   },
   "settingsBattery": {
     "batteryThresholds": "Battery Thresholds",
@@ -2863,13 +2917,13 @@
   },
   "settingsLocalization": {
     "lidarMapAnchorTitle": "LiDAR map anchor",
-    "lidarMapAnchorSummary": "Scan-to-map particle filter that holds the position when RTK Fixed drops (XY only).",
-    "lidarMapAnchorDetail": "Under RTK Fixed, selected scans update persistent georeferenced tiles. A local map window supports scan-to-map localization when GPS becomes stale; only validated XY corrections enter the graph. Diagnostics → Fusion Graph shows its state.",
+    "lidarMapAnchorSummary": "Use stored LiDAR landmarks to help maintain position when RTK Fixed is lost.",
+    "lidarMapAnchorDetail": "Under RTK Fixed, scans update georeferenced tiles. Validated position corrections may then enter the graph when GPS becomes stale. See Diagnostics → Localization.",
     "anchorShadowTitle": "Anchor shadow mode",
     "anchorShadowSummary": "Run and measure the anchor under RTK Fixed without applying it.",
     "anchorShadowDetail": "Keeps calibration active under trusted RTK Fixed at the configured filter rate, instead of periodic calibration bursts. Publishes candidates and counters for comparison; applies no factors while Fixed remains trusted.",
     "magYawTitle": "Magnetometer yaw",
-    "magYawSummary": "Fuse tilt-compensated mag yaw as a yaw unary factor.",
+    "magYawSummary": "Use the magnetic compass to help estimate heading. Motor interference can make this unreliable.",
     "magYawDetail": "Off by default — motor-induced bias makes the magnetometer unreliable on most chassis. Enable only after running mag calibration with motors-off and validating a stable |B|.",
     "badgeDisabled": "Disabled in settings",
     "badgeNoDriver": "No driver detected",
@@ -2905,7 +2959,9 @@
     "minHorizontalFieldLabel": "Min horizontal field",
     "minHorizontalFieldTooltip": "Minimum horizontal field magnitude for a valid yaw. Below this the mag yaw is rejected.",
     "magYawVarianceLabel": "Mag yaw variance",
-    "magYawVarianceTooltip": "Sensor-noise variance (rad²) for the magnetometer yaw unary factor. Higher = trusted less."
+    "magYawVarianceTooltip": "Sensor-noise variance (rad²) for the magnetometer yaw unary factor. Higher = trusted less.",
+    "positionSummary": "The robot combines GPS, wheel movement and heading sensors to estimate its position. The optional settings below control which extra sensors can help when GPS is less reliable.",
+    "openDiagnostics": "Open Diagnostics → Localization"
   },
   "settingsGnssAdvanced": {
     "rawValueFallback": "{{label}} Raw Value"
@@ -3087,7 +3143,7 @@
     "savedDock": "Saved dock (heading unchanged by this action)",
     "setDockConfirmFooter": "Make sure the robot is sitting on the dock so the position capture reflects the true charging-contact point. The new position persists across container restarts.",
     "sensorPlacement": "Sensor Placement",
-    "metersFromUrdf": "m (from URDF)",
+    "metersFromUrdf": "m (robot geometry)",
     "dragSensorsHint": "Drag sensors on the top-down robot view to set their X/Y position. Use the rotation handle (small circle) to set sensor yaw. The grid spacing is 5 cm. Robot dimensions are read from the /robot_description topic.",
     "resetToDefaults": "Reset to defaults",
     "xForward": "X (forward)",
@@ -3097,7 +3153,7 @@
     "autoCalibrateImuTooltip": "Auto-calibrate IMU mounting yaw (robot drives itself ~0.6 m forward then back)",
     "dockPose": "Dock Pose",
     "bearingCompass": "Bearing (compass, 0–360°)",
-    "compassBearingHint": "Compass bearing: 0° = N, 90° = E, 180° = S, 270° = W. Hold a phone compass behind the dock pointing the way the robot enters and read the bearing off it. Auto-captured on first charge by dock_yaw_to_set_pose",
+    "compassBearingHint": "Compass bearing: 0° = N, 90° = E, 180° = S, 270° = W. Hold a phone compass behind the dock pointing in the direction the robot enters. Use dock calibration to measure and save the position and heading together.",
     "source": "source",
     "captureFromRobot": "Capture from current robot position",
     "captureIntro1": "Park the robot on the dock facing the approach direction, then click below. Captures",
@@ -3133,7 +3189,8 @@
     "calibFailedHint": "Hint: drive faster or longer so the accelerometer sees a clear forward and backward impulse along the body X axis.",
     "retry": "Retry",
     "discard": "Discard",
-    "apply": "Apply"
+    "apply": "Apply",
+    "dockHeading": "Dock heading, degrees"
   },
   "robotAnatomy": {
     "gpsAntenna": "GPS antenna",
@@ -3218,7 +3275,11 @@
     "dayFri": "Fri",
     "cellTooltip": "{{date}} -- {{km}} km",
     "less": "Less",
-    "more": "More"
+    "more": "More",
+    "sessionCount_one": "{{count}} session",
+    "sessionCount_other": "{{count}} sessions",
+    "activityTooltip_one": "{{date}}: {{count}} session",
+    "activityTooltip_other": "{{date}}: {{count}} sessions"
   },
   "notificationBell": {
     "justNow": "just now",
@@ -3619,7 +3680,10 @@
       "label": "Weather",
       "description": "Rain sensor behaviour and the IrriSense soil-moisture check: whether the weather lets the robot mow."
     },
-    "updates": {"label": "Updates", "description": "Installed versions, update sources and recovery"},
+    "updates": {
+      "label": "Updates",
+      "description": "Installed versions, update sources and recovery"
+    },
     "appearance": {
       "label": "Appearance",
       "description": "Visual richness, energy use and timestamp display on this device"
@@ -3676,7 +3740,10 @@
       "label": "Rain",
       "description": "Rain detection behavior and delay"
     },
-    "notifications": {"label": "Notifications", "description": "Push messages to your phone: zone start/finish, stuck, emergency, rain, battery"},
+    "notifications": {
+      "label": "Notifications",
+      "description": "Push messages to your phone: zone start/finish, stuck, emergency, rain, battery"
+    },
     "irrisense": {
       "label": "IrriSense",
       "description": "Soil moisture from your IrriSense Cloud garden: skip scheduled mows on wet grass"
@@ -3708,7 +3775,8 @@
       "dockRefreshFailedDescription": "Restart ROS2 (or call /map_server_node/set_docking_point manually) to pick up the new dock pose.",
       "drivePidUpdateFailed": "Settings saved, but live drive-PID update failed",
       "drivePidUpdateFailedDescription": "Restart ROS2 to apply the new drive-motor PID gains.",
-      "saveFailed": "Failed to save settings"
+      "saveFailed": "Failed to save settings",
+      "savedApplyingLive": "Saved. Applying the drive settings to the running robot…"
     }
   },
   "displayMode": {
@@ -3764,7 +3832,8 @@
   },
   "settingsReset": {
     "overridden": "Overridden — differs from default",
-    "resetToDefault": "Reset to default"
+    "resetToDefault": "Reset to default",
+    "resetField": "Reset {{field}} to default"
   },
   "settingsSchema": {
     "loadFailed": "Failed to load settings schema"
@@ -3822,11 +3891,9 @@
     "imageReference": "image reference",
     "reviewCustom": "Review custom images",
     "customInstallAccept": "Install this custom mix. I understand the risks and have recovery access.",
-
     "built": "Built",
     "published": "Published",
     "buildDatesHelp": "Built is the installed image timestamp; Published is when the release was published.",
-
     "componentSourceHelp": "Choose compatible component versions from published releases in the same repository and branch. For another repository, branch image or Docker tag, use Custom images.",
     "summaryUnknown": "Unknown",
     "summaryCustom": "Custom",
@@ -3852,8 +3919,11 @@
     "noCompatibleComponent": "No compatible alternative is published for this component.",
     "componentReview": "{{component}}: custom version {{version}}",
     "diagnostics": "Diagnostics and manual image comparison",
-    "compatibility": {"source": "Different source", "contract": "Incompatible contract", "platform": "Unavailable for this platform"},
-
+    "compatibility": {
+      "source": "Different source",
+      "contract": "Incompatible contract",
+      "platform": "Unavailable for this platform"
+    },
     "selectionPending": "Installer hardware choices have changed. Review installation to apply the container changes.",
     "selectionHelp": "Containers follow your saved installer hardware choices.",
     "hardware": {
@@ -3880,8 +3950,19 @@
     "returnMatched": "Review matched release",
     "mixedReview": "Custom combination: GUI {{version}}; other components use the base release.",
     "observedAt": "Docker observed: {{time}}",
-    "identities": {"matched": "Matched release", "mixed": "Custom mix", "drifted": "Installation changed", "custom": "Existing/custom installation", "unverified": "Installed version unverified", "unknown": "Installed version unavailable"},
-    "health": {"healthy": "Running / checks passing", "degraded": "Stopped or unhealthy", "unknown": "Unknown"},
+    "identities": {
+      "matched": "Matched release",
+      "mixed": "Custom mix",
+      "drifted": "Installation changed",
+      "custom": "Existing/custom installation",
+      "unverified": "Installed version unverified",
+      "unknown": "Installed version unavailable"
+    },
+    "health": {
+      "healthy": "Running / checks passing",
+      "degraded": "Stopped or unhealthy",
+      "unknown": "Unknown"
+    },
     "resetSource": "Reset changes",
     "agentNotice": "An update to the host updater is available",
     "title": "Updates and recovery",
@@ -4334,9 +4415,9 @@
     "gps": "GPS",
     "mowingArea": "Mowing area {{area}} · {{pct}} %",
     "lastSeen": "Last seen {{when}}",
-    "play": "Play",
-    "pause": "Pause",
-    "home": "Home",
+    "play": "Start mowing",
+    "pause": "Pause mowing",
+    "home": "Return to dock",
     "homeConfirm": "Send {{robot}} back to its dock?",
     "sent": "{{action}} sent to {{robot}}",
     "positions": "Positions",
@@ -4378,6 +4459,42 @@
       "recording": "Recording",
       "manual": "Manual",
       "emergency": "Emergency"
+    }
+  },
+  "dockCalibration": {
+    "title": "Dock calibration",
+    "intro": "Place the robot on its charging dock with RTK Fixed. Calibration captures the GPS antenna position, then measures the heading while reversing. Position and heading are saved together.",
+    "motionWarning": "The robot will reverse off the dock and drive back. Clear the path before starting. The blade stays off.",
+    "details": "How calibration is applied",
+    "detail": "The return uses the old dock pose until ROS2 restarts, so it may stop short of the charger. The new calibration is saved even if the confirmation return does not reach the charger.",
+    "start": "Start dock calibration",
+    "running": "Calibrating…",
+    "startError": "Could not start dock calibration",
+    "success": "Dock calibrated",
+    "notDocked": "Dock calibrated — but the robot is NOT on the dock",
+    "failed": "Dock calibration failed",
+    "measurements": "Course spread {{spread}}° · moved {{distance}} m · {{charge}}",
+    "charging": "charging",
+    "notCharging": "not charging",
+    "phases": {
+      "0": "Waiting for RTK Fixed",
+      "1": "Reversing off the dock",
+      "2": "Checking heading consistency",
+      "3": "Returning to dock",
+      "4": "Verifying charge",
+      "5": "Saving dock pose",
+      "6": "Idle",
+      "7": "Done",
+      "8": "Capturing position on the dock"
+    },
+    "retries": {
+      "1": "Wait for a stable RTK Fixed position, then retry.",
+      "2": "GPS heading is inconsistent. Wait for reliable positioning, then retry.",
+      "3": "The reverse distance was too short to measure heading.",
+      "4": "The return used the old dock pose and did not reach the charger. Restart ROS2 before returning to dock, or place the robot on the dock manually.",
+      "5": "Emergency stop is active. Resolve its cause before releasing it and retrying.",
+      "6": "The robot must be charging on its dock with mowing stopped.",
+      "7": "The dock pose was not fully saved. Review the reported error before retrying."
     }
   }
 }

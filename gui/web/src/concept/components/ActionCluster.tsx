@@ -93,6 +93,7 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
       </SecondaryButton>
 
       {/* primary: re-arm (latched emergency) / pause-in-place (playing) / play */}
+      <div style={{display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1, maxWidth: 132}}>
       <motion.button
         {...pressFeedback}
         onClick={primaryAlert ? onRearm : primaryPlaying ? onPause : onStart}
@@ -138,6 +139,8 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
               : <Play size={32} strokeWidth={2.4} fill="currentColor" style={{marginLeft: 3}}/>}
         </motion.div>
       </motion.button>
+      <span style={{fontSize: 12, lineHeight: 1.3, textAlign: "center", color: "var(--ink-2)"}}>{t(primaryAlert ? "actionCluster.rearm" : primaryPlaying ? "actionCluster.pause" : "actionCluster.startMowing")}</span>
+      </div>
 
       {/* secondary: home */}
       <SecondaryButton
@@ -203,6 +206,7 @@ function SecondaryButton({children, ariaLabel, onClick, tone = "default", displa
     danger:  {bg: "rgba(255,107,122,0.12)",   border: "rgba(255,107,122,0.5)", color: "var(--rose)"},
   }[tone];
   return (
+    <div style={{display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: 1, maxWidth: 110}}>
     <motion.button
       {...pressFeedback}
       onClick={onClick}
@@ -218,5 +222,7 @@ function SecondaryButton({children, ariaLabel, onClick, tone = "default", displa
     >
       {children}
     </motion.button>
+    <span style={{fontSize: 12, lineHeight: 1.3, textAlign: "center", color: "var(--ink-2)"}}>{ariaLabel}</span>
+    </div>
   );
 }

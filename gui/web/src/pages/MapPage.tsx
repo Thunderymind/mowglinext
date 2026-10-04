@@ -1,3 +1,4 @@
+import {formatArea} from "../utils/areaLabel.ts";
 import {mowingAreaIndexById} from "../utils/mapAreaIndex.ts";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import {useApi} from "../hooks/useApi.ts";
@@ -76,7 +77,7 @@ const DYN_OBSTACLE_INTERACTIVE_LAYERS = ['dyn-obstacle-fill'];
 
 export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {notification} = App.useApp();
-    const {t} = useTranslation();
+    const {t, i18n} = useTranslation();
     const {colors, displayMode} = useThemeMode();
     const isMobile = useIsMobile();
     const mowerAction = useMowerAction()
@@ -688,7 +689,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             const areaIndex = mowingAreaIndexById(map, workareas[i].properties.source_working_area_id);
             if (areaIndex === undefined) continue;
             names[areaIndex] = workareas[i].getLabel(
-                t('mapAreasList.unnamedArea', {order: workareas[i].getMowingOrder()})
+                t('mapAreasList.unnamedArea', {index: workareas[i].getMowingOrder()})
             );
         }
         return names;
@@ -751,13 +752,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             })
             .map((f, i, arr) => {
                 const areaSqm = turfArea(f);
-                const areaLabel = areaSqm >= 10000
-                    ? `${(areaSqm / 10000).toFixed(2)} ha`
-                    : `${areaSqm.toFixed(0)} m²`;
+                const areaLabel = formatArea(areaSqm, i18n.language);
                 const ftype = f.properties.feature_type;
                 let name = '';
                 if (f instanceof MowingAreaFeature) {
-                    name = f.getLabel(t('mapAreasList.unnamedArea', {order: f.getMowingOrder()}));
+                    name = f.getLabel(t('mapAreasList.unnamedArea', {index: f.getMowingOrder()}));
                 } else if (f instanceof NavigationFeature) {
                     // Short 1-based ordinal within its own type, not the raw id.
                     const navIdx = arr.slice(0, i).filter(x => x instanceof NavigationFeature).length + 1;
@@ -1293,7 +1292,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onEmergencyOn: mowerAction("emergency", {Emergency: 1}),
         onEmergencyOff: mowerAction("emergency", {Emergency: 0}),
         onAreaRecording: mowerAction("high_level_control", {Command: 3}),
-        onMowNextArea: mowerAction("high_level_control", {Command: 4}),
         // Match MapToolbar's isIdle: the BT publishes IDLE_DOCKED as the
         // primary resting state; "IDLE" without a suffix only appears as the
         // manual-mow fallthrough. There is no "pause flag" in the stack (the

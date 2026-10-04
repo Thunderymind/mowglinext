@@ -5,10 +5,16 @@ import AppShell from "./components/AppShell.tsx";
 import {App, ConfigProvider, theme} from "antd";
 import {Spinner} from "./components/Spinner.tsx";
 import {MotionConfig} from "framer-motion";
+import {PALETTE} from "./theme/colors.ts";
 import {ThemeProvider, useThemeMode} from "./theme/ThemeContext.tsx";
 import {NotificationCenterProvider} from "./hooks/useNotificationCenter.tsx";
 import {TimeFormatProvider} from "./hooks/useTimeFormat.tsx";
 import "./i18n";
+import {useTranslation} from "react-i18next";
+import enUS from "antd/locale/en_US";
+import frFR from "antd/locale/fr_FR";
+import dayjs from "dayjs";
+import "dayjs/locale/fr";
 
 // Lazy-load each page so the first paint only ships the shell + the route
 // the user actually opens. Everything else streams in on demand.
@@ -80,10 +86,13 @@ const router = createHashRouter([
 ]);
 
 function ThemedApp() {
+    const {i18n} = useTranslation();
+    const french = i18n.language.startsWith("fr");
+    dayjs.locale(french ? "fr" : "en");
     const {colors} = useThemeMode();
 
     return (
-        <ConfigProvider theme={{
+        <ConfigProvider locale={french ? frFR : enUS} theme={{
             algorithm: theme.darkAlgorithm,
             token: {
                 colorPrimary: colors.primary,
@@ -96,6 +105,8 @@ function ThemedApp() {
                 colorBorder: colors.border,
                 colorText: colors.text,
                 colorTextSecondary: colors.textSecondary,
+                colorTextDescription: colors.textSecondary,
+                colorTextPlaceholder: colors.muted,
                 borderRadius: 12,
                 fontFamily: '"Satoshi", "Inter", -apple-system, BlinkMacSystemFont, sans-serif',
                 fontFamilyCode: '"Space Grotesk", "JetBrains Mono", ui-monospace, monospace',
@@ -123,6 +134,16 @@ function ThemedApp() {
                     colorBgContainer: colors.bgElevated,
                     activeBorderColor: colors.accent,
                     hoverBorderColor: colors.accent,
+                },
+                InputNumber: {
+                    colorBgContainer: colors.bgElevated,
+                    colorBorder: colors.muted,
+                },
+                Switch: {
+                    colorTextQuaternary: PALETTE.switchTrack,
+                    colorTextTertiary: PALETTE.switchTrackHover,
+                    handleBg: colors.text,
+                    colorPrimary: colors.primaryDark,
                 },
                 Select: {
                     colorBgContainer: colors.bgElevated,

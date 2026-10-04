@@ -1,4 +1,6 @@
-import { useCallback, useMemo } from "react";
+import {useSectionFocus} from "../hooks/useSectionFocus.ts";
+import {settingSearchText} from "../utils/settingsSearch.ts";
+import { useCallback, useMemo, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { UpdatesSection } from "../components/settings/UpdatesSection.tsx";
@@ -64,8 +66,8 @@ export const SettingsPage = () => {
     const isMobile = useIsMobile();
     const { colors } = useThemeMode();
     const [searchParams, setSearchParams] = useSearchParams();
-    const selectSection = (section: SettingsSection) => {
-        setSearchParams((current) => { const next = new URLSearchParams(current); next.set('section', section); return next; }, {replace: true});
+    const selectSection = (section: SettingsSection, field?: string) => {
+        setSearchParams((current) => { const next = new URLSearchParams(current); next.set('section', section); if (field) next.set('field', field); else next.delete('field'); return next; }, {replace: true});
     };
 
     const {
@@ -80,6 +82,7 @@ export const SettingsPage = () => {
         unregisterExternalSaver,
         dirtyKeys,
         restartRequired,
+        acknowledgeRestart,
         searchQuery,
         advancedKeys,
         setSearchQuery,
@@ -101,6 +104,7 @@ export const SettingsPage = () => {
     // Long-running: container restart + rosbridge reconnect. Disable button
     // until ROS2 is reachable again to avoid duplicate-click restart storms.
     const ros2Restart = useContainerRestart({
+        onSuccess: acknowledgeRestart,
         pendingLabel: t('settingsPage.ros2Restarting'),
         successMessage: t('settingsPage.ros2Restarted'),
         errorMessage: t('settingsPage.ros2RestartFailed'),
@@ -139,6 +143,23 @@ export const SettingsPage = () => {
     const activeSection = visibleSections.find(section => section.id === requestedSection)?.id
         ?? visibleSections[0]?.id ?? 'hardware';
 
+    const sectionHeadingRef = useRef<HTMLHeadingElement>(null);
+    useSectionFocus(sectionHeadingRef, requestedSection, !loading);
+    const targetField = searchParams.get('field');
+    useEffect(() => {
+        if (!targetField || loading) return;
+        const target = document.querySelector<HTMLElement>(`[data-setting-key="${CSS.escape(targetField)}"]`);
+        if (!target) return;
+        target.dataset.searchTarget = 'true';
+        target.scrollIntoView({block: 'center'});
+        const control = target.matches('input, button, [tabindex]') ? target : target.querySelector<HTMLElement>('input, button, [tabindex]');
+        control?.focus({preventScroll: true});
+        return () => { delete target.dataset.searchTarget; };
+    }, [targetField, activeSection, loading]);
+    const fieldResults = searchQuery ? sections.flatMap(section => section.keys
+        .filter(key => matchesSearch(key))
+        .map(key => ({section, key, label: settingSearchText(key, t)[0] || key}))) : [];
+
     const renderFieldCards = (...groups: SettingsFieldGroup[]) =>
         groups.map((group) => (
             <SettingsFieldCard
@@ -172,6 +193,7 @@ export const SettingsPage = () => {
                         isOverridden={isOverridden}
                         hasDefault={hasDefault}
                         onReset={resetToDefault}
+                        revealAdvanced={!!targetField || !!searchQuery}
                     />
                 );
             case "drive_motor":
@@ -347,7 +369,7 @@ export const SettingsPage = () => {
     const currentSectionMeta = sections.find((s) => s.id === activeSection);
 
     return (
-        <div style={{ minHeight: isMobile ? "auto" : "calc(100vh - 64px)", display: "flex", flexDirection: "column" }}>
+        <div className="settings-page" style={{ minHeight: isMobile ? "auto" : "calc(100vh - 64px)", display: "flex", flexDirection: "column" }}>
             {/* Header bar */}
             <div style={{
                 padding: isMobile ? "12px 12px 0" : "16px 24px 0",
@@ -357,6 +379,7 @@ export const SettingsPage = () => {
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                     <Input
                         prefix={<SearchOutlined style={{ color: colors.muted }} />}
+                        aria-label={t('settingsPage.searchSettingPlaceholder')}
                         placeholder={t('settingsPage.searchSettingPlaceholder')}
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
@@ -371,6 +394,15 @@ export const SettingsPage = () => {
                     )}
                 </div>
 
+                {fieldResults.length > 0 && (
+                    <div role="region" aria-label={t('settingsPage.searchResults')} style={{marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8}}>
+                        {fieldResults.map(({section, key, label}) => (
+                            <Button key={key} size="small" onClick={() => selectSection(section.id, key)}>
+                                {t(section.label)} · {label}
+                            </Button>
+                        ))}
+                    </div>
+                )}
                 {/* Restart banner */}
                 {restartRequired && (
                     <Alert
@@ -413,6 +445,8 @@ export const SettingsPage = () => {
                     overflowX: isMobile ? "auto" : undefined,
                     position: isMobile ? undefined : "sticky",
                     top: isMobile ? undefined : 8,
+                    maxHeight: isMobile ? undefined : 'calc(100dvh - 160px)',
+                    overflowY: isMobile ? undefined : 'auto',
                     alignSelf: isMobile ? undefined : "flex-start",
                 }}>
                     {visibleSections.length > 0 ? (
@@ -442,11 +476,11 @@ export const SettingsPage = () => {
                     {/* Section header */}
                     {visibleSections.length > 0 && currentSectionMeta && (
                         <div style={{ marginBottom: 20 }}>
-                            <div className="mn-display" style={{
-                                fontSize: 28, color: colors.text, lineHeight: 1.1, letterSpacing: '-0.01em',
+                            <h1 ref={sectionHeadingRef} tabIndex={-1} className="mn-display" style={{
+                                margin: 0, fontWeight: 400, fontSize: 28, color: colors.text, lineHeight: 1.1, letterSpacing: '-0.01em',
                             }}>
                                 {t(currentSectionMeta.label)}
-                            </div>
+                            </h1>
                             <div style={{
                                 fontSize: 12, color: colors.textDim, marginTop: 4,
                             }}>
@@ -459,7 +493,7 @@ export const SettingsPage = () => {
                 </div>
 
                 {/* Live preview rail (desktop only) */}
-                {!isMobile && activeSection !== 'updates' && (
+                {!isMobile && ['hardware', 'mowing', 'navigation', 'battery'].includes(activeSection) && (
                     <div style={{
                         width: 260, flexShrink: 0,
                         padding: "0 16px 120px 0",
@@ -473,7 +507,7 @@ export const SettingsPage = () => {
             </div>
 
             {/* Fixed save bar */}
-            {(activeSection !== 'updates' || isDirty) && <div style={{
+            {(!['updates', 'appearance'].includes(activeSection) || isDirty) && <div style={{
                 position: "fixed",
                 // Sit above the floating bottom-nav (~85px tall + safe-area) so the
                 // Save bar doesn't collide with / hide behind the nav on mobile.
@@ -493,7 +527,7 @@ export const SettingsPage = () => {
                     icon={<SaveOutlined />}
                     onClick={save}
                     loading={saving}
-                    disabled={!isDirty}
+                    disabled={!isDirty || ros2Restart.pending}
                 >
                     {isDirty ? t("settingsPage.saveWithCount", {count: dirtyCount}) : t("settingsPage.saved")}
                 </Button>
@@ -505,16 +539,6 @@ export const SettingsPage = () => {
                         {t("settingsPage.revert")}
                     </Button>
                 )}
-                <div style={{ flex: 1 }} />
-                <Button
-                    icon={<ReloadOutlined />}
-                    onClick={confirmRestartRos2}
-                    size="small"
-                    loading={ros2Restart.pending}
-                    disabled={ros2Restart.pending}
-                >
-                    {ros2Restart.pending ? ros2Restart.pendingLabel : t("settingsPage.restartRos2")}
-                </Button>
             </div>}
         </div>
     );

@@ -55,6 +55,7 @@ The other four specs are targeted regressions rather than a matrix:
 
 | Spec | Pins |
 |------|------|
+| `ux-audit.spec.ts` | French desktop/phone audit regressions: STOP payload and contrast, localized search/accessibility, all settings categories, statistics, inactive schedules, wizard scroll, diagnostic provenance, and live-save failure feedback. Optional `UX_SCREENSHOT_DIR` retains screenshots outside the runner output. |
 | `log-stream.spec.ts` | 1 000 high-rate container log lines all reach the live tail; a docker RFC3339Nano stamp is shown in the timestamp column and stripped from the body. |
 | `map-console.spec.ts` | map layers mount with **no** `missing required property "source"` / `React.Fragment` console errors. |
 | `reset-mowing-progress.spec.ts` | "Reset mowing progress" confirms first, then calls **only** `coverage_clear_resume`; the menu item is disabled while mowing. |

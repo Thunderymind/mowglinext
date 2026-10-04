@@ -34,7 +34,8 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                 letterSpacing: '0.05em',
                 borderBottom: `1px solid ${colors.borderSubtle}`,
             }}>
-                {t('mapAreasList.areasHeader', {count: areas.length})}
+                {t('mapAreasList.areasHeader', {count: workAreas.length})}
+                <div style={{fontSize: 12, textTransform: 'none', letterSpacing: 0, marginTop: 4}}>{t('mapAreasList.otherFeatures', {navigation: areas.filter(a => a.ftype === 'navigation').length, obstacles: areas.filter(a => a.ftype === 'obstacle').length})}</div>
             </div>
 
             {/* Area items */}
@@ -43,9 +44,8 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                     const cfg = TYPE_CONFIG[item.ftype] ?? TYPE_CONFIG.obstacle;
                     const isSelected = selectedId === item.id;
                     return (
-                        <button
+                        <div
                             key={item.id}
-                            onClick={() => onAreaClick?.(item.id)}
                             style={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -80,7 +80,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                             </span>
 
                             {/* Name + details */}
-                            <div style={{flex: 1, minWidth: 0}}>
+                            <button onClick={() => onAreaClick?.(item.id)} style={{flex: 1, minWidth: 0, background: 'transparent', border: 0, textAlign: 'left', padding: 0, cursor: 'pointer'}}>
                                 <div style={{
                                     fontWeight: 500,
                                     fontSize: 13,
@@ -94,7 +94,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                                 <div style={{fontSize: 11, color: colors.muted, marginTop: 1}}>
                                     {item.areaLabel}
                                 </div>
-                            </div>
+                            </button>
 
                             {/* Mowing order badge + reorder arrows */}
                             {item.mowingOrder != null && (
@@ -145,7 +145,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                                     </span>
                                 </span>
                             )}
-                        </button>
+                        </div>
                     );
                 })}
             </div>
