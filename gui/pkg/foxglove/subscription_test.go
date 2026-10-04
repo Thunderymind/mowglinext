@@ -27,6 +27,8 @@ type stalledWriteConn struct {
 	deadline time.Time
 	closed   chan struct{}
 	once     sync.Once
+	entered  chan struct{}
+	release  chan struct{}
 }
 
 func (c *stalledWriteConn) SetWriteDeadline(deadline time.Time) error {
@@ -40,6 +42,9 @@ func (c *stalledWriteConn) Write(data []byte) (int, error) {
 	if !c.stall.Load() {
 		return c.Conn.Write(data)
 	}
+	if c.entered != nil {
+		c.entered <- struct{}{}
+	}
 	c.mu.Lock()
 	deadline := c.deadline
 	c.mu.Unlock()
@@ -51,10 +56,141 @@ func (c *stalledWriteConn) Write(data []byte) (int, error) {
 		expired = timer.C
 	}
 	select {
+	case <-c.release:
+		return c.Conn.Write(data)
 	case <-expired:
 		return 0, os.ErrDeadlineExceeded
 	case <-c.closed:
 		return 0, net.ErrClosed
+	}
+}
+
+func TestSubscriptionWriteDoesNotBlockDispatch(t *testing.T) {
+	for _, operation := range []string{"subscribe", "unsubscribe", "advertise"} {
+		t.Run(operation, func(t *testing.T) {
+			wire := make(chan string, 8)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := (&websocket.Upgrader{Subprotocols: []string{"foxglove.sdk.v1"}}).Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				for {
+					var msg struct {
+						Op string `json:"op"`
+					}
+					if err := conn.ReadJSON(&msg); err != nil {
+						return
+					}
+					wire <- msg.Op
+				}
+			}))
+			defer server.Close()
+			client := NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
+			var socket *stalledWriteConn
+			client.dialer.NetDialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+				if err != nil {
+					return nil, err
+				}
+				socket = &stalledWriteConn{Conn: conn, closed: make(chan struct{}), entered: make(chan struct{}, 1), release: make(chan struct{})}
+				return socket, nil
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			require.NoError(t, client.Connect(ctx))
+			defer client.Close()
+			var released sync.Once
+			defer released.Do(func() { close(socket.release) })
+			received := make(chan struct{}, 1)
+			require.NoError(t, client.Subscribe("/other", "", "listener", func(json.RawMessage) { received <- struct{}{} }))
+			adv := serverAdvertise{Channels: []channelDef{{ID: 1, Topic: "/status", Schema: "bool data"}}}
+			if operation != "advertise" {
+				client.handleAdvertise(adv)
+			}
+			if operation != "subscribe" {
+				require.NoError(t, client.Subscribe("/status", "", "original", func(json.RawMessage) {}))
+			}
+			if operation == "unsubscribe" {
+				select {
+				case op := <-wire:
+					require.Equal(t, "subscribe", op)
+				case <-time.After(time.Second):
+					t.Fatal("initial subscription was not sent")
+				}
+			}
+			socket.stall.Store(true)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				switch operation {
+				case "subscribe":
+					_ = client.Subscribe("/status", "", "original", func(json.RawMessage) {})
+				case "unsubscribe":
+					client.Unsubscribe("/status", "original")
+				case "advertise":
+					client.handleAdvertise(adv)
+				}
+			}()
+			select {
+			case <-socket.entered:
+			case <-time.After(time.Second):
+				t.Fatal("subscription did not reach the blocked socket write")
+			}
+			go client.dispatchToSubscribers("/other", json.RawMessage(`true`))
+			select {
+			case <-received:
+			case <-time.After(time.Second):
+				t.Fatal("blocked subscription write prevented ordinary subscriber dispatch")
+			}
+			select {
+			case <-done:
+				t.Fatal("write finished before the socket was released")
+			default:
+			}
+
+			// Change desired state while the wire transition is stalled. After
+			// releasing it, the queued transition must restore the latest state.
+			raced := make(chan struct{})
+			go func() {
+				defer close(raced)
+				if operation == "unsubscribe" {
+					_ = client.Subscribe("/status", "", "replacement", func(json.RawMessage) {})
+				} else {
+					client.Unsubscribe("/status", "original")
+				}
+			}()
+			require.Eventually(t, func() bool {
+				client.subMu.RLock()
+				defer client.subMu.RUnlock()
+				return (len(client.subscribers["/status"]) > 0) == (operation == "unsubscribe")
+			}, time.Second, time.Millisecond)
+			socket.stall.Store(false)
+			released.Do(func() { close(socket.release) })
+			for _, finished := range []chan struct{}{done, raced} {
+				select {
+				case <-finished:
+				case <-time.After(time.Second):
+					t.Fatal("subscription reconciliation did not finish")
+				}
+			}
+			expectedOps := []string{"subscribe", "unsubscribe"}
+			if operation == "unsubscribe" {
+				expectedOps = []string{"unsubscribe", "subscribe"}
+			}
+			for _, expected := range expectedOps {
+				select {
+				case op := <-wire:
+					require.Equal(t, expected, op)
+				case <-time.After(time.Second):
+					t.Fatal("racing subscription did not converge on the wire")
+				}
+			}
+			client.chanMu.RLock()
+			active := client.channels["/status"].subscriptionID != 0
+			client.chanMu.RUnlock()
+			require.Equal(t, operation == "unsubscribe", active)
+		})
 	}
 }
 

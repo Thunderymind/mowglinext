@@ -85,6 +85,8 @@ type Client struct {
 	// subscribers maps topic name → ordered list of (id, callback) pairs.
 	subscribers map[string][]subscriberEntry
 	subMu       sync.RWMutex
+	// Serialize wire transitions per topic without blocking subscriber dispatch.
+	subscriptionLocks sync.Map // topic → *sync.Mutex; retained for stable identity
 
 	// decimators maps topic name → *topicDecimator (upstream rate cap applied
 	// before CDR deserialization). Populated lazily from Subscribe's optional
@@ -257,61 +259,81 @@ func (c *Client) Subscribe(topic, msgType, id string, cb func(json.RawMessage), 
 	}
 
 	c.subMu.Lock()
-	defer c.subMu.Unlock()
 
 	entries := c.subscribers[topic]
 	for i, e := range entries {
 		if e.id == id {
 			entries[i].callback = cb
 			c.subscribers[topic] = entries
+			c.subMu.Unlock()
 			return nil
 		}
 	}
 
-	firstSubscriber := len(entries) == 0
 	c.subscribers[topic] = append(entries, subscriberEntry{id: id, callback: cb})
-
-	if firstSubscriber {
-		c.subscribeTopic(topic)
-	}
+	c.subMu.Unlock()
+	c.reconcileSubscription(topic)
 	return nil
 }
 
-// subscribeTopic sends the subscribe message if the channel is known,
-// otherwise marks the topic as pending.
-func (c *Client) subscribeTopic(topic string) {
+// reconcileSubscription applies the current listener state. Every list change
+// reconciles, so changes made during a write converge after that write finishes.
+// Only the per-topic transition lock spans I/O; dispatch needs neither it nor
+// connMu. Keep the desired-state snapshot and bookkeeping atomic under subMu.
+func (c *Client) reconcileSubscription(topic string) {
+	lock, _ := c.subscriptionLocks.LoadOrStore(topic, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	c.subMu.RLock()
+	hasSubs := len(c.subscribers[topic]) > 0
 	c.chanMu.Lock()
 	ch, ok := c.channels[topic]
-	if ok && c.connected.Load() {
-		subID := c.subIDCounter.Add(1)
-		ch.subscriptionID = subID
-		c.chanMu.Unlock()
-
-		msg := clientSubscribe{
-			Op: "subscribe",
-			Subscriptions: []subscriptionDef{
-				{ID: subID, ChannelID: ch.def.ID},
-			},
+	var msg interface{}
+	c.pendingMu.Lock()
+	if !hasSubs {
+		delete(c.pendingTopics, topic)
+		if ok && ch.subscriptionID != 0 {
+			subID := ch.subscriptionID
+			ch.subscriptionID = 0
+			if c.connected.Load() {
+				msg = clientUnsubscribe{Op: "unsubscribe", SubscriptionIDs: []uint32{subID}}
+			}
 		}
-		if err := c.writeJSON(msg); err != nil {
-			logrus.WithError(err).WithField("topic", topic).
-				Warn("foxglove: failed to subscribe")
+	} else if ok && c.connected.Load() {
+		delete(c.pendingTopics, topic)
+		if ch.subscriptionID == 0 {
+			subID := c.subIDCounter.Add(1)
+			ch.subscriptionID = subID
+			msg = clientSubscribe{
+				Op: "subscribe",
+				Subscriptions: []subscriptionDef{
+					{ID: subID, ChannelID: ch.def.ID},
+				},
+			}
 		}
 	} else {
-		c.chanMu.Unlock()
-		c.pendingMu.Lock()
 		c.pendingTopics[topic] = true
-		c.pendingMu.Unlock()
+	}
+	c.pendingMu.Unlock()
+	c.chanMu.Unlock()
+	c.subMu.RUnlock()
+	if msg != nil {
+		if err := c.writeJSON(msg); err != nil {
+			logrus.WithError(err).WithField("topic", topic).
+				Warn("foxglove: failed to reconcile subscription")
+		}
 	}
 }
 
 // Unsubscribe removes the callback identified by id from topic.
 func (c *Client) Unsubscribe(topic, id string) {
 	c.subMu.Lock()
-	defer c.subMu.Unlock()
 
 	entries, ok := c.subscribers[topic]
 	if !ok {
+		c.subMu.Unlock()
 		return
 	}
 
@@ -324,36 +346,11 @@ func (c *Client) Unsubscribe(topic, id string) {
 
 	if len(filtered) == 0 {
 		delete(c.subscribers, topic)
-		c.pendingMu.Lock()
-		delete(c.pendingTopics, topic)
-		c.pendingMu.Unlock()
-
-		// Snapshot and clear subscriptionID under the write lock — the same
-		// field is read by handleMessageData and written by subscribeTopic on
-		// other goroutines, so the previous read-then-write outside chanMu
-		// raced both. Do the network write after releasing the lock.
-		c.chanMu.Lock()
-		ch, chOK := c.channels[topic]
-		var subID uint32
-		if chOK {
-			subID = ch.subscriptionID
-			ch.subscriptionID = 0
-		}
-		c.chanMu.Unlock()
-
-		if chOK && subID != 0 && c.connected.Load() {
-			msg := clientUnsubscribe{
-				Op:              "unsubscribe",
-				SubscriptionIDs: []uint32{subID},
-			}
-			if err := c.writeJSON(msg); err != nil {
-				logrus.WithError(err).WithField("topic", topic).
-					Warn("foxglove: failed to unsubscribe")
-			}
-		}
 	} else {
 		c.subscribers[topic] = filtered
 	}
+	c.subMu.Unlock()
+	c.reconcileSubscription(topic)
 }
 
 // Advertise is a no-op kept for API compatibility; foxglove handles this
@@ -724,19 +721,7 @@ func (c *Client) handleAdvertise(adv serverAdvertise) {
 			continue
 		}
 
-		// Serialize the desired-state check with Subscribe/Unsubscribe. A
-		// late advertise must not recreate a subscription just removed by
-		// the last listener while this write was waiting for connMu.
-		c.subMu.Lock()
-		hasSubs := len(c.subscribers[topic]) > 0
-
-		if hasSubs {
-			c.subscribeTopic(topic)
-			c.pendingMu.Lock()
-			delete(c.pendingTopics, topic)
-			c.pendingMu.Unlock()
-		}
-		c.subMu.Unlock()
+		c.reconcileSubscription(topic)
 	}
 }
 
