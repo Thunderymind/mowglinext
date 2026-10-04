@@ -49,7 +49,7 @@ const renderComponent = (mowerModel?: string) => render(
 const targetSummary = () => screen.getByTestId("flash-target-summary");
 
 const openTargetPicker = () => {
-    fireEvent.click(within(targetSummary()).getByRole("button", {name: /change/i}));
+    fireEvent.click(within(targetSummary()).getByText("Change"));
 };
 
 // Index 0/1 are the board/panel pickers once they are visible (the firmware
@@ -69,7 +69,22 @@ const chooseOption = async (index: number, option: string) => {
     fireEvent.click(optionNode);
 };
 
-const flashButton = () => screen.getByRole("button", {name: /flash firmware/i});
+// Text lookups, not role lookups: `getByRole` computes accessible names over
+// the whole DOM on every retry, and this form keeps ~30 Formily fields mounted
+// (the expert fold is forceRender), which made a `waitFor` on a role query
+// cost 10+ s and time out on the CI runner.
+const buttonByText = (text: string): HTMLButtonElement => {
+    const button = screen.getByText(text, {selector: "span"}).closest("button");
+    if (!button) throw new Error(`no button labelled ${text}`);
+    return button;
+};
+const flashButton = () => buttonByText("Flash Firmware");
+const confirmFlashButton = async (): Promise<HTMLButtonElement> => {
+    const label = await screen.findByText("Flash", {selector: "span"});
+    const button = label.closest("button");
+    if (!button) throw new Error("no confirm button");
+    return button;
+};
 
 type SseHandlers = {
     onmessage?: (event: {event: string; data: string}) => void;
@@ -119,7 +134,7 @@ describe("FlashBoardComponent model-derived target", () => {
         expect(flashButton()).toBeEnabled();
 
         fireEvent.click(flashButton());
-        fireEvent.click(await screen.findByRole("button", {name: /^Flash$/}));
+        fireEvent.click(await confirmFlashButton());
         await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
         const request = vi.mocked(fetchEventSource).mock.calls[0]?.[1] as {body?: string};
         const payload = JSON.parse(request.body ?? "{}") as Record<string, unknown>;
@@ -127,7 +142,7 @@ describe("FlashBoardComponent model-derived target", () => {
         expect(payload.panelType).toBe("PANEL_TYPE_YARDFORCE_900_ECO");
         expect(payload.firmwareTarget).toBe("BiltemaRM1000");
         expect(payload.firmwareTargetOrigin).toBe("auto");
-    }, 45000);
+    });
 
     it("steers a model without a prebuilt to the custom build path", async () => {
         renderComponent("LUV1000RI");
@@ -251,10 +266,11 @@ describe("FlashBoardComponent model-derived target", () => {
 
     it("submits the derived target with automatic provenance", async () => {
         renderComponent("YardForce500");
-        await waitFor(() => expect(flashButton()).toBeEnabled());
+        await waitFor(() => expect(targetSummary()).toBeInTheDocument());
+        expect(flashButton()).toBeEnabled();
         fireEvent.click(flashButton());
 
-        const confirmButton = await screen.findByRole("button", {name: /^Flash$/});
+        const confirmButton = await confirmFlashButton();
         fireEvent.click(confirmButton);
         await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
 
@@ -280,7 +296,7 @@ describe("FlashBoardComponent model-derived target", () => {
         await waitFor(() => expect(flashButton()).toBeEnabled());
         fireEvent.click(flashButton());
 
-        const confirmButton = await screen.findByRole("button", {name: /^Flash$/});
+        const confirmButton = await confirmFlashButton();
         fireEvent.click(confirmButton);
         await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
 
@@ -311,9 +327,9 @@ describe("FlashBoardComponent flash progress", () => {
             return new Promise(() => undefined);
         });
         renderComponent("YardForce500");
-        await waitFor(() => expect(flashButton()).toBeEnabled());
+        await waitFor(() => expect(targetSummary()).toBeInTheDocument());
         fireEvent.click(flashButton());
-        fireEvent.click(await screen.findByRole("button", {name: /^Flash$/}));
+        fireEvent.click(await confirmFlashButton());
         await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
         return {
             send: (event: string, data: string) => act(() => handlers.onmessage?.({event, data})),
@@ -347,7 +363,7 @@ describe("FlashBoardComponent flash progress", () => {
         expect(screen.getByText("Flash complete")).toBeInTheDocument();
         expect(document.querySelector(".ant-progress-text")).not.toHaveTextContent("50%");
         expect(screen.getByTestId("flash-status-line")).toHaveTextContent("Firmware flashed successfully!");
-        expect(screen.getByRole("button", {name: /^next$/i})).toBeEnabled();
+        expect(buttonByText("Next")).toBeEnabled();
     });
 
     it("marks the failing stage and surfaces the log on error", async () => {
@@ -360,7 +376,7 @@ describe("FlashBoardComponent flash progress", () => {
         expect(screen.getByTestId("flash-status-line")).toHaveTextContent("Error: downloading prebuilt firmware: 404");
         expect(document.querySelectorAll(".ant-steps-item")[1]).toHaveClass("ant-steps-item-error");
         expect(screen.getByText("------> Error fetching manifest: 404")).toBeInTheDocument();
-        expect(screen.getByRole("button", {name: /back to config/i})).toBeInTheDocument();
+        expect(buttonByText("Back to config")).toBeInTheDocument();
     });
 
     it("ignores a malformed stage event", async () => {
