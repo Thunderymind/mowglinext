@@ -12,6 +12,27 @@ Thanks for your interest in contributing! MowgliNext is a community-driven proje
 
 Branch prefixes matter: use `feat/`, `fix/`, `refactor/`, `chore/` or `perf/`. The CI push triggers match exactly those names, so a branch called anything else silently skips some checks.
 
+### Fast feature loop
+
+Keep the checkout and its worktrees in a **local, non-synced directory** (not iCloud Drive, OneDrive, or another cloud-sync folder). A Git worktree shares the repository's object store, so it gives each branch an isolated working directory without making another full clone. Before doing expensive work, confirm which checkout and branch you are in:
+
+```bash
+pwd -P
+git rev-parse --show-toplevel
+git status --short --branch
+git worktree list
+git remote -v
+```
+
+Then use this sequence to avoid spending time on the wrong baseline or repeating broad test runs:
+
+1. **Confirm the base, image and remotes once.** Fetch the intended base (`dev` for feature work), make or rebase the feature worktree from it, and check `git remote -v` to identify the personal fork and upstream by URL—not by assuming a remote name. For ROS work, verify the Docker image tag and ROS distro/API before building; stale images can produce misleading compile failures. Don't rebuild or edit image definitions unless the selected image is actually missing the required baseline.
+2. **Run the smallest useful test first.** Build the affected package/target and run the focused test, making sure `colcon test` is scoped to the intended source tree (include `--base-paths`). Once that passes, run the full affected-package suite, then the broader language/repository checks the change touches. Reuse the existing Docker build cache. In constrained environments, set `MAKEFLAGS=-j2` (or another measured cap): Colcon's `--parallel-workers` limits packages, not the Make jobs inside a package.
+3. **Separate new failures from existing lint debt.** Run format/copyright/lint checks on changed files and compare broad lint findings with the base branch. Fix findings introduced by the diff; list unrelated pre-existing failures in the PR instead of expanding a small feature into a repository-wide cleanup.
+4. **Commit, push and open the PR against `dev`.** Push only after confirming the exact fork URL and branch. Summarize the user-visible impact first and include measured before/after numbers (for example, payload size in MB and KB and the percentage reduction), plus an exact test ledger: what passed, what failed, and why. Don't describe a test as passing if it was not run or if its enclosing suite still has a failure.
+
+For this repository, `dev` is the feature base and `main` is the release branch. A quick local change should not require recloning, rebuilding Docker images unnecessarily, or fixing unrelated lint debt.
+
 ## What to Contribute
 
 - **Bug fixes** — found something broken? Fix it and send a PR
