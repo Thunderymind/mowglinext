@@ -43,16 +43,16 @@ find_package(rcl_interfaces REQUIRED)
 add_executable(behavior_tree_node
   src/behavior_tree_node.cpp
   src/battery_filter.cpp
-  src/condition_nodes.cpp
+  $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   src/navigation_nodes.cpp
   src/docking_nodes.cpp
   src/escape_nodes.cpp
   src/calibration_nodes.cpp
-  src/status_nodes.cpp
-  src/status_snapshot.cpp
+  $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+  $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   src/utility_nodes.cpp
-  src/coverage_nodes.cpp
-  src/coverage_persistence.cpp
+  $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+  $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
   src/recording_nodes.cpp
   src/register_nodes.cpp
 )
@@ -80,6 +80,20 @@ target_link_libraries(behavior_tree_node
   ${mowgli_interfaces_TARGETS}
   ${rcl_interfaces_TARGETS}
 )
+
+# Compile the repeatedly used production sources once, with the node's usage
+# requirements. Each consumer still receives only its original objects and
+# retains its own link dependencies (no new archive/shared-library semantics).
+# Test-specific tree-path definitions are used only by the test translation
+# units; none of these production sources or their headers depends on them.
+get_target_property(behavior_node_includes behavior_tree_node INCLUDE_DIRECTORIES)
+get_target_property(behavior_node_dependencies behavior_tree_node LINK_LIBRARIES)
+foreach(behavior_source IN ITEMS
+    condition_nodes coverage_nodes coverage_persistence status_nodes status_snapshot)
+  add_library(mowgli_behavior_${behavior_source} OBJECT src/${behavior_source}.cpp)
+  target_include_directories(mowgli_behavior_${behavior_source} PRIVATE ${behavior_node_includes})
+  target_link_libraries(mowgli_behavior_${behavior_source} PRIVATE ${behavior_node_dependencies})
+endforeach()
 
 # ---------------------------------------------------------------------------
 # Install
@@ -146,10 +160,10 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_blade_direction
     test/test_blade_direction.cpp
     src/utility_nodes.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
   target_include_directories(test_blade_direction PUBLIC include)
   target_link_libraries(test_blade_direction
@@ -196,7 +210,7 @@ if(BUILD_TESTING)
   # simulate the subscriber callback in behavior_tree_node.cpp.
   ament_add_ros_isolated_gtest(test_obstacle_recovery
     test/test_obstacle_recovery.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_obstacle_recovery PUBLIC
@@ -256,7 +270,7 @@ if(BUILD_TESTING)
   # boundary protection during blade-on mowing.
   ament_add_ros_isolated_gtest(test_docking_boundary_exempt
     test/test_docking_boundary_exempt.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_docking_boundary_exempt PUBLIC
@@ -350,10 +364,10 @@ if(BUILD_TESTING)
   # linked in for the real EndSession node (the session boundary that clears it).
   ament_add_ros_isolated_gtest(test_get_next_unmowed_area
     test/test_get_next_unmowed_area.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_get_next_unmowed_area PUBLIC
@@ -386,7 +400,7 @@ if(BUILD_TESTING)
   # branch (clear costmaps + retry) and still commands no escape motion.
   ament_add_ros_isolated_gtest(test_start_occupied_retry
     test/test_start_occupied_retry.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_start_occupied_retry PUBLIC
@@ -421,7 +435,7 @@ if(BUILD_TESTING)
   # in-RAM BT halt).
   ament_add_gtest(test_coverage_persistence
     test/test_coverage_persistence.cpp
-    src/coverage_persistence.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
   )
 
   target_include_directories(test_coverage_persistence PUBLIC
@@ -509,9 +523,9 @@ if(BUILD_TESTING)
   # arrive at one place then re-transit elsewhere. Pins the mapping + guards.
   ament_add_gtest(test_coverage_resume_location
     test/test_coverage_resume_location.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_coverage_resume_location PUBLIC
@@ -543,9 +557,9 @@ if(BUILD_TESTING)
   # Drives refreshSwathProgress through a simulated pass on a plain BTContext.
   ament_add_gtest(test_swath_progress
     test/test_swath_progress.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_swath_progress PUBLIC
@@ -592,10 +606,10 @@ if(BUILD_TESTING)
   # restore the blade without canceling/replacing the active coverage goal.
   ament_add_ros_isolated_gtest(test_follow_strip_dig
     test/test_follow_strip_dig.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
     TIMEOUT 180
   )
 
@@ -627,10 +641,10 @@ if(BUILD_TESTING)
   # the mow moves on to the next unit (field 2026-09-21).
   ament_add_ros_isolated_gtest(test_transit_non_blocking
     test/test_transit_non_blocking.cpp
-    src/coverage_nodes.cpp
-    src/coverage_persistence.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
     TIMEOUT 180
   )
 
@@ -764,10 +778,10 @@ if(BUILD_TESTING)
   # current_command + resume cursor) and only EndSession on a dead charger.
   ament_add_ros_isolated_gtest(test_battery_critical_resume
     test/test_battery_critical_resume.cpp
-    src/condition_nodes.cpp
-    src/status_nodes.cpp
-    src/status_snapshot.cpp
-    src/coverage_persistence.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
   )
 
   target_include_directories(test_battery_critical_resume PUBLIC
@@ -803,7 +817,7 @@ if(BUILD_TESTING)
   # the node, poll at <= 5 s, and still bound at 8 h.
   ament_add_ros_isolated_gtest(test_manual_resume
     test/test_manual_resume.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_manual_resume PUBLIC
@@ -841,7 +855,7 @@ if(BUILD_TESTING)
   # newly added guard cannot reintroduce it.
   ament_add_ros_isolated_gtest(test_guard_fallthrough
     test/test_guard_fallthrough.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_guard_fallthrough PUBLIC
@@ -881,7 +895,7 @@ if(BUILD_TESTING)
   # keeps the debounced entry, the raw exit and the documented 24 h bound.
   ament_add_ros_isolated_gtest(test_manual_charge_guard
     test/test_manual_charge_guard.cpp
-    src/condition_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
   )
 
   target_include_directories(test_manual_charge_guard PUBLIC
@@ -916,7 +930,7 @@ if(BUILD_TESTING)
   # FollowStrip). Pins the tree-owned vs live-field split.
   ament_add_gtest(test_high_level_status_snapshot
     test/test_high_level_status_snapshot.cpp
-    src/status_snapshot.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
   )
 
   target_include_directories(test_high_level_status_snapshot PUBLIC
