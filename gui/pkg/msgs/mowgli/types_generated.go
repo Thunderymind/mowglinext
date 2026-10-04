@@ -29,6 +29,13 @@ type CoveragePath struct {
 	Path                      nav.Path                       `json:"path"`
 }
 
+// CoveragePlanPreview matches mowgli_interfaces/msg/CoveragePlanPreview.
+type CoveragePlanPreview struct {
+	Header                    geometry.Header                `json:"header"`
+	Xy                        []float32                      `json:"xy"`
+	SubpathOffsets            []uint32                       `json:"subpath_offsets"`
+}
+
 // CoverageSession matches mowgli_interfaces/msg/CoverageSession.
 type CoverageSession struct {
 	SessionActive             bool                           `json:"session_active"`

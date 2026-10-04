@@ -29,6 +29,22 @@ func setupMowgliNextRouter(provider types.IRosProvider) *gin.Engine {
 	return r
 }
 
+func TestCompactCoveragePreviewPreservesFloat32MessagePackCoordinates(t *testing.T) {
+	message := map[string]interface{}{"xy": []interface{}{float64(1.25), float64(-2.5)}, "subpath_offsets": []interface{}{float64(0), float64(1)}}
+	compactCoveragePreview(message)
+	coords, ok := message["xy"].([]float32)
+	require.True(t, ok)
+	require.Equal(t, []float32{1.25, -2.5}, coords)
+	payload, err := msgpack.Marshal(message)
+	require.NoError(t, err)
+	var decoded map[string]interface{}
+	require.NoError(t, msgpack.Unmarshal(payload, &decoded))
+	got, ok := decoded["xy"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, got, 2)
+	assert.InDelta(t, 1.25, got[0], 0.00001)
+}
+
 func TestServiceRoute_HighLevelControl(t *testing.T) {
 	mock := types.NewMockRosProvider()
 	mock.ServiceResponder = func(_ string, _ any, res any) {

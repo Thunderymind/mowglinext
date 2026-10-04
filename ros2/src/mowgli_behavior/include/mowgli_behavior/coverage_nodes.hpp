@@ -36,6 +36,7 @@
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "mowgli_interfaces/msg/coverage_plan_preview.hpp"
 #include "mowgli_interfaces/path_tracking_stats.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
@@ -834,6 +835,7 @@ private:
   // single segment. Latched (transient_local) so a late GUI subscriber still
   // gets the whole plan for the current area.
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr full_plan_pub_;
+  rclcpp::Publisher<mowgli_interfaces::msg::CoveragePlanPreview>::SharedPtr plan_preview_pub_;
   Phase phase_{Phase::QueryRemaining};
   std::chrono::steady_clock::time_point phase_start_;
 };

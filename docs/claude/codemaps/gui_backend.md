@@ -202,7 +202,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `wheelOdom` | `/wheel_odom` | `nav_msgs/msg/Odometry` | 80 / 100 ms; feeds session odometer |
 | `lidar` | `/scan` | `sensor_msgs/msg/LaserScan` | `adaptLidar` (≤360 beams); 80 / 100 ms |
 | `map` | *(virtual)* | `mowgli.Map` | `pollMap` every 5 s via `/map_server_node/get_mowing_area` + cached `/map_server_node/docking_pose` |
-| `path` / `plan` | `/coverage/full_plan` / `/plan` | `nav_msgs/msg/Path` | unthrottled |
+| `path` / `plan` | `/coverage/plan_preview` / `/plan` | `mowgli_interfaces/msg/CoveragePlanPreview` / `nav_msgs/msg/Path` | unthrottled |
 | `power`, `emergency` | `/hardware_bridge/power`, `/hardware_bridge/emergency` | `mowgli_interfaces/msg/{Power,Emergency}` | unthrottled |
 | `mowProgress` | `/map_server_node/mow_progress` | `nav_msgs/msg/OccupancyGrid` | 500 ms |
 | `lidarMap` | `/fusion_graph/lidar_map` | `nav_msgs/msg/OccupancyGrid` | 500 ms — fusion_graph's LiDAR anchor map; the map page draws it INSTEAD of the raw `/scan` points once it exists |

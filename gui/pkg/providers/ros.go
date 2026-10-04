@@ -46,7 +46,7 @@ var topicMap = map[string]topicDef{
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
 	"map":                 {"", ""},                                     // virtual – populated via map_server services
-	"path":                {"/coverage/full_plan", "nav_msgs/msg/Path"}, // full F2C coverage plan (headland + all swaths; execution is swath-by-swath)
+	"path":                {"/coverage/plan_preview", "mowgli_interfaces/msg/CoveragePlanPreview"},
 	"plan":                {"/plan", "nav_msgs/msg/Path"},               // infrequent event
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
 	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
