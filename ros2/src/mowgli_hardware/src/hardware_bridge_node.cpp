@@ -70,6 +70,7 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_hardware/battery_state_semantics.hpp"
 #include "mowgli_hardware/blade_gate.hpp"
+#include "mowgli_hardware/blade_reassert.hpp"
 #include "mowgli_hardware/blade_telemetry.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
 #include "mowgli_hardware/cmd_vel_slew.hpp"
@@ -1223,6 +1224,7 @@ private:
                               --startup_release_count_;
                             }
                             send_heartbeat();
+                            blade_reassert_tick();
                             // Re-push the drive PID (and the yaw-loop PID,
                             // same burst — task #34) on the first few
                             // heartbeats after each (re)connect so the
@@ -1305,6 +1307,7 @@ private:
     blade_requested_direction_ = "unknown";
     // Reconnect must not revive an old delayed blade-enable request.
     mow_enabled_ = false;
+    blade_intent_authorized_ = false;
     lift_detected_ = false;
     cancelBladeResume();
     packet_handler_.reset_receive_state();
@@ -2609,6 +2612,8 @@ private:
                                          sizeof(LlCmdBlade) - sizeof(uint16_t));
     if (!written)
       cancelBladeResume();
+    else
+      last_blade_cmd_ns_ = steadyNowNs();
     blade_requested_direction_ = !written   ? "unknown"
                                  : on == 0  ? "off"
                                  : dir == 0 ? "forward"
@@ -3796,7 +3801,11 @@ private:
     pkt.linear_x = wire_vx;
     pkt.angular_z = wire_wz;
 
-    send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlCmdVel) - sizeof(uint16_t));
+    // Stamped for blade_reassert_tick: the firmware only accepts a blade ON
+    // within its CMD_VEL watchdog window, measured from this packet.
+    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                        sizeof(LlCmdVel) - sizeof(uint16_t)))
+      last_cmd_vel_packet_ns_ = steadyNowNs();
 
     // Exact host command represented by the packet above. The firmware keeps
     // final authority and may still reject motion because of an emergency or
@@ -3821,6 +3830,9 @@ private:
     // passes through in either state, so a stop can never be swallowed. The
     // firmware stays the sole blade safety authority — this is NOT an interlock.
     mow_enabled_ = blade_enable_allowed(requested_enable, mowing_enabled_);
+    // Only an explicit request authorizes later re-asserts, and never one made
+    // during an emergency (blade_reassert.hpp).
+    blade_intent_authorized_ = mow_enabled_ && !emergency_active_ && !fw_latched_emergency_;
 
     if (requested_enable && !mow_enabled_)
     {
@@ -3851,6 +3863,71 @@ private:
     // The request was accepted and acted on — a suppressed enable is a
     // configured behaviour, not a failure.
     res->success = true;
+  }
+
+  // Re-send a blade ON the firmware dropped (blade_reassert.hpp), on the
+  // heartbeat tick. The firmware stays the sole blade authority: this repeats
+  // the caller's own request, never across an emergency, and only when the
+  // firmware reports the blade stopped.
+  void blade_reassert_tick()
+  {
+    const bool emergency = emergency_active_ || fw_latched_emergency_;
+    if (emergency)
+      blade_intent_authorized_ = false;
+
+    const std::int64_t now_ns = steadyNowNs();
+    const auto age_s = [now_ns](std::int64_t then_ns)
+    {
+      return then_ns == 0 ? 1e9 : static_cast<double>(now_ns - then_ns) * 1e-9;
+    };
+
+    BladeReassertInputs in;
+    in.mow_enabled = mow_enabled_;
+    in.enable_allowed = !lift_detected_ && !waiting_blade_resume_;
+    in.intent_authorized = blade_intent_authorized_;
+    in.emergency_active = emergency;
+    in.blade_status_fresh =
+        blade_status_time_.nanoseconds() != 0 &&
+        (now() - blade_status_time_).seconds() <= blade_reassert_cfg_.max_blade_status_age_s;
+    in.blade_active = blade_active_;
+    in.cmd_vel_age_s = age_s(last_cmd_vel_packet_ns_);
+    in.since_last_blade_cmd_s = age_s(last_blade_cmd_ns_);
+
+    if (!blade_intent_mismatch(in))
+    {
+      blade_mismatch_since_ns_ = 0;
+      return;
+    }
+    if (blade_mismatch_since_ns_ == 0)
+      blade_mismatch_since_ns_ = now_ns;
+
+    if (should_reassert_blade_on(in, blade_reassert_cfg_))
+    {
+      RCLCPP_INFO_THROTTLE(get_logger(),
+                           *get_clock(),
+                           2000,
+                           "Blade ON re-asserted: mow_enabled=true but the firmware reports the "
+                           "blade stopped (last cmd_vel %.0f ms ago).",
+                           in.cmd_vel_age_s * 1e3);
+      send_blade_command(1, desired_blade_direction_);
+      return;
+    }
+
+    if (age_s(blade_mismatch_since_ns_) < blade_reassert_cfg_.mismatch_warn_after_s)
+      return;
+    const char* reason = emergency                   ? "an emergency is active"
+                         : !blade_intent_authorized_ ? "no blade request since the last emergency"
+                         : in.cmd_vel_age_s > blade_reassert_cfg_.max_cmd_vel_age_s
+                             ? "no cmd_vel is flowing, so the firmware would refuse a blade ON"
+                             : "the firmware keeps refusing it (IDLE gate, motor-link re-arm or "
+                               "a blade fault)";
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         10000,
+                         "Blade requested ON but the firmware has reported it stopped for %.0f s: "
+                         "%s.",
+                         age_s(blade_mismatch_since_ns_),
+                         reason);
   }
 
   void cancelBladeResume()
@@ -4167,6 +4244,12 @@ private:
   double min_linear_vel_{0.05};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr min_lin_vel_cb_handle_;
   bool mow_enabled_{false};
+  // Blade intent re-assert (blade_reassert.hpp). Steady-clock stamps, 0 = never.
+  BladeReassertConfig blade_reassert_cfg_{};
+  bool blade_intent_authorized_{false};
+  std::int64_t last_cmd_vel_packet_ns_{0};
+  std::int64_t last_blade_cmd_ns_{0};
+  std::int64_t blade_mismatch_since_ns_{0};
   bool is_charging_{false};
   uint8_t current_mode_{0};
   std::string current_mode_state_name_{"UNSET"};
