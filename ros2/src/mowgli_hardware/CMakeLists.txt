@@ -202,6 +202,16 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # ---- test_blade_reassert ----
+  # Header-only pure logic (blade_reassert.hpp), same as test_blade_gate.
+  ament_add_gtest(test_blade_reassert
+    test/test_blade_reassert.cpp
+  )
+  target_include_directories(test_blade_reassert
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_heartbeat_emergency_policy ----
   # The firmware's pure heartbeat safety policy is compiled here directly so
   # all stop/release combinations are verified without physical hardware.
