@@ -3358,11 +3358,14 @@ BT::NodeStatus PlanCoverageArea::onRunning()
                                                            rclcpp::QoS(1).transient_local());
     }
     full_plan_pub_->publish(ctx->current_strip_path);
-    if (!plan_preview_pub_) {
-      plan_preview_pub_ = ctx->node->create_publisher<mowgli_interfaces::msg::CoveragePlanPreview>(
-        "/coverage/plan_preview", rclcpp::QoS(1).transient_local());
+    if (!plan_preview_pub_)
+    {
+      plan_preview_pub_ =
+          ctx->node->create_publisher<mowgli_interfaces::msg::CoveragePlanPreview>(
+              "/coverage/plan_preview", rclcpp::QoS(1).transient_local());
     }
-    plan_preview_pub_->publish(mowgli_behavior::makeCoveragePreview(wrapped.result->drivable_subpaths));
+    plan_preview_pub_->publish(
+        mowgli_behavior::makeCoveragePreview(wrapped.result->drivable_subpaths));
 
     // Transit goal = the pose FollowStrip will ACTUALLY start driving from.
     // TransitToStrip (Nav2 Smac, obstacle/boundary-aware) drives the robot there
